@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   FileText, 
   Plus, 
@@ -70,7 +70,15 @@ const INITIAL_CATEGORIES: DebtCategory[] = [
     documentType: 'DARF',
     title: 'PARCELAMENTOS PREVIDENCIÁRIOS',
     scope: 'ADMINISTRATIVO',
-    code: '1099-01'
+    code: ''
+  },
+  {
+    id: 'cat-previdenciario-tributo',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'PREVIDENCIÁRIO',
+    scope: 'ADMINISTRATIVO'
   },
   {
     id: 'cat-simples-nacional',
@@ -291,100 +299,62 @@ export function getAdministrationOrgan(origin: 'FEDERAL' | 'ESTADUAL' | 'MUNICIP
 
 export function DebtLevantamento() {
   // Client Info State
-  const [clientInfo, setClientInfo] = useState<ClientInfo>({
-    cnpj: '37.345.284/0001-68',
-    name: 'MODULUS ENGENHARIA SERVICOS E SOLUCOES LTDA'
+  const [clientInfo, setClientInfo] = useState<ClientInfo>(() => {
+    const saved = localStorage.getItem('debt_client_info');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return {
+      cnpj: '',
+      name: ''
+    };
   });
 
   // Structured Categories State
-  const [categories, setCategories] = useState<DebtCategory[]>(INITIAL_CATEGORIES);
+  const [categories, setCategories] = useState<DebtCategory[]>(() => {
+    const saved = localStorage.getItem('debt_categories');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return INITIAL_CATEGORIES;
+  });
 
   // Filter for origins
   const [originFilter, setOriginFilter] = useState<'TODOS' | 'FEDERAL' | 'ESTADUAL' | 'MUNICIPAL'>('TODOS');
 
   // Debt Items List
-  const [debts, setDebts] = useState<DebtItem[]>([
-    {
-      id: 'd1',
-      category: 'PARCELAMENTOS PREVIDENCIÁRIOS',
-      period: '01/2026',
-      principal: 440.00,
-      penalty: 88.00,
-      interest: 19.22,
-      total: 547.22,
-      status: 'DEVEDOR'
-    },
-    {
-      id: 'd2',
-      category: 'PARCELAMENTOS PREVIDENCIÁRIOS',
-      period: '02/2026',
-      principal: 440.00,
-      penalty: 88.00,
-      interest: 13.90,
-      total: 541.90,
-      status: 'DEVEDOR'
-    },
-    {
-      id: 'd3',
-      category: 'PARCELAMENTOS PREVIDENCIÁRIOS',
-      period: '03/2026',
-      principal: 440.00,
-      penalty: 88.00,
-      interest: 9.10,
-      total: 537.10,
-      status: 'DEVEDOR'
-    },
-    {
-      id: 'd4',
-      category: 'PARCELAMENTOS PREVIDENCIÁRIOS',
-      period: '04/2026',
-      principal: 440.00,
-      penalty: 52.27,
-      interest: 4.40,
-      total: 496.67,
-      status: 'DEVEDOR'
-    },
-    {
-      id: 'd5',
-      category: 'DAS SIMPLES NACIONAL',
-      period: '03/2026',
-      principal: 298.84,
-      penalty: 59.76,
-      interest: 6.18,
-      total: 364.78,
-      status: 'DEVEDOR'
-    },
-    {
-      id: 'd6',
-      category: 'PARCELAMENTO MEI',
-      period: '5 Parc.',
-      principal: 1589.34,
-      penalty: 0,
-      interest: 0,
-      total: 1589.34,
-      status: 'EM ATRASO'
-    },
-    {
-      id: 'd7',
-      category: 'ICMS DÍVIDA ATIVA (PGE)',
-      period: '11/2025',
-      principal: 3200.00,
-      penalty: 640.00,
-      interest: 180.50,
-      total: 4020.50,
-      status: 'DEVEDOR'
-    },
-    {
-      id: 'd8',
-      category: 'MULTA FEDERAL INSCRITA EM DÍVIDA ATIVA',
-      period: 'Exerc. 2025',
-      principal: 1500.00,
-      penalty: 300.00,
-      interest: 92.40,
-      total: 1892.40,
-      status: 'DEVEDOR'
+  const [debts, setDebts] = useState<DebtItem[]>(() => {
+    const saved = localStorage.getItem('debt_items');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error(e);
+      }
     }
-  ]);
+    return [];
+  });
+
+  // Synchronize to localStorage
+  useEffect(() => {
+    localStorage.setItem('debt_client_info', JSON.stringify(clientInfo));
+  }, [clientInfo]);
+
+  useEffect(() => {
+    localStorage.setItem('debt_categories', JSON.stringify(categories));
+  }, [categories]);
+
+  useEffect(() => {
+    localStorage.setItem('debt_items', JSON.stringify(debts));
+  }, [debts]);
 
   // Settings Panel and Modal states
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
