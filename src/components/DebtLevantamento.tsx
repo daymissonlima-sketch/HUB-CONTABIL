@@ -343,6 +343,16 @@ export function DebtLevantamento() {
     return [];
   });
 
+  // State for visual zoom level of the tool (80% default means 20% reduction)
+  const [zoomLevel, setZoomLevel] = useState<number>(() => {
+    const saved = localStorage.getItem('debt_tool_zoom');
+    return saved ? Number(saved) : 80;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('debt_tool_zoom', String(zoomLevel));
+  }, [zoomLevel]);
+
   // Synchronize to localStorage
   useEffect(() => {
     localStorage.setItem('debt_client_info', JSON.stringify(clientInfo));
@@ -1287,11 +1297,37 @@ export function DebtLevantamento() {
       onDragOver={handleGlobalDragOver}
       onDragLeave={handleGlobalDragLeave}
       onDrop={handleGlobalDrop}
-      className="space-y-6 min-h-[600px] relative max-w-5xl mx-auto w-full px-2 sm:px-4"
+      className="space-y-6 min-h-[600px] relative max-w-5xl mx-auto w-full px-2 sm:px-4 transition-all duration-300 origin-top"
+      style={{ zoom: `${zoomLevel}%` }}
     >
       
-      {/* Top action header bar - All buttons strictly side-by-side on a single line on desktop */}
-      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-sm">
+      {/* Top action header bar - With Action Panel Header and Zoom controls */}
+      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-2.5">
+          <span className="text-[11px] font-bold text-[#04243b] uppercase tracking-wider flex items-center gap-1.5">
+            <Sliders className="h-4 w-4 text-[#e4b35e]" /> Painel de Ações do Levantamento
+          </span>
+          {/* Zoom Selector */}
+          <div className="flex items-center space-x-2 text-xs">
+            <span className="text-slate-500 font-medium">Zoom do Sistema:</span>
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+              {[80, 90, 100].map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  onClick={() => setZoomLevel(level)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                    zoomLevel === level
+                      ? 'bg-[#04243b] text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {level}%
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 w-full">
           {/* Configurações Button - Opens System Config table modal */}
           <button
@@ -1760,10 +1796,10 @@ export function DebtLevantamento() {
 
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-            <div className="bg-white rounded-3xl border border-slate-100 max-w-6xl w-full overflow-hidden shadow-2xl animate-scaleUp">
+            <div className="bg-white rounded-3xl border border-slate-100 max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl animate-scaleUp">
               
               {/* Settings Header */}
-              <div className="bg-[#04243b] border-b border-[#e4b35e]/30 px-6 py-4 flex items-center justify-between">
+              <div className="bg-[#04243b] border-b border-[#e4b35e]/30 px-6 py-4 flex items-center justify-between shrink-0">
                 <div className="flex items-center space-x-2 text-[#e4b35e]">
                   <Settings className="h-5 w-5" />
                   <h4 className="text-sm font-black uppercase tracking-wider">
@@ -1783,10 +1819,10 @@ export function DebtLevantamento() {
               </div>
 
               {/* Settings Content Container */}
-              <div className="flex h-[650px] flex-col md:flex-row">
+              <div className="flex flex-col md:flex-row flex-grow min-h-0 overflow-hidden">
                 
                 {/* Settings Menu Sidebar Options */}
-                <div className="w-full md:w-64 bg-slate-50 border-b md:border-b-0 md:border-r border-slate-200 p-4 shrink-0 flex flex-col space-y-1">
+                <div className="w-full md:w-64 bg-slate-50 border-b md:border-b-0 md:border-r border-slate-200 p-4 shrink-0 flex flex-col space-y-1 overflow-y-auto">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#04243b] px-2.5 mb-1.5 block">
                     Gerenciar Categorias
                   </span>
@@ -2045,7 +2081,7 @@ export function DebtLevantamento() {
                       </form>
                     ) : (
                       /* Table view listing categories */
-                      <div className="border border-slate-200 rounded-2xl overflow-hidden flex-grow max-h-[460px] overflow-y-auto shadow-sm">
+                      <div className="border border-slate-200 rounded-2xl overflow-hidden flex-grow max-h-[300px] md:max-h-[320px] overflow-y-auto shadow-sm">
                         <table className="w-full text-left text-xs">
                           <thead>
                             <tr className="bg-slate-100 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
@@ -2132,10 +2168,10 @@ export function DebtLevantamento() {
       {/* MODAL 2: STREAMLINED STEP-BY-STEP CATEGORY WIZARD */}
       {isImportModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-          <div className={`bg-white rounded-3xl border border-slate-100 w-full overflow-hidden shadow-2xl animate-scaleUp transition-all duration-300 ${importStep === 'validate-debts' ? 'max-w-5xl' : 'max-w-2xl'}`}>
+          <div className={`bg-white rounded-3xl border border-slate-100 w-full max-h-[92vh] flex flex-col overflow-hidden shadow-2xl animate-scaleUp transition-all duration-300 ${importStep === 'validate-debts' ? 'max-w-5xl' : 'max-w-2xl'}`}>
             
             {/* Modal header */}
-            <div className="bg-[#04243b] border-b border-[#e4b35e]/30 px-6 py-4 flex items-center justify-between">
+            <div className="bg-[#04243b] border-b border-[#e4b35e]/30 px-6 py-4 flex items-center justify-between shrink-0">
               <div className="flex items-center space-x-2 text-[#e4b35e]">
                 <Plus className="h-5 w-5" />
                 <h4 className="text-sm font-black uppercase tracking-wider">
@@ -2158,7 +2194,7 @@ export function DebtLevantamento() {
             </div>
 
             {/* Step Wizard Progress Indicator */}
-            <div className="bg-slate-50 border-b border-slate-150 px-6 py-3 flex items-center justify-between text-[11px] font-bold text-slate-500">
+            <div className="bg-slate-50 border-b border-slate-150 px-6 py-3 flex items-center justify-between text-[11px] font-bold text-slate-500 shrink-0">
               <div className="flex items-center space-x-2 md:space-x-4 w-full justify-around md:justify-start">
                 <span className={`flex items-center space-x-1.5 ${importStep === 'select-category' ? 'text-[#04243b]' : 'text-emerald-600'}`}>
                   <span className={`h-4.5 w-4.5 rounded-full flex items-center justify-center text-[10px] ${importStep === 'select-category' ? 'bg-[#04243b] text-white' : 'bg-emerald-100 text-emerald-800'}`}>1</span>
@@ -2180,7 +2216,7 @@ export function DebtLevantamento() {
             </div>
 
             {/* Modal body */}
-            <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto bg-slate-50/30">
+            <div className="p-6 space-y-5 flex-grow overflow-y-auto bg-slate-50/30 min-h-0">
               
               {isProcessingFile ? (
                 /* Processing/Extracting State animation */
@@ -2693,7 +2729,7 @@ export function DebtLevantamento() {
       {/* MODAL 3: MANUAL DEBT DIALOG MODAL */}
       {isAddingDebt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white rounded-2xl border border-slate-100 max-w-md w-full p-6 shadow-xl space-y-4 animate-scaleUp">
+          <div className="bg-white rounded-2xl border border-slate-100 max-w-md w-full p-6 shadow-xl space-y-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
             
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h4 className="text-sm font-black text-[#04243b] uppercase tracking-wider">
@@ -2841,7 +2877,7 @@ export function DebtLevantamento() {
       {/* MODAL 4: INTEGRATED CSV TEMPLATE & IMPORT MODAL */}
       {isCsvImportModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white rounded-3xl border border-slate-150 max-w-2xl w-full overflow-hidden shadow-2xl flex flex-col animate-scaleUp">
+          <div className="bg-white rounded-3xl border border-slate-150 max-w-2xl w-full max-h-[90vh] overflow-hidden shadow-2xl flex flex-col animate-scaleUp">
             
             {/* Header with user colors #04243b and #e4b35e */}
             <div className="bg-[#04243b] text-white px-6 py-4 flex items-center justify-between border-b border-[#e4b35e]">
