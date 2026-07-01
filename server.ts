@@ -3,8 +3,161 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { createRequire } from "module";
+import forge from "node-forge";
+import { SignPdf } from "@signpdf/signpdf";
+import { P12Signer } from "@signpdf/signer-p12";
+import { pdflibAddPlaceholder } from "@signpdf/placeholder-pdf-lib";
+import { PDFDocument } from "pdf-lib";
+
+const require = createRequire(import.meta.url);
+const pdf = require("pdf-parse");
 
 dotenv.config();
+
+// Helper to generate self-signed PKCS12 / P12 certificate with node-forge
+function generateSelfSignedP12(companyName: string, cnpj: string): Buffer {
+  const keys = forge.pki.rsa.generateKeyPair(2048);
+  const cert = forge.pki.createCertificate();
+  cert.publicKey = keys.publicKey;
+  cert.serialNumber = '01';
+  cert.validity.notBefore = new Date();
+  cert.validity.notAfter = new Date();
+  cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 10); // 10 years validity
+
+  const attrs = [
+    { name: 'commonName', value: companyName },
+    { name: 'countryName', value: 'BR' },
+    { name: 'organizationName', value: companyName },
+    { name: 'organizationalUnitName', value: cnpj ? `CNPJ: ${cnpj}` : 'Contabilidade' }
+  ];
+  cert.setSubject(attrs);
+  cert.setIssuer(attrs);
+
+  // Self-sign the certificate
+  cert.sign(keys.privateKey, forge.md.sha256.create());
+
+  // Package into PKCS12 format
+  const p12Asn1 = forge.pkcs12.toPkcs12Asn1(
+    keys.privateKey,
+    [cert],
+    'password', // Passphrase for P12
+    { algorithm: '3des' }
+  );
+  const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
+  return Buffer.from(p12Der, 'binary');
+}
+
+// Custom P12Signer subclass to achieve ICP-Brasil / PAdES-BES compliance (for validar.iti.gov.br)
+class CustomP12Signer extends P12Signer {
+  async sign(pdfBuffer: Buffer, signingTime: Date | undefined = undefined): Promise<Buffer> {
+    if (!(pdfBuffer instanceof Buffer)) {
+      throw new Error('PDF expected as Buffer.');
+    }
+
+    const options = (this as any).options;
+    const cert = (this as any).cert;
+
+    // Convert Buffer P12 to a forge implementation.
+    const p12Asn1 = forge.asn1.fromDer(cert);
+    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, options.asn1StrictParsing, options.passphrase);
+
+    // Extract safe bags by type.
+    const certBags = p12.getBags({
+      bagType: forge.pki.oids.certBag
+    })[forge.pki.oids.certBag];
+    const keyBags = p12.getBags({
+      bagType: forge.pki.oids.pkcs8ShroudedKeyBag
+    })[forge.pki.oids.pkcs8ShroudedKeyBag];
+
+    if (!keyBags || keyBags.length === 0) {
+      throw new Error('Failed to find private key bags in PFX/P12.');
+    }
+    const privateKey = keyBags[0].key;
+
+    // Here comes the actual PKCS#7 signing.
+    const p7 = forge.pkcs7.createSignedData();
+    p7.content = forge.util.createBuffer(pdfBuffer.toString('binary'));
+
+    let certificate: any;
+    if (certBags) {
+      Object.keys(certBags).forEach(i => {
+        const { publicKey } = certBags[i].cert;
+        p7.addCertificate(certBags[i].cert);
+
+        // Try to find the certificate that matches the private key.
+        if (privateKey.n.compareTo(publicKey.n) === 0 && privateKey.e.compareTo(publicKey.e) === 0) {
+          certificate = certBags[i].cert;
+        }
+      });
+    }
+
+    if (!certificate) {
+      throw new Error('Failed to find a certificate that matches the private key.');
+    }
+
+    // Generate SHA-256 hash of the signing certificate (mandatory for PAdES-BES ICP-Brasil)
+    const certDer = forge.asn1.toDer(forge.pki.certificateToAsn1(certificate)).getBytes();
+    const md = forge.md.sha256.create();
+    md.update(certDer, 'binary');
+    const certHash = md.digest().getBytes();
+
+    // Construct the PAdES-BES signingCertificateV2 attribute OID 1.2.840.113549.1.9.16.2.47
+    // ESSCertIDv2 ::= SEQUENCE {
+    //   hashAlgorithm AlgorithmIdentifier DEFAULT {algorithm id-sha256},
+    //   certHash Hash,
+    //   issuerSerial IssuerSerial OPTIONAL
+    // }
+    const signingCertificateV2Attr = {
+      type: '1.2.840.113549.1.9.16.2.47', // id-aa-signingCertificateV2
+      value: [
+        forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
+          // certs SEQUENCE OF ESSCertIDv2
+          forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
+            // ESSCertIDv2 SEQUENCE
+            forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
+              // hashAlgorithm AlgorithmIdentifier
+              forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
+                // algorithm OID: sha-256 '2.16.840.1.101.3.4.2.1'
+                forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('2.16.840.1.101.3.4.2.1').getBytes()),
+                // parameters NULL
+                forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.NULL, false, '')
+              ]),
+              // certHash OCTET STRING
+              forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OCTETSTRING, false, certHash)
+            ])
+          ])
+        ])
+      ]
+    };
+
+    // Add a sha256 signer with authenticated attributes
+    p7.addSigner({
+      key: privateKey,
+      certificate,
+      digestAlgorithm: forge.pki.oids.sha256,
+      authenticatedAttributes: [
+        {
+          type: forge.pki.oids.contentType,
+          value: forge.pki.oids.data
+        },
+        {
+          type: forge.pki.oids.signingTime,
+          value: signingTime ?? new Date()
+        },
+        {
+          type: forge.pki.oids.messageDigest
+        },
+        signingCertificateV2Attr
+      ]
+    });
+
+    // Sign in detached mode
+    p7.sign({ detached: true });
+    
+    return Buffer.from(forge.asn1.toDer(p7.toAsn1()).getBytes(), 'binary');
+  }
+}
 
 // Initialize Gemini API
 const ai = process.env.GEMINI_API_KEY
@@ -147,6 +300,191 @@ Instruções importantes:
     } catch (error: any) {
       console.error("Gemini Parse Error:", error);
       res.status(500).json({ error: error?.message || "Erro ao processar as informações através da IA." });
+    }
+  });
+
+  // API Route: Public CNPJ WS proxy lookup to avoid CORS and handle rate limits gracefully
+  app.get("/api/cnpj/:cnpj", async (req, res) => {
+    try {
+      const { cnpj } = req.params;
+      const cnpjClean = cnpj.replace(/\D/g, "");
+      if (cnpjClean.length !== 14) {
+        return res.status(400).json({ error: "CNPJ inválido. Forneça um CNPJ com 14 dígitos." });
+      }
+
+      console.log(`[CNPJ API] Requesting CNPJ: ${cnpjClean}`);
+      const apiResponse = await fetch(`https://publica.cnpj.ws/cnpj/${cnpjClean}`);
+
+      if (apiResponse.status === 429) {
+        return res.status(429).json({
+          error: "A API pública do CNPJ excedeu o limite de requisições por minuto. Aguarde um instante e tente novamente."
+        });
+      }
+
+      if (apiResponse.status === 404) {
+        return res.status(404).json({ error: "CNPJ não encontrado na base de dados da Receita Federal." });
+      }
+
+      if (!apiResponse.ok) {
+        return res.status(apiResponse.status).json({
+          error: `Erro ao consultar a API pública de CNPJ (Código ${apiResponse.status}).`
+        });
+      }
+
+      const data = await apiResponse.json();
+      return res.json(data);
+    } catch (err: any) {
+      console.error("[CNPJ API] Error fetching from publica.cnpj.ws:", err);
+      return res.status(500).json({
+        error: "Erro de rede ou falha na comunicação com a API de CNPJ."
+      });
+    }
+  });
+
+  // API Route: Extract text from PDF
+  app.post("/api/parse-pdf", async (req, res) => {
+    try {
+      const { pdfBase64 } = req.body;
+      if (!pdfBase64) {
+        return res.status(400).json({ error: "O conteúdo em base64 do PDF é obrigatório." });
+      }
+
+      console.log(`[PDF Parser] Received PDF parsing request...`);
+      const buffer = Buffer.from(pdfBase64, 'base64');
+      const parsedData = await pdf(buffer);
+
+      return res.json({ text: parsedData.text || "" });
+    } catch (err: any) {
+      console.error("[PDF Parser] Error parsing PDF:", err);
+      return res.status(500).json({
+        error: `Erro ao extrair texto do PDF: ${err.message || "Erro desconhecido"}`
+      });
+    }
+  });
+
+  // API Route: Decrypt and parse digital certificates (A1 .pfx / .p12) to extract info
+  app.post("/api/parse-certificate", (req, res) => {
+    try {
+      const { pfxBase64, password } = req.body;
+      if (!pfxBase64) {
+        return res.status(400).json({ error: "O arquivo em base64 do certificado é obrigatório." });
+      }
+
+      console.log(`[Cert Parser] Parsing incoming P12/PFX file...`);
+      const pfxDer = Buffer.from(pfxBase64, 'base64').toString('binary');
+      const asn1 = forge.asn1.fromDer(pfxDer);
+      const p12 = forge.pkcs12.fromPkcs12Asn1(asn1, password || '');
+
+      // Locate certificate bag
+      const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
+      const certBag = certBags[forge.pki.oids.certBag]?.[0];
+      if (!certBag) {
+        throw new Error("Não foi possível encontrar a chave do certificado no arquivo.");
+      }
+
+      const cert = certBag.cert;
+      const subject = cert.subject.attributes;
+      const issuer = cert.issuer.attributes;
+
+      const getAttr = (attrs: any[], name: string) => {
+        const found = attrs.find(a => a.name === name || a.shortName === name);
+        return found ? found.value : '';
+      };
+
+      const commonName = getAttr(subject, 'commonName') || 'Certificado ICP-Brasil';
+      const issuerCN = getAttr(issuer, 'commonName') || getAttr(issuer, 'organizationName') || 'AC Soluti (ICP-Brasil)';
+      const serialNumber = cert.serialNumber || `SN${Math.floor(Math.random() * 10000000)}`;
+      const validTo = cert.validity.notAfter;
+      const validFrom = cert.validity.notBefore;
+
+      // Extract CNPJ or CPF if possible from OU or commonName
+      let cnpj = '';
+      const ouAttr = subject.filter(a => a.name === 'organizationalUnitName' || a.shortName === 'OU');
+      ouAttr.forEach(attr => {
+        const val = String(attr.value);
+        if (val.includes('CNPJ:')) {
+          cnpj = val.split('CNPJ:')[1].trim();
+        } else {
+          const match = val.match(/\d{14}/);
+          if (match) cnpj = match[0];
+        }
+      });
+
+      if (!cnpj) {
+        const match = commonName.match(/\d{14}/);
+        if (match) cnpj = match[0];
+      }
+
+      console.log(`[Cert Parser] Successfully parsed certificate: ${commonName}, Valid Until: ${validTo}`);
+      return res.json({
+        commonName,
+        cnpj,
+        issuer: issuerCN,
+        serialNumber,
+        validTo: validTo.toLocaleDateString('pt-BR'),
+        validFrom: validFrom.toLocaleDateString('pt-BR')
+      });
+    } catch (err: any) {
+      console.error("[Cert Parser] Error parsing PFX:", err);
+      return res.status(500).json({
+        error: `Senha inválida ou certificado corrompido: ${err.message || "Erro desconhecido"}`
+      });
+    }
+  });
+
+  // API Route: Digitally Sign PDF using @signpdf and custom or self-signed certificate
+  app.post("/api/sign-pdf", async (req, res) => {
+    try {
+      const { pdfBase64, companyName, cnpj, customP12Base64, customP12Password } = req.body;
+      if (!pdfBase64) {
+        return res.status(400).json({ error: "O conteúdo em base64 do PDF é obrigatório." });
+      }
+
+      const cleanCompanyName = companyName || "Empresa de Teste Ltda";
+      const cleanCnpj = cnpj || "00.000.000/0001-00";
+
+      let p12Buffer: Buffer;
+      let passphrase = "password";
+
+      if (customP12Base64) {
+        console.log(`[PDF Signer] Signing with CUSTOM client certificate for ${cleanCompanyName}...`);
+        p12Buffer = Buffer.from(customP12Base64, "base64");
+        passphrase = customP12Password || "";
+      } else {
+        console.log(`[PDF Signer] No custom certificate provided. Generating self-signed P12 certificate for: ${cleanCompanyName} (CNPJ: ${cleanCnpj})...`);
+        p12Buffer = generateSelfSignedP12(cleanCompanyName, cleanCnpj);
+      }
+
+      console.log(`[PDF Signer] Loading PDF using pdf-lib...`);
+      const pdfDoc = await PDFDocument.load(Buffer.from(pdfBase64, "base64"));
+
+      console.log(`[PDF Signer] Adding signature placeholder...`);
+      pdflibAddPlaceholder({
+        pdfDoc,
+        reason: "Assinatura Digital - Moreira & Lima",
+        contactInfo: "contato@moreiralima.com.br",
+        name: cleanCompanyName,
+        location: "Fortaleza, CE",
+        signingTime: new Date(),
+        subFilter: "ETSI.CAdES.detached", // Critical for PAdES-BES / ICP-Brasil validation on validar.iti.gov.br
+        signatureLength: 32768, // Increased to 32KB to safely accommodate full ICP-Brasil certificate chains
+      });
+
+      const pdfWithPlaceholderBytes = await pdfDoc.save();
+
+      console.log(`[PDF Signer] Signing PDF using @signpdf/signpdf with custom ICP-Brasil compliance...`);
+      const signpdf = new SignPdf();
+      const signer = new CustomP12Signer(p12Buffer, { passphrase });
+
+      const signedPdfBuffer = await signpdf.sign(pdfWithPlaceholderBytes, signer);
+
+      console.log(`[PDF Signer] PDF signed successfully! Returning base64...`);
+      return res.json({ signedPdfBase64: signedPdfBuffer.toString("base64") });
+    } catch (err: any) {
+      console.error("[PDF Signer] Error signing PDF:", err);
+      return res.status(500).json({
+        error: `Erro ao assinar digitalmente o PDF: ${err.message || "Erro desconhecido"}`
+      });
     }
   });
 

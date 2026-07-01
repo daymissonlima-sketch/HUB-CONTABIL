@@ -9,7 +9,7 @@ function formatCurrency(value: number): string {
   }).format(value);
 }
 
-export function exportDebtsToPDF(
+export async function exportDebtsToPDF(
   clientInfo: ClientInfo,
   debts: DebtItem[],
   categories: string[]
@@ -333,7 +333,7 @@ export function exportDebtsToPDF(
     addPageDecorations(i, totalPages);
   }
 
-  // Save the PDF
+  // Save the PDF directly
   const filename = `Levantamento_Debitos_${(clientInfo.name || 'Cliente').replace(/\s+/g, '_')}.pdf`;
   doc.save(filename);
 }

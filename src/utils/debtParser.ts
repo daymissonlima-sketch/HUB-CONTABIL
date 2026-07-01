@@ -50,34 +50,70 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
 
   const lines = text.split('\n');
 
-  // 1. Try to parse CNPJ and Client Name (Razão Social)
+  // 1. Try to parse CNPJ and Client Name (Razão Social) with an advanced robust scanner
   for (const line of lines) {
-    if (line.includes('CNPJ:') && !clientInfo.cnpj) {
-      // Extract CNPJ
-      const cnpjMatch = line.match(/CNPJ:\s*([\d\.\-\/]+)/i);
+    const cleanLine = line.replace(/["']/g, '').trim();
+    
+    // Match CNPJ with various prefixes (colon, semicolon, comma, spaces)
+    if (!clientInfo.cnpj) {
+      const cnpjMatch = cleanLine.match(/(?:CNPJ|Inscrição|Cadastro)[:;,\s]+([\d\.\-\/]{14,18})/i);
       if (cnpjMatch) {
         clientInfo.cnpj = cnpjMatch[1].trim();
-      }
-      
-      // Extract Name if in the same line after "-"
-      const nameMatch = line.match(/CNPJ:\s*[\d\.\-\/]+\s*-\s*([A-Za-z0-9À-ÖØ-öø-ÿ\s\.,&]+)/i);
-      if (nameMatch) {
-        clientInfo.name = nameMatch[1].replace(/__________________+/g, '').trim();
+      } else {
+        // Just search for any formatted CNPJ (e.g., xx.xxx.xxx/xxxx-xx) in the line
+        const generalCnpjMatch = cleanLine.match(/(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/);
+        if (generalCnpjMatch) {
+          clientInfo.cnpj = generalCnpjMatch[0];
+        } else {
+          // Check for 14-digit continuous numbers
+          const digitsCnpjMatch = cleanLine.match(/\b\d{14}\b/);
+          if (digitsCnpjMatch) {
+            clientInfo.cnpj = digitsCnpjMatch[0];
+          }
+        }
       }
     }
-    
-    // Fallback for Name if found in standard "Dados Cadastrais"
-    if (line.includes('CERTIDÃO') && line.includes('CNPJ:') && !clientInfo.name) {
-      const match = line.match(/CNPJ:\s*[\d\.\-\/]+\s*-\s*([A-Z0-9\s]+LTDA|[A-Z0-9\s]+S\/A|[A-Z0-9\s]+ME|[A-Z0-9\s]+EPP|[A-Z0-9\s]+)/i);
-      if (match) {
-        clientInfo.name = match[1].trim();
+
+    // Match Client Name
+    if (!clientInfo.name) {
+      // Look for explicit Name / Razão Social indicators
+      const nameMatch = cleanLine.match(/(?:Razão Social|Razao Social|Cliente|Nome|Empresa|Contribuinte|Nome\/Razão Social|Nome\/Razao Social)[:;,\s]+([A-Za-z0-9À-ÖØ-öø-ÿ\s\.,&\-]+)/i);
+      if (nameMatch) {
+        const potentialName = nameMatch[1].replace(/__________________+/g, '').trim();
+        if (potentialName && potentialName.toUpperCase() !== 'NOME' && potentialName.toUpperCase() !== 'CLIENTE' && potentialName.toUpperCase() !== 'RAZAO SOCIAL') {
+          clientInfo.name = potentialName;
+        }
       }
     }
   }
 
-  // If name not found, check standard pattern
+  // Fallback for CNPJ and Name if they are in the same line after "-"
+  if (!clientInfo.name || !clientInfo.cnpj) {
+    for (const line of lines) {
+      const cleanLine = line.replace(/["']/g, '').trim();
+      if (cleanLine.includes('CNPJ:') || cleanLine.includes('CNPJ') || (clientInfo.cnpj && cleanLine.includes(clientInfo.cnpj))) {
+        // Extract CNPJ if not already done
+        if (!clientInfo.cnpj) {
+          const cnpjMatch = cleanLine.match(/([\d\.\-\/]{14,18})/);
+          if (cnpjMatch) clientInfo.cnpj = cnpjMatch[1].trim();
+        }
+        
+        // Find other segments that could be the company name
+        const parts = cleanLine.split(/[-;,\t]/);
+        for (const part of parts) {
+          const trimmed = part.replace(/(?:CNPJ|Inscrição|Cadastro)[:;,\s]*[\d\.\-\/]*/i, '').trim();
+          if (trimmed && trimmed.length > 5 && !/^\d+$/.test(trimmed) && !trimmed.toUpperCase().includes('CERTIDÃO')) {
+            clientInfo.name = trimmed;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Additional fallback for Name standard pattern
   if (!clientInfo.name) {
-    const rawMatch = text.match(/CNPJ:\s*[\d\.\-]+?\s*-\s*([A-Z\s]+LTDA|[A-Z\s]+S\/A|[A-Z\s]+ME|[A-Z\s]+)/i);
+    const rawMatch = text.match(/CNPJ:\s*[\d\.\-]+?\s*-\s*([A-Za-z0-9À-ÖØ-öø-ÿ\s]+(?:LTDA|S\/A|S\.A\.|ME|EPP|EIRELI|LIMITADA))/i);
     if (rawMatch) {
       clientInfo.name = rawMatch[1].trim();
     }

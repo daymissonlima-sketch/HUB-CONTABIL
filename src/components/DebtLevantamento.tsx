@@ -945,6 +945,15 @@ export function DebtLevantamento() {
           const lines = csvText.split(/\r?\n/);
           if (lines.length === 0) throw new Error("A planilha está vazia.");
           
+          // Robustly extract client/company details from the CSV file
+          const { clientInfo: parsedClient } = parseSituationFiscalText(csvText, categories);
+          if (parsedClient.cnpj || parsedClient.name) {
+            setTempClientInfo({
+              cnpj: parsedClient.cnpj || '',
+              name: parsedClient.name || ''
+            });
+          }
+          
           let headersIndex = -1;
           let headers: string[] = [];
           

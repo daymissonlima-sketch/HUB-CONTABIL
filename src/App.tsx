@@ -8,10 +8,14 @@ import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { NfeXmlAuditor } from './components/NfeXmlAuditor';
 import { DebtLevantamento } from './components/DebtLevantamento';
-import { FileSpreadsheet, Briefcase, Menu, X } from 'lucide-react';
+import { ParcelamentoSimulador } from './components/ParcelamentoSimulador';
+import { FaturamentoGerador } from './components/FaturamentoGerador';
+import { FileSpreadsheet, Briefcase, Menu, X, Calculator, Coins } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'xml_auditor' | 'debit_levantamento'>('debit_levantamento');
+  const [activeTab, setActiveTab] = useState<
+    'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador'
+  >('debit_levantamento');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
   return (
@@ -58,7 +62,7 @@ export default function App() {
                 <span className="hidden sm:inline md:inline">Auditor XML NF-e</span>
               </button>
 
-              {/* Button 2: Debt Levantamento (New requested module) */}
+              {/* Button 2: Debt Levantamento (Existing module) */}
               <button
                 onClick={() => setActiveTab('debit_levantamento')}
                 className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
@@ -70,6 +74,34 @@ export default function App() {
               >
                 <Briefcase className="h-4.5 w-4.5 shrink-0" />
                 <span className="hidden sm:inline md:inline">Levantamento de Débitos</span>
+              </button>
+
+              {/* Button 3: Simulação de Parcelamento (New module) */}
+              <button
+                onClick={() => setActiveTab('parcelamento_simulador')}
+                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
+                  activeTab === 'parcelamento_simulador'
+                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
+                    : 'hover:bg-[#031d30] text-slate-300'
+                }`}
+                title="Simulação de Parcelamento de Débitos"
+              >
+                <Calculator className="h-4.5 w-4.5 shrink-0" />
+                <span className="hidden sm:inline md:inline">Simular Parcelamento</span>
+              </button>
+
+              {/* Button 4: Geração de Faturamento (New module) */}
+              <button
+                onClick={() => setActiveTab('faturamento_gerador')}
+                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
+                  activeTab === 'faturamento_gerador'
+                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
+                    : 'hover:bg-[#031d30] text-slate-300'
+                }`}
+                title="Geração de Faturamento de Empresas"
+              >
+                <Coins className="h-4.5 w-4.5 shrink-0" />
+                <span className="hidden sm:inline md:inline">Geração de Faturamento</span>
               </button>
 
             </nav>
@@ -97,15 +129,17 @@ export default function App() {
             ) : (
               <div /> // spacer
             )}
-            <div className="text-[10px] font-mono text-slate-400 font-bold uppercase tracking-wider hidden sm:block">
-              {activeTab === 'debit_levantamento' ? "" : "AUDITOR XML DE NF-E"}
-            </div>
+
           </div>
 
           {activeTab === 'xml_auditor' ? (
             <NfeXmlAuditor />
-          ) : (
+          ) : activeTab === 'debit_levantamento' ? (
             <DebtLevantamento />
+          ) : activeTab === 'parcelamento_simulador' ? (
+            <ParcelamentoSimulador />
+          ) : (
+            <FaturamentoGerador />
           )}
         </main>
 
