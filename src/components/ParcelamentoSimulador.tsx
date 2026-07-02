@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { ParcelamentoInput, InstallmentRow, Company } from '../types_debits';
+import importedCompaniesJson from '../data/imported_companies.json';
 
 export function ParcelamentoSimulador() {
   // Retrieve custom parcelamento templates/types from the configurations stored in localStorage
@@ -58,17 +59,27 @@ export function ParcelamentoSimulador() {
 
   // Load companies
   useEffect(() => {
+    const importedList = (importedCompaniesJson as unknown) as Company[];
     const stored = localStorage.getItem('moreira_lima_companies');
+    let mergedCompanies: Company[] = [...importedList];
+
     if (stored) {
       try {
-        const parsed = JSON.parse(stored);
-        setCompanies(parsed);
-        if (parsed.length > 0) {
-          setSelectedCompanyId(parsed[0].id);
-        }
+        const parsed = (JSON.parse(stored) as Company[]).filter(c => !c.id.startsWith('demo-'));
+        const existingCnpjs = new Set(parsed.map(c => c.cnpj.replace(/\D/g, '')));
+        const newFromImport = importedList.filter(c => !existingCnpjs.has(c.cnpj.replace(/\D/g, '')));
+        mergedCompanies = [...parsed, ...newFromImport];
       } catch (e) {
         console.error('Erro ao ler empresas:', e);
       }
+    }
+
+    mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+
+    setCompanies(mergedCompanies);
+    localStorage.setItem('moreira_lima_companies', JSON.stringify(mergedCompanies));
+    if (mergedCompanies.length > 0 && !selectedCompanyId) {
+      setSelectedCompanyId(mergedCompanies[0].id);
     }
   }, []);
 

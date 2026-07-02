@@ -22,6 +22,8 @@ import {
   Info
 } from 'lucide-react';
 import { NFeItemRow, SortConfig, GridFilters } from '../types';
+import { Company } from '../types_debits';
+import importedCompaniesJson from '../data/imported_companies.json';
 
 interface NFeGridProps {
   rows: NFeItemRow[];
@@ -176,6 +178,26 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
 
   const [showFilterPanel, setShowFilterPanel] = useState(false);
   const [showConfigPanel, setShowConfigPanel] = useState(false);
+
+  const [registeredCompanies, setRegisteredCompanies] = useState<Company[]>([]);
+
+  useEffect(() => {
+    const importedList = (importedCompaniesJson as unknown) as Company[];
+    const stored = localStorage.getItem('moreira_lima_companies');
+    let mergedCompanies: Company[] = [...importedList];
+    if (stored) {
+      try {
+        const parsed = (JSON.parse(stored) as Company[]).filter(c => !c.id.startsWith('demo-'));
+        const existingCnpjs = new Set(parsed.map(c => c.cnpj.replace(/\D/g, '')));
+        const newFromImport = importedList.filter(c => !existingCnpjs.has(c.cnpj.replace(/\D/g, '')));
+        mergedCompanies = [...parsed, ...newFromImport];
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+    setRegisteredCompanies(mergedCompanies);
+  }, []);
 
   // Column management states
   const [customPresets, setCustomPresets] = useState<ColumnPresetGroup[]>([]);
@@ -711,13 +733,25 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
           </div>
           <div>
             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Razão Social / CNPJ Emitente</label>
-            <input
-              type="text"
-              placeholder="Ex: Moreira"
-              value={filters.emitNome}
-              onChange={(e) => handleFilterChange('emitNome', e.target.value)}
-              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-[#042838]"
-            />
+            <div className="flex space-x-1">
+              <input
+                type="text"
+                placeholder="Ex: Moreira ou CNPJ"
+                value={filters.emitNome}
+                onChange={(e) => handleFilterChange('emitNome', e.target.value)}
+                list="registered-companies-list"
+                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-[#042838]"
+              />
+            </div>
+            {registeredCompanies.length > 0 && (
+              <datalist id="registered-companies-list">
+                {registeredCompanies.map(c => (
+                  <option key={c.id} value={c.razaoSocial}>
+                    {c.cnpj} - {c.cidade}
+                  </option>
+                ))}
+              </datalist>
+            )}
           </div>
           <div>
             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">NCM</label>

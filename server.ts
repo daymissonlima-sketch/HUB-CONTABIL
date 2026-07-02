@@ -303,7 +303,7 @@ Instruções importantes:
     }
   });
 
-  // API Route: Public CNPJ WS proxy lookup to avoid CORS and handle rate limits gracefully
+  // API Route: Public CNPJ lookup with fallback (BrasilAPI -> publica.cnpj.ws)
   app.get("/api/cnpj/:cnpj", async (req, res) => {
     try {
       const { cnpj } = req.params;
@@ -313,7 +313,45 @@ Instruções importantes:
       }
 
       console.log(`[CNPJ API] Requesting CNPJ: ${cnpjClean}`);
-      const apiResponse = await fetch(`https://publica.cnpj.ws/cnpj/${cnpjClean}`);
+      const headers = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" };
+
+      // 1. Try BrasilAPI first
+      try {
+        const brasilRes = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpjClean}`, { headers });
+        if (brasilRes.ok) {
+          const bData = await brasilRes.json();
+          // Map to unified structure
+          const isSimples = bData.opcao_pelo_simples === true;
+          const socios = (bData.qsa || []).map((s: any) => ({
+            nome: s.nome_socio || "",
+            qualificacao_socio: { descricao: s.qualificacao_socio || "" }
+          }));
+          return res.json({
+            razao_social: bData.razao_social || "",
+            logradouro: bData.logradouro || "",
+            numero: bData.numero || "",
+            bairro: bData.bairro || "",
+            cep: bData.cep || "",
+            municipio: bData.municipio || "",
+            uf: bData.uf || "",
+            simples: { optante: isSimples ? "Sim" : "Não" },
+            estabelecimento: {
+              logradouro: bData.logradouro || "",
+              numero: bData.numero || "",
+              bairro: bData.bairro || "",
+              cep: bData.cep || "",
+              cidade: { nome: bData.municipio || "" },
+              estado: { sigla: bData.uf || "", nome: bData.uf || "" }
+            },
+            socios
+          });
+        }
+      } catch (bErr) {
+        console.warn(`[CNPJ API] BrasilAPI failed for ${cnpjClean}, falling back to publica.cnpj.ws...`);
+      }
+
+      // 2. Fallback to publica.cnpj.ws
+      const apiResponse = await fetch(`https://publica.cnpj.ws/cnpj/${cnpjClean}`, { headers });
 
       if (apiResponse.status === 429) {
         return res.status(429).json({
@@ -334,7 +372,7 @@ Instruções importantes:
       const data = await apiResponse.json();
       return res.json(data);
     } catch (err: any) {
-      console.error("[CNPJ API] Error fetching from publica.cnpj.ws:", err);
+      console.error("[CNPJ API] Error fetching CNPJ:", err);
       return res.status(500).json({
         error: "Erro de rede ou falha na comunicação com a API de CNPJ."
       });

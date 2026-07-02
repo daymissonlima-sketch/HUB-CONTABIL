@@ -33,7 +33,8 @@ import {
   ArrowLeft,
   Check
 } from 'lucide-react';
-import { DebtItem, ClientInfo, DebtCategory } from '../types_debits';
+import { DebtItem, ClientInfo, DebtCategory, Company } from '../types_debits';
+import importedCompaniesJson from '../data/imported_companies.json';
 import { 
   parseSituationFiscalText, 
   SAMPLE_RECEITA_FEDERAL, 
@@ -342,6 +343,27 @@ export function DebtLevantamento() {
     }
     return [];
   });
+
+  const [registeredCompanies, setRegisteredCompanies] = useState<Company[]>([]);
+
+  useEffect(() => {
+    const importedList = (importedCompaniesJson as unknown) as Company[];
+    const stored = localStorage.getItem('moreira_lima_companies');
+    let mergedCompanies: Company[] = [...importedList];
+
+    if (stored) {
+      try {
+        const parsed = (JSON.parse(stored) as Company[]).filter(c => !c.id.startsWith('demo-'));
+        const existingCnpjs = new Set(parsed.map(c => c.cnpj.replace(/\D/g, '')));
+        const newFromImport = importedList.filter(c => !existingCnpjs.has(c.cnpj.replace(/\D/g, '')));
+        mergedCompanies = [...parsed, ...newFromImport];
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+    setRegisteredCompanies(mergedCompanies);
+  }, []);
 
   // Synchronize to localStorage
   useEffect(() => {
@@ -1461,6 +1483,30 @@ export function DebtLevantamento() {
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-grow md:max-w-xl lg:max-w-2xl w-full">
+            {registeredCompanies.length > 0 && (
+              <div className="sm:col-span-2">
+                <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Selecionar Empresa Cadastrada ({registeredCompanies.length} importadas)
+                </label>
+                <select
+                  className="w-full px-3 py-1.5 bg-slate-50 border border-slate-250 rounded-lg text-xs text-slate-800 font-sans font-semibold focus:outline-none focus:border-[#e4b35e] transition-all cursor-pointer"
+                  onChange={(e) => {
+                    const selected = registeredCompanies.find(c => c.id === e.target.value);
+                    if (selected) {
+                      setClientInfo({ name: selected.razaoSocial, cnpj: selected.cnpj });
+                    }
+                  }}
+                  defaultValue=""
+                >
+                  <option value="">-- Selecione uma empresa para preencher automaticamente --</option>
+                  {registeredCompanies.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.razaoSocial} ({c.cnpj}) {c.cidade ? `- ${c.cidade}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="w-full">
               <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">
                 Nome do Cliente / Razão Social

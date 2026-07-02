@@ -43,6 +43,7 @@ import {
   Area 
 } from 'recharts';
 import { Company, FaturamentoItem } from '../types_debits';
+import importedCompaniesJson from '../data/imported_companies.json';
 
 export interface Accountant {
   id: string;
@@ -370,34 +371,39 @@ export function FaturamentoGerador() {
 
   // Load companies and accountants from localStorage on mount
   useEffect(() => {
+    const importedList = (importedCompaniesJson as unknown) as Company[];
     const stored = localStorage.getItem('moreira_lima_companies');
+    let mergedCompanies: Company[] = [...importedList];
+
     if (stored) {
       try {
-        // Clear any old demo companies to guarantee "Deve vir sem nenhuma empresa cadastrada"
         const parsed = (JSON.parse(stored) as Company[]).filter(c => !c.id.startsWith('demo-'));
-        setCompanies(parsed);
-        if (parsed.length > 0) {
-          const firstCompanyId = parsed[0].id;
-          setSelectedCompanyId(firstCompanyId);
-          lastLoadedCompanyIdRef.current = firstCompanyId;
-          const storedFat = localStorage.getItem(`moreira_lima_faturamento_${firstCompanyId}`);
-          if (storedFat) {
-            try {
-              setFaturamentoData(JSON.parse(storedFat));
-            } catch {}
-          }
-        } else {
-          setSelectedCompanyId('');
-          lastLoadedCompanyIdRef.current = null;
-        }
+        const existingCnpjs = new Set(parsed.map(c => c.cnpj.replace(/\D/g, '')));
+        const newFromImport = importedList.filter(c => !existingCnpjs.has(c.cnpj.replace(/\D/g, '')));
+        mergedCompanies = [...parsed, ...newFromImport];
       } catch (err) {
         console.error('Erro ao ler empresas do localStorage:', err);
       }
+    }
+
+    mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+
+    setCompanies(mergedCompanies);
+    localStorage.setItem('moreira_lima_companies', JSON.stringify(mergedCompanies));
+
+    if (mergedCompanies.length > 0) {
+      const firstCompanyId = mergedCompanies[0].id;
+      setSelectedCompanyId(firstCompanyId);
+      lastLoadedCompanyIdRef.current = firstCompanyId;
+      const storedFat = localStorage.getItem(`moreira_lima_faturamento_${firstCompanyId}`);
+      if (storedFat) {
+        try {
+          setFaturamentoData(JSON.parse(storedFat));
+        } catch {}
+      }
     } else {
-      setCompanies([]);
       setSelectedCompanyId('');
       lastLoadedCompanyIdRef.current = null;
-      localStorage.setItem('moreira_lima_companies', JSON.stringify([]));
     }
 
     const storedAcc = localStorage.getItem('moreira_lima_accountants');
@@ -439,8 +445,9 @@ export function FaturamentoGerador() {
 
   // Save companies when changed
   const saveCompanies = (updatedList: Company[]) => {
-    setCompanies(updatedList);
-    localStorage.setItem('moreira_lima_companies', JSON.stringify(updatedList));
+    const sorted = [...updatedList].sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+    setCompanies(sorted);
+    localStorage.setItem('moreira_lima_companies', JSON.stringify(sorted));
   };
 
   const handleSaveAccountant = (e: React.FormEvent) => {
@@ -1039,12 +1046,22 @@ export function FaturamentoGerador() {
         const separator = line.includes(';') ? ';' : ',';
         const parts = line.split(separator).map(p => p.trim());
 
-        if (parts.length < 2 || !parts[1]) {
+        if (parts.length < 2) {
           continue; // skip invalid lines
         }
 
-        const rawCnpj = parts[1];
-        const cleanCnpj = rawCnpj.replace(/\D/g, "");
+        let cleanCnpj = "";
+        let razaoCsv = parts[0] || "Empresa Sem Nome";
+        for (let idx = 0; idx < parts.length; idx++) {
+          const stripped = parts[idx].replace(/\D/g, "");
+          if (stripped.length === 14) {
+            cleanCnpj = stripped;
+            if (idx > 0 && parts[idx - 1] && !/^\d+$/.test(parts[idx - 1])) {
+              razaoCsv = parts[idx - 1];
+            }
+            break;
+          }
+        }
 
         if (cleanCnpj.length !== 14) {
           continue; // skip invalid CNPJs
