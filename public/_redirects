@@ -1,0 +1,2 @@
+# Proxy Netlify para consulta de CNPJ (evita erros de CORS e retorno de HTML 404 em produção)
+/api/cnpj/*  https://brasilapi.com.br/api/cnpj/v1/:splat  200

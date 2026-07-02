@@ -91,10 +91,72 @@ export interface BatchFileResult {
   errorMessage?: string;
 }
 
+// Proxy/API Safe Fetcher - Evita erro 'Unexpected token <' ao ler respostas HTML (404/proxy incorreto)
+async function fetchCnpjSafe(cleanCnpj: string): Promise<any> {
+  const response = await fetch(`/api/cnpj/${cleanCnpj}`);
+  const text = await response.text();
+
+  if (!text || text.trim().startsWith("<") || !text.trim().startsWith("{")) {
+    throw new Error("A API retornou HTML em vez de JSON. Verifique as configurações de proxy (_redirects).");
+  }
+
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    throw new Error("A resposta recebida não está no formato JSON válido.");
+  }
+
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `Erro ao consultar CNPJ (Status: ${response.status})`);
+  }
+
+  return data;
+}
+
+function parseCnpjResponseData(data: any) {
+  const razaoSocial = data.razao_social || data.nome || 'Empresa Sem Nome';
+
+  const est = data.estabelecimento || {};
+  const logradouro = est.logradouro || data.logradouro || '';
+  const numero = est.numero || data.numero || '';
+  const bairro = est.bairro || data.bairro || '';
+  const enderecoFormatted = [logradouro, numero, bairro].filter(Boolean).join(', ');
+
+  const cep = est.cep || data.cep || '';
+  const municipioNome = est.municipio?.nome || data.municipio || '';
+  const estadoSigla = est.estado?.sigla || data.uf || '';
+  const estadoNome = est.estado?.nome || data.uf || '';
+  const cidadeFormatted = municipioNome && estadoSigla ? `${municipioNome} (${estadoSigla})` : (municipioNome || estadoSigla || '');
+
+  const isSimples = data.simples?.optante === 'Sim' || data.simples?.optante === true || data.opcao_pelo_simples === true;
+  const regime = isSimples ? 'SIMPLES_NACIONAL' : 'LUCRO_PRESUMIDO';
+
+  const sociosRaw = data.socios || data.qsa || [];
+  const quadro = sociosRaw.map((s: any) => {
+    const nome = s.nome || s.nome_socio || '';
+    const desc = s.qualificacao_socio?.descricao || (typeof s.qualificacao_socio === 'string' ? s.qualificacao_socio : '') || '';
+    return desc ? `${nome} (${desc})` : nome;
+  }).filter(Boolean);
+
+  return {
+    razaoSocial,
+    enderecoFormatted,
+    cidadeFormatted,
+    cep,
+    regime,
+    quadro,
+    municipioNome,
+    estadoNome,
+    estadoSigla
+  };
+}
+
 export function FaturamentoGerador() {
   // States
   const [companies, setCompanies] = useState<Company[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
+  const [mainCompanySearchQuery, setMainCompanySearchQuery] = useState<string>('');
   
   // Accountants State
   const [accountants, setAccountants] = useState<Accountant[]>([]);
@@ -231,9 +293,19 @@ export function FaturamentoGerador() {
     });
   }, [companies, faturamentoData, billingUpdateTrigger]);
 
+  const filteredCompaniesWithBilling = useMemo(() => {
+    const q = mainCompanySearchQuery.trim().toUpperCase();
+    if (!q) return companiesWithBilling;
+    return companiesWithBilling.filter(company => {
+      const razao = (company.razaoSocial || '').toUpperCase();
+      const cnpj = (company.cnpj || '');
+      return razao.startsWith(q) || razao.includes(q) || cnpj.includes(q);
+    });
+  }, [companiesWithBilling, mainCompanySearchQuery]);
+
   const handleSelectAllBatch = (checked: boolean) => {
     if (checked) {
-      const activeIds = companiesWithBilling.filter(c => c.hasBilling).map(c => c.id);
+      const activeIds = filteredCompaniesWithBilling.filter(c => c.hasBilling).map(c => c.id);
       setSelectedBatchCompanies(activeIds);
     } else {
       setSelectedBatchCompanies([]);
@@ -798,56 +870,25 @@ export function FaturamentoGerador() {
 
     setIsFetchingCnpj(true);
     try {
-      const response = await fetch(`/api/cnpj/${clean}`);
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || "Erro ao consultar CNPJ");
-      }
-      const data = await response.json();
+      const data = await fetchCnpjSafe(clean);
+      const parsed = parseCnpjResponseData(data);
       
-      // Extract data fields correctly
-      const razaoSocial = data.razao_social || '';
-      
-      // Extract address details
-      const est = data.estabelecimento || {};
-      const logradouro = est.logradouro || '';
-      const numero = est.numero || '';
-      const bairro = est.bairro || '';
-      const enderecoFormatted = [logradouro, numero, bairro].filter(Boolean).join(', ');
-      
-      const cep = est.cep || '';
-      const municipioNome = est.municipio?.nome || '';
-      const estadoSigla = est.estado?.sigla || '';
-      const cidadeFormatted = municipioNome && estadoSigla ? `${municipioNome} (${estadoSigla})` : (municipioNome || estadoSigla || '');
-
-      // Simples Nacional option
-      const isSimples = data.simples?.optante === 'Sim' || data.simples?.optante === true;
-      const regime = isSimples ? 'SIMPLES_NACIONAL' : 'LUCRO_PRESUMIDO';
-
-      // Board (Quadro Societário)
-      const socios = data.socios || [];
-      const quadro = socios.map((s: any) => {
-        const nome = s.nome || '';
-        const desc = s.qualificacao_socio?.descricao || '';
-        return desc ? `${nome} (${desc})` : nome;
-      }).filter(Boolean);
-
       // Check if there is a certificate installed in the browser for this company
-      const cert = checkAndAutoImportBrowserCert(clean, razaoSocial);
+      const cert = checkAndAutoImportBrowserCert(clean, parsed.razaoSocial);
 
       // Map values
       setNewCompany(prev => ({
         ...prev,
-        razaoSocial: razaoSocial,
+        razaoSocial: parsed.razaoSocial,
         cnpj: formatCNPJ(clean),
-        endereco: enderecoFormatted,
-        cidade: cidadeFormatted,
-        cep: cep,
-        regimeTributario: regime as any,
-        quadroSocietario: quadro,
-        municipio: municipioNome,
-        estado: est.estado?.nome || '',
-        uf: estadoSigla,
+        endereco: parsed.enderecoFormatted,
+        cidade: parsed.cidadeFormatted,
+        cep: parsed.cep,
+        regimeTributario: parsed.regime as any,
+        quadroSocietario: parsed.quadro,
+        municipio: parsed.municipioNome,
+        estado: parsed.estadoNome,
+        uf: parsed.estadoSigla,
         certificateName: cert ? cert.certificateName : '',
         certificateValidTo: cert ? cert.certificateValidTo : '',
         certificateIssuer: cert ? cert.certificateIssuer : '',
@@ -866,7 +907,7 @@ export function FaturamentoGerador() {
           serialNumber: cert.certificateSerialNumber,
           isActive: true,
           cnpj: formatCNPJ(clean),
-          razaoSocial: razaoSocial
+          razaoSocial: parsed.razaoSocial
         };
         setCertificates(prev => [newGlobalCert, ...prev.filter(c => c.cnpj !== formatCNPJ(clean))]);
         alert("Dados da empresa e Certificado Digital (A1) do navegador importados com sucesso!");
@@ -1077,37 +1118,11 @@ export function FaturamentoGerador() {
         setCsvImportProgress(`Consultando API para: ${formatCNPJ(cleanCnpj)} (${i - startIndex + 1}/${lines.length - startIndex})...`);
         
         try {
-          const response = await fetch(`/api/cnpj/${cleanCnpj}`);
-          if (!response.ok) {
-            throw new Error(`Erro API: ${response.status}`);
-          }
-          const data = await response.json();
+          const data = await fetchCnpjSafe(cleanCnpj);
+          const parsed = parseCnpjResponseData(data);
 
-          const razaoSocial = data.razao_social || parts[0] || 'Empresa Sem Nome';
-          
-          // Address details
-          const est = data.estabelecimento || {};
-          const logradouro = est.logradouro || '';
-          const numero = est.numero || '';
-          const bairro = est.bairro || '';
-          const enderecoFormatted = [logradouro, numero, bairro].filter(Boolean).join(', ');
-          
-          const cep = est.cep || '';
-          const municipioNome = est.municipio?.nome || '';
-          const estadoSigla = est.estado?.sigla || '';
-          const cidadeFormatted = municipioNome && estadoSigla ? `${municipioNome} (${estadoSigla})` : (municipioNome || estadoSigla || '');
-
-          // Simples Nacional Opt-in
-          const isSimples = data.simples?.optante === 'Sim' || data.simples?.optante === true;
-          const regime = isSimples ? 'SIMPLES_NACIONAL' : (parts[2] as any || 'LUCRO_PRESUMIDO');
-
-          // Partners List (Quadro Societário)
-          const socios = data.socios || [];
-          const quadro = socios.map((s: any) => {
-            const nome = s.nome || '';
-            const desc = s.qualificacao_socio?.descricao || '';
-            return desc ? `${nome} (${desc})` : nome;
-          }).filter(Boolean);
+          const razaoSocial = parsed.razaoSocial || parts[0] || 'Empresa Sem Nome';
+          const regime = parsed.regime || (parts[2] as any || 'LUCRO_PRESUMIDO');
 
           const comp: Company = {
             id: 'comp_' + Date.now() + '_' + i,
@@ -1116,9 +1131,9 @@ export function FaturamentoGerador() {
             regimeTributario: regime,
             vendaVistaPercent: parseFloat(parts[3]) || 10,
             vendaPrazoPercent: parseFloat(parts[4]) || 90,
-            endereco: enderecoFormatted || parts[5] || '',
-            cidade: cidadeFormatted || parts[6] || 'Fortaleza (CE)',
-            cep: cep || parts[7] || '',
+            endereco: parsed.enderecoFormatted || parts[5] || '',
+            cidade: parsed.cidadeFormatted || parts[6] || 'Fortaleza (CE)',
+            cep: parsed.cep || parts[7] || '',
             inscEst: parts[8] || '',
             pmr: parseInt(parts[9]) || 21,
             pr: (parts[10] as any) || 'R',
@@ -1127,10 +1142,10 @@ export function FaturamentoGerador() {
             duplicatasPercent: parseFloat(parts[13]) || 100,
             contadorNome: parts[14] || 'PAULO HENRIQUE DE F. MOREIRA',
             contadorCrc: parts[15] || 'CRC CE 022956-O6',
-            quadroSocietario: quadro,
-            municipio: municipioNome,
-            estado: est.estado?.nome || '',
-            uf: estadoSigla,
+            quadroSocietario: parsed.quadro,
+            municipio: parsed.municipioNome,
+            estado: parsed.estadoNome,
+            uf: parsed.estadoSigla,
             createdAt: new Date().toISOString()
           };
 
@@ -1666,62 +1681,38 @@ export function FaturamentoGerador() {
       if (!identifiedCompany && identifiedCnpj && identifiedCnpj.length === 14) {
         setBatchProgress(`Empresa não cadastrada (${formatCNPJ(identifiedCnpj)}). Criando perfil automaticamente...`);
         try {
-          const response = await fetch(`/api/cnpj/${identifiedCnpj}`);
-          if (response.ok) {
-            const data = await response.json();
-            const razaoSocial = data.razao_social || 'Empresa Sem Nome';
-            
-            const est = data.estabelecimento || {};
-            const logradouro = est.logradouro || '';
-            const numero = est.numero || '';
-            const bairro = est.bairro || '';
-            const enderecoFormatted = [logradouro, numero, bairro].filter(Boolean).join(', ');
-            
-            const cep = est.cep || '';
-            const municipioNome = est.municipio?.nome || '';
-            const estadoSigla = est.estado?.sigla || '';
-            const cidadeFormatted = municipioNome && estadoSigla ? `${municipioNome} (${estadoSigla})` : (municipioNome || estadoSigla || '');
+          const data = await fetchCnpjSafe(identifiedCnpj);
+          const parsed = parseCnpjResponseData(data);
 
-            const isSimples = data.simples?.optante === 'Sim' || data.simples?.optante === true;
-            const regime = isSimples ? 'SIMPLES_NACIONAL' : 'LUCRO_PRESUMIDO';
+          const newComp: Company = {
+            id: 'comp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9),
+            razaoSocial: parsed.razaoSocial,
+            cnpj: formatCNPJ(identifiedCnpj),
+            regimeTributario: parsed.regime as any,
+            vendaVistaPercent: 10,
+            vendaPrazoPercent: 90,
+            endereco: parsed.enderecoFormatted || '',
+            cidade: parsed.cidadeFormatted || 'Fortaleza (CE)',
+            cep: parsed.cep || '',
+            inscEst: '',
+            pmr: 21,
+            pr: 'R',
+            cartoesPercent: 0,
+            chequesPercent: 0,
+            duplicatasPercent: 100,
+            contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
+            contadorCrc: 'CRC CE 022956-O6',
+            quadroSocietario: parsed.quadro,
+            municipio: parsed.municipioNome,
+            estado: parsed.estadoNome,
+            uf: parsed.estadoSigla,
+            createdAt: new Date().toISOString()
+          };
 
-            const socios = data.socios || [];
-            const quadro = socios.map((s: any) => {
-              const nome = s.nome || '';
-              const desc = s.qualificacao_socio?.descricao || '';
-              return desc ? `${nome} (${desc})` : nome;
-            }).filter(Boolean);
-
-            const newComp: Company = {
-              id: 'comp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9),
-              razaoSocial: razaoSocial,
-              cnpj: formatCNPJ(identifiedCnpj),
-              regimeTributario: regime,
-              vendaVistaPercent: 10,
-              vendaPrazoPercent: 90,
-              endereco: enderecoFormatted || '',
-              cidade: cidadeFormatted || 'Fortaleza (CE)',
-              cep: cep || '',
-              inscEst: '',
-              pmr: 21,
-              pr: 'R',
-              cartoesPercent: 0,
-              chequesPercent: 0,
-              duplicatasPercent: 100,
-              contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
-              contadorCrc: 'CRC CE 022956-O6',
-              quadroSocietario: quadro,
-              municipio: municipioNome,
-              estado: est.estado?.nome || '',
-              uf: estadoSigla,
-              createdAt: new Date().toISOString()
-            };
-
-            currentCompanies = [newComp, ...currentCompanies];
-            setCompanies(currentCompanies);
-            saveCompanies(currentCompanies);
-            targetCompany = newComp;
-          }
+          currentCompanies = [newComp, ...currentCompanies];
+          setCompanies(currentCompanies);
+          saveCompanies(currentCompanies);
+          targetCompany = newComp;
         } catch (apiErr) {
           console.error('Erro ao buscar CNPJ via API pública:', apiErr);
         }
@@ -1811,61 +1802,37 @@ export function FaturamentoGerador() {
         if (!identifiedCompany && identifiedCnpj && identifiedCnpj.length === 14) {
           setBatchProgress(`CNPJ não cadastrado encontrado: ${formatCNPJ(identifiedCnpj)}. Criando empresa automaticamente...`);
           try {
-            const response = await fetch(`/api/cnpj/${identifiedCnpj}`);
-            if (response.ok) {
-              const data = await response.json();
-              const razaoSocial = data.razao_social || 'Empresa Sem Nome';
-              
-              const est = data.estabelecimento || {};
-              const logradouro = est.logradouro || '';
-              const numero = est.numero || '';
-              const bairro = est.bairro || '';
-              const enderecoFormatted = [logradouro, numero, bairro].filter(Boolean).join(', ');
-              
-              const cep = est.cep || '';
-              const municipioNome = est.municipio?.nome || '';
-              const estadoSigla = est.estado?.sigla || '';
-              const cidadeFormatted = municipioNome && estadoSigla ? `${municipioNome} (${estadoSigla})` : (municipioNome || estadoSigla || '');
+            const data = await fetchCnpjSafe(identifiedCnpj);
+            const parsed = parseCnpjResponseData(data);
 
-              const isSimples = data.simples?.optante === 'Sim' || data.simples?.optante === true;
-              const regime = isSimples ? 'SIMPLES_NACIONAL' : 'LUCRO_PRESUMIDO';
+            const newComp: Company = {
+              id: 'comp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9),
+              razaoSocial: parsed.razaoSocial,
+              cnpj: formatCNPJ(identifiedCnpj),
+              regimeTributario: parsed.regime as any,
+              vendaVistaPercent: 10,
+              vendaPrazoPercent: 90,
+              endereco: parsed.enderecoFormatted || '',
+              cidade: parsed.cidadeFormatted || 'Fortaleza (CE)',
+              cep: parsed.cep || '',
+              inscEst: '',
+              pmr: 21,
+              pr: 'R',
+              cartoesPercent: 0,
+              chequesPercent: 0,
+              duplicatasPercent: 100,
+              contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
+              contadorCrc: 'CRC CE 022956-O6',
+              quadroSocietario: parsed.quadro,
+              municipio: parsed.municipioNome,
+              estado: parsed.estadoNome,
+              uf: parsed.estadoSigla,
+              createdAt: new Date().toISOString()
+            };
 
-              const socios = data.socios || [];
-              const quadro = socios.map((s: any) => {
-                const nome = s.nome || '';
-                const desc = s.qualificacao_socio?.descricao || '';
-                return desc ? `${nome} (${desc})` : nome;
-              }).filter(Boolean);
-
-              const newComp: Company = {
-                id: 'comp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9),
-                razaoSocial: razaoSocial,
-                cnpj: formatCNPJ(identifiedCnpj),
-                regimeTributario: regime,
-                vendaVistaPercent: 10,
-                vendaPrazoPercent: 90,
-                endereco: enderecoFormatted || '',
-                cidade: cidadeFormatted || 'Fortaleza (CE)',
-                cep: cep || '',
-                inscEst: '',
-                pmr: 21,
-                pr: 'R',
-                cartoesPercent: 0,
-                chequesPercent: 0,
-                duplicatasPercent: 100,
-                contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
-                contadorCrc: 'CRC CE 022956-O6',
-                quadroSocietario: quadro,
-                municipio: municipioNome,
-                estado: est.estado?.nome || '',
-                uf: estadoSigla,
-                createdAt: new Date().toISOString()
-              };
-
-              currentCompanies = [newComp, ...currentCompanies];
-              finalCompany = newComp;
-              autoCreated = true;
-            }
+            currentCompanies = [newComp, ...currentCompanies];
+            finalCompany = newComp;
+            autoCreated = true;
           } catch (apiErr) {
             console.error('Erro ao buscar CNPJ via API pública:', apiErr);
           }
@@ -2922,7 +2889,56 @@ export function FaturamentoGerador() {
       
       {/* Sleek, High-Contrast Header Section */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-        <div>
+        <div className="relative flex-1 max-w-lg">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <input
+            type="text"
+            value={mainCompanySearchQuery}
+            onChange={(e) => setMainCompanySearchQuery(e.target.value)}
+            placeholder="Pesquisar por razão social (digite as primeiras letras)..."
+            className="w-full pl-10 pr-8 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#04243b] focus:ring-1 focus:ring-[#04243b] text-slate-800 transition-all font-medium shadow-2xs"
+          />
+          {mainCompanySearchQuery && (
+            <button
+              type="button"
+              onClick={() => setMainCompanySearchQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-sm cursor-pointer"
+              title="Limpar pesquisa"
+            >
+              ×
+            </button>
+          )}
+
+          {/* Quick switcher dropdown when in Individual view */}
+          {mainCompanySearchQuery.trim().length > 0 && activeMainTab === 'individual' && (
+            <div className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-64 overflow-y-auto divide-y divide-slate-100">
+              {filteredCompaniesWithBilling.length === 0 ? (
+                <div className="p-4 text-center text-xs text-slate-400 italic">
+                  Nenhuma empresa encontrada digitando as letras informadas.
+                </div>
+              ) : (
+                filteredCompaniesWithBilling.map(company => (
+                  <button
+                    key={company.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCompanyId(company.id);
+                      setMainCompanySearchQuery('');
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-[#e4b35e]/10 transition-colors flex items-center justify-between gap-2 cursor-pointer"
+                  >
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">{company.razaoSocial}</div>
+                      <div className="text-[10px] text-slate-500 font-mono">CNPJ: {company.cnpj}</div>
+                    </div>
+                    <span className="text-[10px] font-bold uppercase text-[#04243b] bg-slate-100 px-2 py-1 rounded">
+                      Visualizar
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </div>
         
         <div className="flex flex-col sm:flex-row items-center gap-2.5">
@@ -3327,8 +3343,8 @@ export function FaturamentoGerador() {
                   <input
                     type="checkbox"
                     checked={
-                      companiesWithBilling.filter(c => c.hasBilling).length > 0 &&
-                      selectedBatchCompanies.length === companiesWithBilling.filter(c => c.hasBilling).length
+                      filteredCompaniesWithBilling.filter(c => c.hasBilling).length > 0 &&
+                      filteredCompaniesWithBilling.filter(c => c.hasBilling).every(c => selectedBatchCompanies.includes(c.id))
                     }
                     onChange={(e) => handleSelectAllBatch(e.target.checked)}
                     className="rounded border-slate-300 text-[#04243b] focus:ring-[#04243b] h-4 w-4 cursor-pointer"
@@ -3374,14 +3390,16 @@ export function FaturamentoGerador() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
-                    {companiesWithBilling.length === 0 ? (
+                    {filteredCompaniesWithBilling.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="py-12 text-center text-slate-400 italic">
-                          Nenhuma empresa cadastrada. Acesse as configurações no topo para adicionar empresas.
+                          {companiesWithBilling.length === 0
+                            ? 'Nenhuma empresa cadastrada. Acesse as configurações no topo para adicionar empresas.'
+                            : `Nenhuma empresa encontrada digitando "${mainCompanySearchQuery}".`}
                         </td>
                       </tr>
                     ) : (
-                      companiesWithBilling.map(company => {
+                      filteredCompaniesWithBilling.map(company => {
                         const totalConsolidated = company.billingItems.reduce((acc, item) => acc + item.faturamentoTotal, 0);
                         const numCompetencias = company.billingItems.length;
 
