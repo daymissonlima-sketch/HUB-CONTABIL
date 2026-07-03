@@ -611,7 +611,7 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
       }
       
       if (colKey === 'qCom') {
-        return <span className="text-slate-800 font-mono font-semibold">{val.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>;
+        return <span className="text-slate-800 font-mono font-semibold">{val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>;
       }
       
       return <span className="text-slate-700">{val.toString()}</span>;

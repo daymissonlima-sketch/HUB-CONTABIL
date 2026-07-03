@@ -3,7 +3,6 @@ import { motion } from 'motion/react';
 import { 
   Calculator, 
   FileDown, 
-  DollarSign, 
   Calendar, 
   Layers, 
   TrendingUp, 
@@ -18,6 +17,103 @@ import {
 import { jsPDF } from 'jspdf';
 import { ParcelamentoInput, InstallmentRow, Company } from '../types_debits';
 import importedCompaniesJson from '../data/imported_companies.json';
+import { getPdfLogoData, getAppLogoScale } from '../utils/logoHelper';
+
+interface FormattedCurrencyInputProps {
+  value: number;
+  onChange: (val: number) => void;
+  placeholder?: string;
+  className?: string;
+}
+
+const FormattedCurrencyInput: React.FC<FormattedCurrencyInputProps> = ({
+  value,
+  onChange,
+  placeholder = "R$ 0,00",
+  className
+}) => {
+  const [isFocused, setIsFocused] = useState(false);
+  const [localStr, setLocalStr] = useState('');
+
+  useEffect(() => {
+    if (!isFocused) {
+      if (!value || value === 0 || isNaN(value)) {
+        setLocalStr('');
+      } else {
+        setLocalStr(value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
+      }
+    }
+  }, [value, isFocused]);
+
+  const handleFocus = () => {
+    setIsFocused(true);
+    if (!value || value === 0 || isNaN(value)) {
+      setLocalStr('');
+    } else {
+      const hasDecimals = value % 1 !== 0;
+      setLocalStr(value.toLocaleString('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+        minimumFractionDigits: hasDecimals ? 2 : 0,
+        maximumFractionDigits: 2
+      }));
+    }
+  };
+
+  const handleBlur = () => {
+    setIsFocused(false);
+    if (!value || value === 0 || isNaN(value)) {
+      setLocalStr('');
+    } else {
+      setLocalStr(value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    let cleaned = raw.replace(/[^\d,]/g, '');
+    const parts = cleaned.split(',');
+    if (parts.length > 2) {
+      cleaned = parts[0] + ',' + parts.slice(1).join('');
+    }
+
+    if (cleaned !== '') {
+      const intPart = parts[0].replace(/\D/g, '');
+      const formattedInt = intPart ? parseInt(intPart, 10).toLocaleString('pt-BR') : '';
+      if (parts.length > 1) {
+        const decPart = parts[1].replace(/\D/g, '').slice(0, 2);
+        setLocalStr(`R$ ${formattedInt || '0'},${decPart}`);
+      } else {
+        setLocalStr(`R$ ${formattedInt || '0'}`);
+      }
+    } else {
+      setLocalStr('');
+    }
+
+    let numericVal = 0;
+    if (parts.length > 1) {
+      const intVal = parts[0].replace(/\D/g, '') || '0';
+      const decVal = parts[1].replace(/\D/g, '');
+      numericVal = parseFloat(`${intVal}.${decVal}`);
+    } else {
+      numericVal = parseFloat(parts[0].replace(/\D/g, '')) || 0;
+    }
+    onChange(numericVal);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={localStr}
+      onChange={handleChange}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      placeholder={placeholder}
+      className={className}
+    />
+  );
+};
 
 export function ParcelamentoSimulador() {
   // Retrieve custom parcelamento templates/types from the configurations stored in localStorage
@@ -43,9 +139,10 @@ export function ParcelamentoSimulador() {
   }, []);
 
   const [input, setInput] = useState<ParcelamentoInput>({
-    totalDebt: 150000.00,
-    downPayment: 15000.00,
-    installmentsCount: 24,
+    totalDebt: 0,
+    downPayment: 0,
+    installmentsCount: 0,
+    installmentValue: 0,
     interestRate: 0,
     penaltyRate: 0,
     firstDueDate: '',
@@ -135,7 +232,9 @@ export function ParcelamentoSimulador() {
     const totalN = input.installmentsCount;
     const remainingN = totalN > 1 ? totalN - 1 : 0;
     const principalToFinance = Math.max(0, input.totalDebt - input.downPayment);
-    const pmt = remainingN > 0 ? principalToFinance / remainingN : 0;
+    const pmt = input.installmentValue && input.installmentValue > 0
+      ? input.installmentValue
+      : (remainingN > 0 ? principalToFinance / remainingN : 0);
 
     const baseDate = new Date();
     if (input.firstDueDate) {
@@ -185,7 +284,7 @@ export function ParcelamentoSimulador() {
       totalPaid,
       avgInstallment: pmt
     };
-  }, [input.totalDebt, input.downPayment, input.installmentsCount, input.firstDueDate]);
+  }, [input.totalDebt, input.downPayment, input.installmentsCount, input.installmentValue, input.firstDueDate]);
 
   // Consolidated totals for ALL simulations
   const consolidatedTotals = useMemo(() => {
@@ -202,7 +301,9 @@ export function ParcelamentoSimulador() {
       totalFinancedSum += financed;
       totalInstallmentsSum += sim.installmentsCount;
       const remainingN = sim.installmentsCount > 1 ? sim.installmentsCount - 1 : 0;
-      if (remainingN > 0) {
+      if (sim.installmentValue && sim.installmentValue > 0) {
+        totalAvgInstallmentSum += sim.installmentValue;
+      } else if (remainingN > 0) {
         totalAvgInstallmentSum += (financed / remainingN);
       }
     });
@@ -223,6 +324,10 @@ export function ParcelamentoSimulador() {
     }
     if (input.installmentsCount <= 0) {
       alert("Por favor, informe o número de parcelas.");
+      return;
+    }
+    if (!input.installmentValue || input.installmentValue <= 0) {
+      alert("Por favor, informe o valor da parcela mensal.");
       return;
     }
 
@@ -246,7 +351,8 @@ export function ParcelamentoSimulador() {
       ...prev,
       totalDebt: 0,
       downPayment: 0,
-      installmentsCount: 24
+      installmentsCount: 0,
+      installmentValue: 0
     }));
   };
 
@@ -256,10 +362,13 @@ export function ParcelamentoSimulador() {
       e.stopPropagation();
     }
     setEditingId(sim.id);
+    const financed = Math.max(0, sim.totalDebt - sim.downPayment);
+    const fallbackVal = sim.installmentsCount > 1 ? financed / (sim.installmentsCount - 1) : 0;
     setInput({
       totalDebt: sim.totalDebt,
       downPayment: sim.downPayment,
       installmentsCount: sim.installmentsCount,
+      installmentValue: sim.installmentValue !== undefined ? sim.installmentValue : fallbackVal,
       interestRate: sim.interestRate || 0,
       penaltyRate: sim.penaltyRate || 0,
       firstDueDate: sim.firstDueDate || '',
@@ -295,9 +404,10 @@ export function ParcelamentoSimulador() {
 
   const handleReset = () => {
     setInput({
-      totalDebt: 150000.00,
-      downPayment: 15000.00,
-      installmentsCount: 24,
+      totalDebt: 0,
+      downPayment: 0,
+      installmentsCount: 0,
+      installmentValue: 0,
       interestRate: 0,
       penaltyRate: 0,
       firstDueDate: '',
@@ -337,46 +447,82 @@ export function ParcelamentoSimulador() {
  
     // Helper to draw Footer
     const drawFooter = (pageNum: number) => {
-      doc.setDrawColor(accentColor.r, accentColor.g, accentColor.b);
-      doc.setLineWidth(0.5);
-      doc.line(margin, pageHeight - 15, pageWidth - margin, pageHeight - 15);
- 
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.3);
+      doc.line(margin, pageHeight - 14, pageWidth - margin, pageHeight - 14);
+
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
+      doc.setFontSize(7.5);
       doc.setTextColor(100, 116, 139);
-      doc.text('Moreira & Lima Contadores Associados', margin, pageHeight - 10);
-      doc.text(`Página ${pageNum}`, pageWidth - margin - 20, pageHeight - 10);
+      doc.text(`Página ${pageNum} de ${totalPages}`, pageWidth - margin, pageHeight - 9, { align: 'right' });
     };
 
-    // Header Block (First page)
-    doc.setFillColor(primaryColor.r, primaryColor.g, primaryColor.b);
-    doc.rect(0, 0, pageWidth, 42, 'F');
- 
-    // Golden bottom bar in header
-    doc.setFillColor(accentColor.r, accentColor.g, accentColor.b);
-    doc.rect(0, 42, pageWidth, 2.5, 'F');
- 
-    // Logo Text (Simulated)
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(16);
-    doc.text('MOREIRA & LIMA', margin, 18);
-     
-    doc.setTextColor(accentColor.r, accentColor.g, accentColor.b);
-    doc.setFontSize(9);
-    doc.text('CONTADORES ASSOCIADOS', margin, 24);
- 
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.text('SIMULAÇÕES DE PARCELAMENTO', pageWidth - margin, 18, { align: 'right' });
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(200, 210, 220);
-    doc.text(`Emissão: ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR')}`, pageWidth - margin, 24, { align: 'right' });
+    const drawCompactHeader = () => {
+      doc.setFillColor(primaryColor.r, primaryColor.g, primaryColor.b);
+      doc.rect(0, 0, pageWidth, 16, 'F');
+      doc.setFillColor(accentColor.r, accentColor.g, accentColor.b);
+      doc.rect(0, 16, pageWidth, 1.2, 'F');
 
-    // Active Company Box (Y: 52 to Y: 72)
-    let currentY = 52;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(255, 255, 255);
+      doc.text('MOREIRA & LIMA CONTADORES ASSOCIADOS', margin, 10.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(210, 220, 230);
+      doc.text('Simulações de Parcelamento', pageWidth - margin, 10.5, { align: 'right' });
+    };
+
+    // Header Block (First page) with dark blue background
+    doc.setFillColor(primaryColor.r, primaryColor.g, primaryColor.b);
+    doc.rect(0, 0, pageWidth, 30, 'F');
+
+    doc.setFillColor(accentColor.r, accentColor.g, accentColor.b);
+    doc.rect(0, 30, pageWidth, 1.5, 'F');
+
+    const pdfLogo = getPdfLogoData();
+    const logoScale = getAppLogoScale();
+    let hasDrawnLogo = false;
+    if (pdfLogo && pdfLogo.dataUrl) {
+      try {
+        const imgProps = doc.getImageProperties(pdfLogo.dataUrl);
+        const aspect = (imgProps.width && imgProps.height) ? (imgProps.width / imgProps.height) : 1.54;
+        let targetH = Math.min(17, 14 * logoScale);
+        let targetW = targetH * aspect;
+        if (targetW > 52) {
+          targetW = 52;
+          targetH = targetW / aspect;
+        }
+        const offsetY = Math.max(4, (30 - targetH) / 2);
+        doc.addImage(pdfLogo.dataUrl, pdfLogo.format || 'PNG', margin, offsetY, targetW, targetH);
+        hasDrawnLogo = true;
+      } catch (e) {
+        doc.addImage(pdfLogo.dataUrl, pdfLogo.format || 'PNG', margin, 7, 30, 16);
+        hasDrawnLogo = true;
+      }
+    }
+
+    if (!hasDrawnLogo) {
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      doc.text('MOREIRA & LIMA CONTADORES', margin, 17);
+    }
+  
+    // Document Title & Metadata centered in the middle of the sheet
+    const titleCenterX = pageWidth / 2;
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13.5);
+    doc.text('SIMULAÇÕES DE PARCELAMENTO', titleCenterX, 13.5, { align: 'center' });
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(210, 220, 230);
+    doc.text(`Emissão: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`, titleCenterX, 19.5, { align: 'center' });
+
+    // Active Company Box (Y: 36 to Y: 52)
+    let currentY = 36;
     doc.setFillColor(grayBg.r, grayBg.g, grayBg.b);
     doc.rect(margin, currentY, pageWidth - (margin * 2), 16, 'F');
     doc.setDrawColor(borderGray.r, borderGray.g, borderGray.b);
@@ -399,7 +545,7 @@ export function ParcelamentoSimulador() {
     doc.text(companyLabel, margin + 6, currentY + 11);
 
     // Simulations list
-    currentY = 75;
+    currentY = 58;
 
     const listToPrint = simulations.length > 0 ? simulations : [
       {
@@ -417,22 +563,8 @@ export function ParcelamentoSimulador() {
         doc.addPage();
         totalPages++;
         
-        // Render compact header on subsequent pages
-        doc.setFillColor(primaryColor.r, primaryColor.g, primaryColor.b);
-        doc.rect(0, 0, pageWidth, 20, 'F');
-        doc.setFillColor(accentColor.r, accentColor.g, accentColor.b);
-        doc.rect(0, 20, pageWidth, 1.5, 'F');
-        
-        doc.setTextColor(255, 255, 255);
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(10);
-        doc.text('MOREIRA & LIMA CONTADORES ASSOCIADOS', margin, 12);
-
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(8);
-        doc.text('Simulações de Parcelamento', pageWidth - margin, 12, { align: 'right' });
-
-        currentY = 28;
+        drawCompactHeader();
+        currentY = 22;
       }
 
       // Draw simulation box
@@ -451,40 +583,30 @@ export function ParcelamentoSimulador() {
       doc.setTextColor(primaryColor.r, primaryColor.g, primaryColor.b);
       doc.text(`SIMULAÇÃO #${idx + 1}: ${sim.parcelamentoType.toUpperCase()}`, margin + 5, currentY + 6);
 
-      // Row 1 (Y: currentY + 15)
+      // Line 1: Valor Atualizado
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
+      doc.setFontSize(8.5);
       doc.setTextColor(80, 90, 105);
-      doc.text(`Valor Total Atualizado:`, margin + 5, currentY + 15);
-      
+      doc.text('Valor Atualizado:', margin + 6, currentY + 14);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(20, 30, 45);
-      doc.text(`R$ ${sim.totalDebt.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, margin + 45, currentY + 15);
+      doc.text(`R$ ${sim.totalDebt.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 14);
 
-      const rightColX = pageWidth / 2 + 10;
+      // Line 2: Entrada
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(80, 90, 105);
-      doc.text(`Número de Parcelas:`, rightColX, currentY + 15);
-
-      doc.setFont('helvetica', 'bold');
-      doc.text(`${sim.installmentsCount} parcelas`, rightColX + 45, currentY + 15);
-
-      // Row 2 (Y: currentY + 24)
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(80, 90, 105);
-      doc.text(`Valor da Entrada:`, margin + 5, currentY + 24);
-
+      doc.text('Entrada:', margin + 6, currentY + 20.5);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(20, 30, 45);
-      doc.text(`R$ ${sim.downPayment.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, margin + 45, currentY + 24);
+      doc.text(`R$ ${sim.downPayment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 20.5);
 
+      // Line 3: N Parcelas
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(80, 90, 105);
-      doc.text(`Valor Estimado da Parcela:`, rightColX, currentY + 24);
-
+      doc.text(`${sim.installmentsCount} Parcelas:`, margin + 6, currentY + 27);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(primaryColor.r, primaryColor.g, primaryColor.b);
-      doc.text(`R$ ${results.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, rightColX + 45, currentY + 24);
+      doc.text(`R$ ${results.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 27);
 
       currentY += 37;
     });
@@ -495,17 +617,8 @@ export function ParcelamentoSimulador() {
       doc.addPage();
       totalPages++;
       
-      // compact header on subsequent pages
-      doc.setFillColor(primaryColor.r, primaryColor.g, primaryColor.b);
-      doc.rect(0, 0, pageWidth, 20, 'F');
-      doc.setFillColor(accentColor.r, accentColor.g, accentColor.b);
-      doc.rect(0, 20, pageWidth, 1.5, 'F');
-      
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.text('MOREIRA & LIMA CONTADORES ASSOCIADOS', margin, 12);
-      currentY = 28;
+      drawCompactHeader();
+      currentY = 22;
     }
 
     // Consolidated box (if more than 1 simulation)
@@ -523,55 +636,18 @@ export function ParcelamentoSimulador() {
       doc.setTextColor(230, 240, 255);
       doc.text(`Total de Débito Consolidado:`, margin + 6, currentY + 14);
       doc.text(`Total de Entrada Consolidada:`, pageWidth / 3 + 10, currentY + 14);
-      doc.text(`Total de Parcelas Somadas:`, (pageWidth / 3) * 2 + 10, currentY + 14);
+      doc.text(`Valor das Parcelas Somadas:`, (pageWidth / 3) * 2 + 10, currentY + 14);
 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8);
       doc.setTextColor(255, 255, 255);
-      doc.text(`R$ ${consolidatedTotals.totalDebtSum.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, margin + 6, currentY + 20);
-      doc.text(`R$ ${consolidatedTotals.downPaymentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, pageWidth / 3 + 10, currentY + 20);
+      doc.text(`R$ ${consolidatedTotals.totalDebtSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 6, currentY + 20);
+      doc.text(`R$ ${consolidatedTotals.downPaymentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, pageWidth / 3 + 10, currentY + 20);
       doc.setTextColor(accentColor.r, accentColor.g, accentColor.b);
-      doc.text(`${consolidatedTotals.totalInstallmentsSum} parcelas`, (pageWidth / 3) * 2 + 10, currentY + 20);
+      doc.text(`R$ ${consolidatedTotals.totalAvgInstallmentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, (pageWidth / 3) * 2 + 10, currentY + 20);
 
       currentY += 28;
     }
-
-    // Check overflow for Signature block (needs about 25 units height)
-    if (currentY + 25 > pageHeight - 35) {
-      drawFooter(totalPages);
-      doc.addPage();
-      totalPages++;
-      
-      // compact header on subsequent pages
-      doc.setFillColor(primaryColor.r, primaryColor.g, primaryColor.b);
-      doc.rect(0, 0, pageWidth, 20, 'F');
-      doc.setFillColor(accentColor.r, accentColor.g, accentColor.b);
-      doc.rect(0, 20, pageWidth, 1.5, 'F');
-      
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.text('MOREIRA & LIMA CONTADORES ASSOCIADOS', margin, 12);
-      currentY = 28;
-    }
-
-    // Signature Area
-    currentY += 8;
-    doc.setDrawColor(180, 190, 200);
-    doc.setLineWidth(0.5);
-    doc.line(margin + 15, currentY + 12, margin + 85, currentY + 12);
-    doc.line(pageWidth - margin - 85, currentY + 12, pageWidth - margin - 15, currentY + 12);
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(primaryColor.r, primaryColor.g, primaryColor.b);
-    doc.text('Moreira & Lima Contadores Associados', margin + 17, currentY + 16);
-    doc.text('Responsável Técnico / Autor', margin + 26, currentY + 20);
-
-    const clientSignLabel = selectedCompany ? selectedCompany.razaoSocial : 'Assinatura do Contribuinte';
-    const truncatedClientSignLabel = clientSignLabel.length > 35 ? clientSignLabel.substring(0, 35) + '...' : clientSignLabel;
-    doc.text(truncatedClientSignLabel, pageWidth - margin - 80, currentY + 16);
-    doc.text('Representante Legal', pageWidth - margin - 67, currentY + 20);
 
     // Draw final page footer
     drawFooter(totalPages);
@@ -686,73 +762,62 @@ export function ParcelamentoSimulador() {
             
             {/* Debt Total */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-                <span>Valor Total Atualizado (R$)</span>
-                <DollarSign className="h-3 w-3 text-slate-400" />
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                Valor Total Atualizado (R$)
               </label>
-              <input
-                type="number"
-                value={input.totalDebt || ''}
-                onChange={(e) => setInput(prev => ({ ...prev, totalDebt: Math.max(0, parseFloat(e.target.value) || 0) }))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
-                step="any"
+              <FormattedCurrencyInput
+                value={input.totalDebt}
+                onChange={(val) => setInput(prev => ({ ...prev, totalDebt: Math.max(0, val) }))}
+                placeholder="Ex: R$ 15.000,00"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-[#04243b] focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
               />
             </div>
 
             {/* Down Payment */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-                <span>Entrada / Sinal (R$)</span>
-                <DollarSign className="h-3 w-3 text-slate-400" />
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                Entrada / Sinal (R$)
               </label>
-              <input
-                type="number"
-                value={input.downPayment || ''}
-                onChange={(e) => setInput(prev => ({ ...prev, downPayment: Math.max(0, parseFloat(e.target.value) || 0) }))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
-                step="any"
+              <FormattedCurrencyInput
+                value={input.downPayment}
+                onChange={(val) => setInput(prev => ({ ...prev, downPayment: Math.max(0, val) }))}
+                placeholder="Ex: R$ 1.500,00"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-emerald-700 focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
               />
               <span className="text-[9px] text-slate-500 block">
-                Saldo a parcelar: <strong className="text-slate-700 font-mono">R$ {Math.max(0, input.totalDebt - input.downPayment).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
+                Saldo a parcelar: <strong className="text-slate-700 font-mono">R$ {Math.max(0, input.totalDebt - input.downPayment).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
               </span>
             </div>
 
             {/* Installments Count */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-                <span>Número de Parcelas</span>
-                <span className="text-[9px] font-mono text-[#e4b35e] font-bold">Máx 120</span>
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                Número de Parcelas
               </label>
               <input
-                type="number"
-                value={input.installmentsCount || ''}
-                onChange={(e) => setInput(prev => ({ ...prev, installmentsCount: Math.min(120, Math.max(1, parseInt(e.target.value) || 0)) }))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
-                min="1"
-                max="120"
+                type="text"
+                inputMode="numeric"
+                value={input.installmentsCount ? input.installmentsCount : ''}
+                onChange={(e) => {
+                  const raw = e.target.value.replace(/\D/g, '');
+                  const val = raw ? parseInt(raw, 10) : 0;
+                  setInput(prev => ({ ...prev, installmentsCount: Math.min(120, val) }));
+                }}
+                placeholder="Ex: 24"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-[#04243b] focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
               />
             </div>
 
             {/* Monthly Installment value (valor da parcela mensal) */}
             <div className="space-y-1.5 pt-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-                <span>Valor da Parcela Mensal (R$)</span>
-                <span className="text-[9px] text-slate-400 font-normal">Altere para recalcular parcelas</span>
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                Valor da Parcela Mensal (R$)
               </label>
-              <input
-                type="number"
-                value={simulationResults.avgInstallment ? parseFloat(simulationResults.avgInstallment.toFixed(2)) : ''}
-                onChange={(e) => {
-                  const val = Math.max(0.01, parseFloat(e.target.value) || 0);
-                  const principalToFinance = Math.max(0, input.totalDebt - input.downPayment);
-                  if (val > 0 && principalToFinance > 0) {
-                    const remainingN = Math.ceil(principalToFinance / val);
-                    const newInstallmentsCount = Math.min(120, Math.max(2, remainingN + 1));
-                    setInput(prev => ({ ...prev, installmentsCount: newInstallmentsCount }));
-                  }
-                }}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
-                step="any"
+              <FormattedCurrencyInput
+                value={input.installmentValue || 0}
+                onChange={(val) => setInput(prev => ({ ...prev, installmentValue: Math.max(0, val) }))}
+                placeholder="R$ 0,00"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-[#04243b] focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
               />
             </div>
 
@@ -838,25 +903,25 @@ export function ParcelamentoSimulador() {
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Débito Atualizado</span>
                       <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                        R$ {input.totalDebt.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        R$ {input.totalDebt.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Entrada</span>
                       <span className="text-sm font-extrabold text-emerald-600 font-mono mt-1 block">
-                        R$ {input.downPayment.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        R$ {input.downPayment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-[#e4b35e]/20 shadow-xs bg-[#e4b35e]/3">
                       <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block">A Parcelar</span>
                       <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                        R$ {Math.max(0, input.totalDebt - input.downPayment).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        R$ {Math.max(0, input.totalDebt - input.downPayment).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Parcela Estimada</span>
                       <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                        R$ {simulationResults.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        R$ {simulationResults.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                   </div>
@@ -870,8 +935,8 @@ export function ParcelamentoSimulador() {
                       Esta é a projeção atual da simulação sob a modalidade <strong className="text-white font-sans">{input.parcelamentoType}</strong>:
                     </p>
                     <ul className="text-xs text-slate-300 mt-3 space-y-1.5 list-disc pl-4">
-                      <li>Saldo a amortizar: <strong className="text-white">R$ {Math.max(0, input.totalDebt - input.downPayment).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong></li>
-                      <li>Quitado em <strong className="text-white">{input.installmentsCount} parcelas fixas</strong> de <strong className="text-[#e4b35e]">R$ {simulationResults.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong></li>
+                      <li>Saldo a amortizar: <strong className="text-white">R$ {Math.max(0, input.totalDebt - input.downPayment).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></li>
+                      <li>Quitado em <strong className="text-white">{input.installmentsCount} parcelas fixas</strong> de <strong className="text-[#e4b35e]">R$ {simulationResults.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></li>
                     </ul>
                   </div>
                 </div>
@@ -884,7 +949,7 @@ export function ParcelamentoSimulador() {
                 <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                   <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Débito Total Somado</span>
                   <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                    R$ {consolidatedTotals.totalDebtSum.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    R$ {consolidatedTotals.totalDebtSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                   <span className="text-[8px] text-slate-500 block mt-0.5">Soma de todas as dívidas</span>
                 </div>
@@ -892,7 +957,7 @@ export function ParcelamentoSimulador() {
                 <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                   <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Entrada Total Somada</span>
                   <span className="text-sm font-extrabold text-emerald-600 font-mono mt-1 block">
-                    R$ {consolidatedTotals.downPaymentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    R$ {consolidatedTotals.downPaymentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                   <span className="text-[8px] text-slate-500 block mt-0.5">Total de sinal deduzido</span>
                 </div>
@@ -900,7 +965,7 @@ export function ParcelamentoSimulador() {
                 <div className="bg-white p-3.5 rounded-2xl border border-[#e4b35e]/20 shadow-xs bg-[#e4b35e]/3">
                   <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block">Total Líquido Financiado</span>
                   <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                    R$ {consolidatedTotals.totalFinancedSum.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    R$ {consolidatedTotals.totalFinancedSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                   <span className="text-[8px] text-slate-500 block mt-0.5">Saldo restante somado</span>
                 </div>
@@ -908,7 +973,7 @@ export function ParcelamentoSimulador() {
                 <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                   <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Parcela Mensal Somada</span>
                   <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                    R$ {consolidatedTotals.totalAvgInstallmentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    R$ {consolidatedTotals.totalAvgInstallmentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                   <span className="text-[8px] text-slate-500 block mt-0.5">Custo mensal consolidado</span>
                 </div>
@@ -935,22 +1000,18 @@ export function ParcelamentoSimulador() {
                             {sim.parcelamentoType}
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-slate-500">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs pt-1">
                           <div>
-                            <span className="block text-[9px] text-slate-400 uppercase">Débito:</span>
-                            <span className="font-mono font-bold text-slate-700">R$ {sim.totalDebt.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            <span className="text-slate-500 font-normal">Valor Atualizado: </span>
+                            <span className="font-mono font-bold text-[#04243b]">R$ {sim.totalDebt.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
                           <div>
-                            <span className="block text-[9px] text-slate-400 uppercase">Entrada:</span>
-                            <span className="font-mono font-bold text-emerald-600">R$ {sim.downPayment.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            <span className="text-slate-500 font-normal">Entrada: </span>
+                            <span className="font-mono font-bold text-emerald-600">R$ {sim.downPayment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
                           <div>
-                            <span className="block text-[9px] text-slate-400 uppercase">A Parcelar:</span>
-                            <span className="font-mono font-bold text-slate-700">R$ {financed.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                          </div>
-                          <div>
-                            <span className="block text-[9px] text-slate-400 uppercase">Parcelas:</span>
-                            <span className="font-mono font-bold text-[#04243b]">{sim.installmentsCount}x de R$ {itemResults.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            <span className="text-slate-500 font-normal">{sim.installmentsCount} Parcelas: </span>
+                            <span className="font-mono font-bold text-[#04243b]">R$ {itemResults.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
                         </div>
                       </div>

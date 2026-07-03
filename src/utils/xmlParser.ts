@@ -4,6 +4,7 @@
  */
 
 import { NFeItemRow } from '../types';
+import { sanitizeXmlPayload } from './sanitizer';
 
 // Helper to safely get node text content by tag name
 function getTagValue(parent: Element, tagName: string): string {
@@ -57,8 +58,9 @@ function getCstOrCsosn(impostoEl: Element, parentTag: string): string {
 }
 
 export async function parseNfeXml(xmlText: string, simulateIbsCbs: boolean = true, ibsRate: number = 17.7, cbsRate: number = 8.8): Promise<NFeItemRow[]> {
+  const cleanXml = sanitizeXmlPayload(xmlText);
   const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+  const xmlDoc = parser.parseFromString(cleanXml, 'text/xml');
   
   // Check for parser errors
   const parserError = xmlDoc.getElementsByTagName('parsererror')[0];

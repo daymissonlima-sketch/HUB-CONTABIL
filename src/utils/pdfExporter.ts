@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { DebtItem, ClientInfo } from '../types_debits';
+import { getPdfLogoData, getAppLogoScale } from './logoHelper';
 
 // Helper to format currency in Real (BRL)
 function formatCurrency(value: number): string {
@@ -38,71 +39,97 @@ export async function exportDebtsToPDF(
 
   // Helper for page headers and footers
   const addPageDecorations = (pageNum: number, totalPages: number) => {
-    // Header band in dark blue
-    doc.setFillColor(colorPrimary.r, colorPrimary.g, colorPrimary.b);
-    doc.rect(0, 0, pageWidth, 4, 'F');
+    // Clean executive continuation header on subsequent pages
+    if (pageNum > 1) {
+      doc.setFillColor(colorPrimary.r, colorPrimary.g, colorPrimary.b);
+      doc.rect(0, 0, pageWidth, 16, 'F');
+      doc.setFillColor(colorAccent.r, colorAccent.g, colorAccent.b);
+      doc.rect(0, 16, pageWidth, 1.2, 'F');
 
-    // Footer
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(colorTextMuted.r, colorTextMuted.g, colorTextMuted.b);
-    
-    // Left footer text
-    doc.text('Moreira & Lima Contadores Associados', margin, pageHeight - 10);
-    
-    // Right footer text (Page X of Y)
-    const pageText = `Página ${pageNum} de ${totalPages}`;
-    doc.text(pageText, pageWidth - margin - doc.getTextWidth(pageText), pageHeight - 10);
-    
-    // Horizontal thin separator above footer
-    doc.setDrawColor(226, 232, 240);
-    doc.setLineWidth(0.2);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(255, 255, 255);
+      doc.text('MOREIRA & LIMA CONTADORES ASSOCIADOS', margin, 10.5);
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(210, 220, 230);
+      doc.text('Levantamento de Débitos', pageWidth - margin, 10.5, { align: 'right' });
+    }
+
+    // Executive Footer
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.3);
     doc.line(margin, pageHeight - 14, pageWidth - margin, pageHeight - 14);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(colorTextMuted.r, colorTextMuted.g, colorTextMuted.b);
+    doc.text('Moreira & Lima Contadores Associados • Conciliação Fiscal e Tributária', margin, pageHeight - 9);
+    
+    doc.text(`Página ${pageNum} de ${totalPages}`, pageWidth - margin, pageHeight - 9, { align: 'right' });
   };
 
   // Helper to ensure page overflow is handled correctly
   const checkPageOverflow = (neededHeight: number) => {
     if (currentY + neededHeight > pageHeight - 20) {
       doc.addPage();
-      currentY = 20;
+      currentY = 22;
       return true;
     }
     return false;
   };
 
-  // --- HEADER SECTION WITHOUT LOGO ---
-  // Background rectangle for high-end corporate header
+  // --- EXECUTIVE HEADER SECTION (FIRST PAGE) ---
   doc.setFillColor(colorPrimary.r, colorPrimary.g, colorPrimary.b);
-  doc.rect(margin, currentY, contentWidth, 32, 'F');
+  doc.rect(0, 0, pageWidth, 30, 'F');
 
-  // Draw gold details line on the header card
   doc.setFillColor(colorAccent.r, colorAccent.g, colorAccent.b);
-  doc.rect(margin, currentY + 31, contentWidth, 1, 'F');
+  doc.rect(0, 30, pageWidth, 1.5, 'F');
 
-  // Title Texts on Header (aligned elegantly to the left margin + 12)
+  const pdfLogo = getPdfLogoData();
+  const logoScale = getAppLogoScale();
+  let hasDrawnLogo = false;
+  if (pdfLogo && pdfLogo.dataUrl) {
+    try {
+      const imgProps = doc.getImageProperties(pdfLogo.dataUrl);
+      const aspect = (imgProps.width && imgProps.height) ? (imgProps.width / imgProps.height) : 1.54;
+      let targetH = Math.min(17, 14 * logoScale);
+      let targetW = targetH * aspect;
+      if (targetW > 52) {
+        targetW = 52;
+        targetH = targetW / aspect;
+      }
+      const offsetY = Math.max(4, (30 - targetH) / 2);
+      doc.addImage(pdfLogo.dataUrl, pdfLogo.format || 'PNG', margin, offsetY, targetW, targetH);
+      hasDrawnLogo = true;
+    } catch (e) {
+      doc.addImage(pdfLogo.dataUrl, pdfLogo.format || 'PNG', margin, 7, 30, 16);
+      hasDrawnLogo = true;
+    }
+  }
+
+  if (!hasDrawnLogo) {
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.text('MOREIRA & LIMA CONTADORES', margin, 17);
+  }
+
+  // Document Title & Metadata centered in the middle of the sheet
+  const titleCenterX = pageWidth / 2;
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(15);
-  doc.text('Moreira & Lima', margin + 12, currentY + 14);
-  
+  doc.setFontSize(13.5);
+  doc.text('LEVANTAMENTO DE DÉBITOS', titleCenterX, 13.5, { align: 'center' });
+
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
-  doc.setTextColor(colorAccent.r, colorAccent.g, colorAccent.b);
-  doc.text('CONTADORES ASSOCIADOS', margin + 12, currentY + 19);
+  doc.setTextColor(210, 220, 230);
+  const dateStr = `Emissão: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}`;
+  doc.text(dateStr, titleCenterX, 19.5, { align: 'center' });
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(12);
-  doc.setTextColor(255, 255, 255);
-  const titleText = 'LEVANTAMENTO DE DÉBITOS';
-  doc.text(titleText, pageWidth - margin - 12, currentY + 14, { align: 'right' });
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
-  doc.setTextColor(180, 195, 210);
-  const dateStr = `Emitido em: ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}`;
-  doc.text(dateStr, pageWidth - margin - 12, currentY + 19, { align: 'right' });
-
-  currentY += 38;
+  currentY = 36;
 
   // --- CLIENT DETAILS SECTION ---
   doc.setFillColor(248, 250, 252); // soft grey background
@@ -306,24 +333,36 @@ export async function exportDebtsToPDF(
 
   currentY += 28;
 
-  // Signature lines
-  checkPageOverflow(30);
-  doc.setDrawColor(148, 163, 184);
-  doc.setLineWidth(0.5);
-  doc.line(margin + 15, currentY, margin + 75, currentY);
-  doc.line(pageWidth - margin - 75, currentY, pageWidth - margin - 15, currentY);
+  // Executive Signature lines
+  checkPageOverflow(28);
+  currentY += 4;
+  doc.setDrawColor(148, 163, 184); // Slate 400
+  doc.setLineWidth(0.4);
+  doc.line(margin + 5, currentY, margin + 75, currentY);
+  doc.line(pageWidth - margin - 75, currentY, pageWidth - margin - 5, currentY);
 
-  doc.setTextColor(colorTextDark.r, colorTextDark.g, colorTextDark.b);
+  const leftSigCenter = margin + 40;
+  const rightSigCenter = pageWidth - margin - 40;
+
+  doc.setTextColor(colorPrimary.r, colorPrimary.g, colorPrimary.b);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.text('Moreira & Lima Contadores Associados', margin + 15, currentY + 5);
-  doc.text('Assinatura do Contribuinte / Responsável', pageWidth - margin - 75, currentY + 5, { align: 'left' });
-
+  doc.setFontSize(8);
+  doc.text('MOREIRA & LIMA CONTADORES', leftSigCenter, currentY + 4, { align: 'center' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(colorTextMuted.r, colorTextMuted.g, colorTextMuted.b);
-  doc.text('Departamento de Conciliação Fiscal', margin + 26, currentY + 9);
-  doc.text('Declaro ciência e concordância dos débitos listados', pageWidth - margin - 72, currentY + 9);
+  doc.text('Departamento de Conciliação e Tributos', leftSigCenter, currentY + 8, { align: 'center' });
+
+  const clientNameClean = (clientInfo.name || 'Assinatura do Contribuinte').toUpperCase();
+  const truncatedClientName = clientNameClean.length > 34 ? clientNameClean.substring(0, 34) + '...' : clientNameClean;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(colorPrimary.r, colorPrimary.g, colorPrimary.b);
+  doc.text(truncatedClientName, rightSigCenter, currentY + 4, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(colorTextMuted.r, colorTextMuted.g, colorTextMuted.b);
+  doc.text('Representante Legal / Responsável', rightSigCenter, currentY + 8, { align: 'center' });
 
 
   // --- APPLY PAGE DECORATIONS (HEADER/FOOTER) TO ALL PAGES ---

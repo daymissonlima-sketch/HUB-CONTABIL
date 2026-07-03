@@ -77,6 +77,7 @@ export interface ParcelamentoInput {
   totalDebt: number;
   downPayment: number;
   installmentsCount: number;
+  installmentValue?: number;
   interestRate: number; // monthly %
   penaltyRate: number; // penalty %
   firstDueDate: string; // YYYY-MM-DD

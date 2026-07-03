@@ -152,7 +152,11 @@ function parseCnpjResponseData(data: any) {
   };
 }
 
-export function FaturamentoGerador() {
+interface FaturamentoGeradorProps {
+  onNavigateToConfig?: () => void;
+}
+
+export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorProps = {}) {
   // States
   const [companies, setCompanies] = useState<Company[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
@@ -2538,7 +2542,6 @@ export function FaturamentoGerador() {
     doc.setFillColor(secondaryAmber[0], secondaryAmber[1], secondaryAmber[2]);
     doc.rect(margin, 13, printableWidth, 1, 'F');
 
-    // 2. Premium Document Header
     y = 20;
 
     // Company Name Box with modern styling
@@ -2888,59 +2891,7 @@ export function FaturamentoGerador() {
       )}
       
       {/* Sleek, High-Contrast Header Section */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-        <div className="relative flex-1 max-w-lg">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-          <input
-            type="text"
-            value={mainCompanySearchQuery}
-            onChange={(e) => setMainCompanySearchQuery(e.target.value)}
-            placeholder="Pesquisar por razão social (digite as primeiras letras)..."
-            className="w-full pl-10 pr-8 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#04243b] focus:ring-1 focus:ring-[#04243b] text-slate-800 transition-all font-medium shadow-2xs"
-          />
-          {mainCompanySearchQuery && (
-            <button
-              type="button"
-              onClick={() => setMainCompanySearchQuery('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-sm cursor-pointer"
-              title="Limpar pesquisa"
-            >
-              ×
-            </button>
-          )}
-
-          {/* Quick switcher dropdown when in Individual view */}
-          {mainCompanySearchQuery.trim().length > 0 && activeMainTab === 'individual' && (
-            <div className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-64 overflow-y-auto divide-y divide-slate-100">
-              {filteredCompaniesWithBilling.length === 0 ? (
-                <div className="p-4 text-center text-xs text-slate-400 italic">
-                  Nenhuma empresa encontrada digitando as letras informadas.
-                </div>
-              ) : (
-                filteredCompaniesWithBilling.map(company => (
-                  <button
-                    key={company.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedCompanyId(company.id);
-                      setMainCompanySearchQuery('');
-                    }}
-                    className="w-full text-left px-4 py-2.5 hover:bg-[#e4b35e]/10 transition-colors flex items-center justify-between gap-2 cursor-pointer"
-                  >
-                    <div>
-                      <div className="text-xs font-bold text-slate-800">{company.razaoSocial}</div>
-                      <div className="text-[10px] text-slate-500 font-mono">CNPJ: {company.cnpj}</div>
-                    </div>
-                    <span className="text-[10px] font-bold uppercase text-[#04243b] bg-slate-100 px-2 py-1 rounded">
-                      Visualizar
-                    </span>
-                  </button>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-        
+      <div className="flex justify-end pb-4 border-b border-slate-200">
         <div className="flex flex-col sm:flex-row items-center gap-2.5">
           {/* Accountant Toggle Buttons */}
           <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/80 shadow-xs">
@@ -2997,16 +2948,70 @@ export function FaturamentoGerador() {
             transition={{ duration: 0.15 }}
             className="space-y-6"
           >
-            {/* Sleek Back Button */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
+            {/* Sleek Back Button & Quick Switcher */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
               <button
                 type="button"
                 onClick={() => setActiveMainTab('lote')}
-                className="flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-extrabold uppercase tracking-wider text-[#04243b] hover:text-[#e4b35e] bg-slate-100 hover:bg-slate-200/80 rounded-xl transition-all cursor-pointer w-full sm:w-auto"
+                className="flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-extrabold uppercase tracking-wider text-[#04243b] hover:text-[#e4b35e] bg-slate-100 hover:bg-slate-200/80 rounded-xl transition-all cursor-pointer w-full sm:w-auto shrink-0"
               >
                 <ArrowLeft className="h-4 w-4" />
                 Voltar para Lote
               </button>
+
+              {/* Search Bar for Quick Switcher */}
+              <div className="relative flex-1 max-w-md mx-auto w-full">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={mainCompanySearchQuery}
+                  onChange={(e) => setMainCompanySearchQuery(e.target.value)}
+                  placeholder="Pesquisar por razão social para alternar empresa..."
+                  className="w-full pl-10 pr-8 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#04243b] focus:ring-1 focus:ring-[#04243b] text-slate-800 transition-all font-medium shadow-2xs"
+                />
+                {mainCompanySearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setMainCompanySearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-sm cursor-pointer"
+                    title="Limpar pesquisa"
+                  >
+                    ×
+                  </button>
+                )}
+
+                {/* Quick switcher dropdown when in Individual view */}
+                {mainCompanySearchQuery.trim().length > 0 && (
+                  <div className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-64 overflow-y-auto divide-y divide-slate-100">
+                    {filteredCompaniesWithBilling.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-slate-400 italic">
+                        Nenhuma empresa encontrada digitando as letras informadas.
+                      </div>
+                    ) : (
+                      filteredCompaniesWithBilling.map(company => (
+                        <button
+                          key={company.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedCompanyId(company.id);
+                            setMainCompanySearchQuery('');
+                          }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-[#e4b35e]/10 transition-colors flex items-center justify-between gap-2 cursor-pointer"
+                        >
+                          <div>
+                            <div className="text-xs font-bold text-slate-800">{company.razaoSocial}</div>
+                            <div className="text-[10px] text-slate-500 font-mono">CNPJ: {company.cnpj}</div>
+                          </div>
+                          <span className="text-[10px] font-bold uppercase text-[#04243b] bg-slate-100 px-2 py-1 rounded">
+                            Visualizar
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+
               {selectedCompany && (
                 <div className="text-right">
                   <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">Visualizando Empresa</span>
@@ -3255,13 +3260,13 @@ export function FaturamentoGerador() {
                                 {row.competencia}
                               </td>
                               <td className="py-2 px-3 text-right font-semibold text-[#04243b]">
-                                R$ {row.faturamentoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                R$ {row.faturamentoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                               <td className="py-2 px-3 text-right text-emerald-600">
-                                R$ {(row.faturamentoTotal * (selectedCompany.vendaVistaPercent / 100)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                R$ {(row.faturamentoTotal * (selectedCompany.vendaVistaPercent / 100)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                               <td className="py-2 px-3 text-right text-blue-600">
-                                R$ {(row.faturamentoTotal * (selectedCompany.vendaPrazoPercent / 100)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                R$ {(row.faturamentoTotal * (selectedCompany.vendaPrazoPercent / 100)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                               <td className="py-2 px-3 text-center">
                                 <div className="flex justify-center items-center gap-1.5">
@@ -3313,8 +3318,30 @@ export function FaturamentoGerador() {
             className="space-y-6"
           >
             {/* Lote Header Actions */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-3 pb-4 border-b border-slate-200">
-              <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+              {/* Search Bar */}
+              <div className="relative flex-1 max-w-lg w-full">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={mainCompanySearchQuery}
+                  onChange={(e) => setMainCompanySearchQuery(e.target.value)}
+                  placeholder="Pesquisar por razão social (digite as primeiras letras)..."
+                  className="w-full pl-10 pr-8 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#04243b] focus:ring-1 focus:ring-[#04243b] text-slate-800 transition-all font-medium shadow-2xs"
+                />
+                {mainCompanySearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setMainCompanySearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-sm cursor-pointer"
+                    title="Limpar pesquisa"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
@@ -3514,6 +3541,29 @@ export function FaturamentoGerador() {
         )}
 
       </AnimatePresence>
+
+      {/* Botão Embaixo de Geração de Faturamento para Configurações Gerais e Padronização */}
+      <div className="mt-8 bg-gradient-to-r from-[#04243b] to-[#063150] rounded-2xl p-6 border border-[#e4b35e]/30 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h3 className="text-base font-bold text-white flex items-center gap-2">
+            <Settings className="h-5 w-5 text-[#e4b35e]" />
+            Identidade Visual e Configurações Gerais
+          </h3>
+          <p className="text-xs text-slate-300 mt-1 max-w-xl">
+            Acesse as configurações gerais para incluir ou alterar o logotipo externo do sistema (até 5 MB) e padronizar os dados corporativos nos relatórios exportados.
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            if (onNavigateToConfig) onNavigateToConfig();
+            else setShowSettingsModal(true);
+          }}
+          className="px-5 py-2.5 rounded-xl bg-[#e4b35e] text-[#04243b] hover:bg-[#d4a34e] text-xs font-bold transition-all shrink-0 flex items-center gap-2 shadow-sm cursor-pointer uppercase"
+        >
+          <Settings className="h-4 w-4" />
+          Abrir Configurações Gerais
+        </button>
+      </div>
 
       {/* CONFIGURATION SETTINGS MODAL */}
       <AnimatePresence>
@@ -3814,6 +3864,44 @@ export function FaturamentoGerador() {
                                   <option value="LUCRO_ARBITRADO">Lucro Arbitrado</option>
                                   <option value="ISENTO_IMUNE">Isento / Imune</option>
                                 </select>
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-bold text-slate-500 uppercase flex items-center justify-between">
+                                  <span>Vendas à Vista (%)</span>
+                                </label>
+                                <div className="relative">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    step="any"
+                                    value={newCompany.vendaVistaPercent}
+                                    onChange={(e) => handleVistaChange(Number(e.target.value))}
+                                    className="w-full bg-slate-50/50 border border-slate-200 rounded-lg pl-3 pr-8 py-2 text-xs font-mono font-bold text-emerald-700 focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
+                                    required
+                                  />
+                                  <span className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400 font-mono text-xs">%</span>
+                                </div>
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-bold text-slate-500 uppercase flex items-center justify-between">
+                                  <span>Vendas a Prazo (%)</span>
+                                </label>
+                                <div className="relative">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    step="any"
+                                    value={newCompany.vendaPrazoPercent}
+                                    onChange={(e) => handlePrazoChange(Number(e.target.value))}
+                                    className="w-full bg-slate-50/50 border border-slate-200 rounded-lg pl-3 pr-8 py-2 text-xs font-mono font-bold text-blue-700 focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
+                                    required
+                                  />
+                                  <span className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400 font-mono text-xs">%</span>
+                                </div>
                               </div>
                             </div>
                           </div>

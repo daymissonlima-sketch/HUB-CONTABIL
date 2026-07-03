@@ -10,11 +10,12 @@ import { NfeXmlAuditor } from './components/NfeXmlAuditor';
 import { DebtLevantamento } from './components/DebtLevantamento';
 import { ParcelamentoSimulador } from './components/ParcelamentoSimulador';
 import { FaturamentoGerador } from './components/FaturamentoGerador';
-import { FileSpreadsheet, Briefcase, Menu, X, Calculator, Coins } from 'lucide-react';
+import { ConfiguracoesGerais } from './components/ConfiguracoesGerais';
+import { FileSpreadsheet, Briefcase, Menu, X, Calculator, Coins, Settings } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador'
+    'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais'
   >('debit_levantamento');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
@@ -35,13 +36,16 @@ export default function App() {
           <aside className="w-full md:w-64 bg-[#04243b] text-slate-200 border-r border-[#e4b35e]/20 flex flex-col shrink-0 animate-fadeIn">
             
             {/* Header with three-bar icon inside the menu */}
-            <div className="p-4 border-b border-[#e4b35e]/15 flex items-center justify-start">
+            <div className="px-4 py-2.5 border-b border-[#e4b35e]/15 flex items-center justify-between bg-[#031d30]/50">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#e4b35e]">
+                Módulos
+              </span>
               <button 
                 onClick={() => setIsSidebarVisible(false)}
-                className="p-1.5 rounded-lg hover:bg-[#031d30] text-slate-300 transition-colors cursor-pointer"
+                className="p-1.5 rounded-lg hover:bg-[#04243b] text-slate-300 transition-colors cursor-pointer"
                 title="Recolher Menu"
               >
-                <Menu className="h-5 w-5 text-[#e4b35e]" />
+                <Menu className="h-4 w-4 text-[#e4b35e]" />
               </button>
             </div>
 
@@ -104,6 +108,20 @@ export default function App() {
                 <span className="hidden sm:inline md:inline">Geração de Faturamento</span>
               </button>
 
+              {/* Button 5: Configurações Gerais (Logotipo up to 5MB and Reports) */}
+              <button
+                onClick={() => setActiveTab('configuracoes_gerais')}
+                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer mt-2 border-t border-[#e4b35e]/20 pt-2.5 ${
+                  activeTab === 'configuracoes_gerais'
+                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
+                    : 'hover:bg-[#031d30] text-slate-300'
+                }`}
+                title="Configurações Gerais e Logotipo"
+              >
+                <Settings className="h-4.5 w-4.5 shrink-0" />
+                <span className="hidden sm:inline md:inline">Configurações Gerais</span>
+              </button>
+
             </nav>
 
 
@@ -138,8 +156,10 @@ export default function App() {
             <DebtLevantamento />
           ) : activeTab === 'parcelamento_simulador' ? (
             <ParcelamentoSimulador />
+          ) : activeTab === 'configuracoes_gerais' ? (
+            <ConfiguracoesGerais />
           ) : (
-            <FaturamentoGerador />
+            <FaturamentoGerador onNavigateToConfig={() => setActiveTab('configuracoes_gerais')} />
           )}
         </main>
 

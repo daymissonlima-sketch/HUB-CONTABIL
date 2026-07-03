@@ -2629,13 +2629,13 @@ export function DebtLevantamento() {
                           <div className="border-r border-slate-200 pr-4 hidden sm:block">
                             <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Valor Original</span>
                             <span className="font-bold text-slate-700">
-                              R$ {tempParsedDebts.reduce((s, d) => s + (Number(d.principal) || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              R$ {tempParsedDebts.reduce((s, d) => s + (Number(d.principal) || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           </div>
                           <div className="bg-[#04243b] text-white rounded-xl px-4 py-2 flex flex-col justify-center">
                             <span className="text-[8px] font-black uppercase text-[#e4b35e] tracking-widest block text-center sm:text-right">Soma Total Geral</span>
                             <span className="text-sm font-black text-[#e4b35e] text-center sm:text-right">
-                              R$ {tempParsedDebts.reduce((s, d) => s + (Number(d.total) || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              R$ {tempParsedDebts.reduce((s, d) => s + (Number(d.total) || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           </div>
                         </div>
@@ -2702,7 +2702,7 @@ export function DebtLevantamento() {
                     <div className="flex justify-between border-t border-slate-200 pt-1.5 font-bold">
                       <span className="text-slate-500">Valor Total:</span>
                       <span className="text-emerald-700">
-                        R$ {tempParsedDebts.reduce((s, d) => s + (Number(d.total) || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        R$ {tempParsedDebts.reduce((s, d) => s + (Number(d.total) || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                   </div>
