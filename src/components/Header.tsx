@@ -17,10 +17,10 @@ export function Header() {
           <Logo origin="left center" />
           <div className="hidden md:flex flex-col border-l border-[#e4b35e]/25 pl-4 py-0.5">
             <span className="text-xs font-bold tracking-wide text-slate-200">
-              Gestão Contábil &amp; Tributária
+              My Hub - Moreira &amp; Lima
             </span>
             <span className="text-[10px] font-medium text-slate-400">
-              Auditoria Fiscal Inteligente
+              Gestão Contábil e Tributária
             </span>
           </div>
         </div>

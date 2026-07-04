@@ -11,11 +11,13 @@ import { DebtLevantamento } from './components/DebtLevantamento';
 import { ParcelamentoSimulador } from './components/ParcelamentoSimulador';
 import { FaturamentoGerador } from './components/FaturamentoGerador';
 import { ConfiguracoesGerais } from './components/ConfiguracoesGerais';
-import { FileSpreadsheet, Briefcase, Menu, X, Calculator, Coins, Settings } from 'lucide-react';
+import { ConversorNfceSiga } from './components/ConversorNfceSiga';
+import { Comunicados } from './components/Comunicados';
+import { FileSpreadsheet, Briefcase, Menu, X, Calculator, Coins, Settings, Table, FileText } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais'
+    'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'conversor_nfce_siga' | 'comunicados'
   >('debit_levantamento');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
@@ -66,7 +68,21 @@ export default function App() {
                 <span className="hidden sm:inline md:inline">Auditor XML NF-e</span>
               </button>
 
-              {/* Button 2: Debt Levantamento (Existing module) */}
+              {/* Button 2: Conversor NFC-e - SIGA */}
+              <button
+                onClick={() => setActiveTab('conversor_nfce_siga')}
+                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
+                  activeTab === 'conversor_nfce_siga'
+                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
+                    : 'hover:bg-[#031d30] text-slate-300'
+                }`}
+                title="Conversor NFC-e - SIGA (CSV para Excel)"
+              >
+                <Table className="h-4.5 w-4.5 shrink-0" />
+                <span className="hidden sm:inline md:inline">Conversor NFC-e - SIGA</span>
+              </button>
+
+              {/* Button 3: Debt Levantamento (Existing module) */}
               <button
                 onClick={() => setActiveTab('debit_levantamento')}
                 className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
@@ -80,7 +96,7 @@ export default function App() {
                 <span className="hidden sm:inline md:inline">Levantamento de Débitos</span>
               </button>
 
-              {/* Button 3: Simulação de Parcelamento (New module) */}
+              {/* Button 4: Simulação de Parcelamento (New module) */}
               <button
                 onClick={() => setActiveTab('parcelamento_simulador')}
                 className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
@@ -94,7 +110,7 @@ export default function App() {
                 <span className="hidden sm:inline md:inline">Simular Parcelamento</span>
               </button>
 
-              {/* Button 4: Geração de Faturamento (New module) */}
+              {/* Button 5: Geração de Faturamento (New module) */}
               <button
                 onClick={() => setActiveTab('faturamento_gerador')}
                 className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
@@ -108,7 +124,21 @@ export default function App() {
                 <span className="hidden sm:inline md:inline">Geração de Faturamento</span>
               </button>
 
-              {/* Button 5: Configurações Gerais (Logotipo up to 5MB and Reports) */}
+              {/* Button 6: Comunicados Institucionais */}
+              <button
+                onClick={() => setActiveTab('comunicados')}
+                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
+                  activeTab === 'comunicados'
+                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
+                    : 'hover:bg-[#031d30] text-slate-300'
+                }`}
+                title="Comunicados Institucionais (A4 Timbrado)"
+              >
+                <FileText className="h-4.5 w-4.5 shrink-0" />
+                <span className="hidden sm:inline md:inline">Comunicados</span>
+              </button>
+
+              {/* Button 6: Configurações Gerais (Logotipo up to 5MB and Reports) */}
               <button
                 onClick={() => setActiveTab('configuracoes_gerais')}
                 className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer mt-2 border-t border-[#e4b35e]/20 pt-2.5 ${
@@ -156,6 +186,10 @@ export default function App() {
             <DebtLevantamento />
           ) : activeTab === 'parcelamento_simulador' ? (
             <ParcelamentoSimulador />
+          ) : activeTab === 'conversor_nfce_siga' ? (
+            <ConversorNfceSiga />
+          ) : activeTab === 'comunicados' ? (
+            <Comunicados />
           ) : activeTab === 'configuracoes_gerais' ? (
             <ConfiguracoesGerais />
           ) : (

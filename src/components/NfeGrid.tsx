@@ -376,20 +376,27 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
   // Sort Logic
   const sortedRows = [...filteredRows].sort((a, b) => {
     const { column, direction } = sortConfig;
-    if (!column) return 0;
+    const activeCol = column || 'nNF';
+    const activeDir = column ? direction : 'asc';
 
-    const valA = a[column];
-    const valB = b[column];
+    const valA = a[activeCol];
+    const valB = b[activeCol];
 
     if (typeof valA === 'number' && typeof valB === 'number') {
-      return direction === 'asc' ? valA - valB : valB - valA;
+      return activeDir === 'asc' ? valA - valB : valB - valA;
+    }
+
+    if (activeCol === 'nNF' || activeCol === 'serie' || activeCol === 'modelo' || activeCol === 'nItem') {
+      const numA = parseInt((valA || '').toString().replace(/\D/g, ''), 10) || 0;
+      const numB = parseInt((valB || '').toString().replace(/\D/g, ''), 10) || 0;
+      return activeDir === 'asc' ? numA - numB : numB - numA;
     }
 
     const strA = (valA || '').toString().toLowerCase();
     const strB = (valB || '').toString().toLowerCase();
 
-    if (strA < strB) return direction === 'asc' ? -1 : 1;
-    if (strA > strB) return direction === 'asc' ? 1 : -1;
+    if (strA < strB) return activeDir === 'asc' ? -1 : 1;
+    if (strA > strB) return activeDir === 'asc' ? 1 : -1;
     return 0;
   });
 
