@@ -47,6 +47,37 @@ export interface Company {
   estado?: string;
   uf?: string;
   createdAt: string;
+  // Endereço granular detalhado (API)
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  // Contato (API)
+  email?: string;
+  telefone?: string;
+  telefoneSecundario?: string;
+  // CNAE e Atividades (API)
+  cnaePrincipalCodigo?: string;
+  cnaePrincipalDescricao?: string;
+  cnaesSecundarios?: Array<{ codigo: string; descricao: string }>;
+  // Natureza Jurídica e Porte (API)
+  naturezaJuridicaCodigo?: string;
+  naturezaJuridicaDescricao?: string;
+  porte?: string;
+  // Situação Cadastral (API)
+  situacaoCadastral?: string;
+  motivoSituacaoCadastral?: string;
+  // Quadro Societário Expandido (API)
+  sociosDetalhados?: Array<{ nome: string; documento?: string; qualificacao?: string }>;
+  // Opções Tributárias Especiais (API)
+  opcaoSimples?: boolean | string;
+  dataOpcaoSimples?: string;
+  dataExclusaoSimples?: string;
+  motivoExclusaoSimples?: string;
+  opcaoMei?: boolean | string;
+  // Inscrições Estaduais e Municipais (API)
+  situacaoInscEst?: string;
+  inscMun?: string;
   // Digital Certificate integration fields
   certificateFile?: string; // Base64 content of .pfx or .p12
   certificatePassword?: string;
@@ -94,4 +125,12 @@ export interface InstallmentRow {
   total: number;
   currentBalance: number;
 }
+
+export interface Accountant {
+  id: string;
+  nome: string;
+  cpf: string;
+  crc: string;
+}
+
 

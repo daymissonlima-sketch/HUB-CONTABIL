@@ -14,9 +14,6 @@ import {
   FileSpreadsheet, 
   Briefcase, 
   Settings, 
-  AlertCircle,
-  TrendingDown,
-  Percent,
   CheckCircle,
   FileCheck2,
   FileUp,
@@ -28,9 +25,7 @@ import {
   Sliders,
   ChevronRight,
   Info,
-  Sparkles,
   Search,
-  ArrowLeft,
   Check
 } from 'lucide-react';
 import { DebtItem, ClientInfo, DebtCategory, Company } from '../types_debits';

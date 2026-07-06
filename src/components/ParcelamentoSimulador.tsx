@@ -3,7 +3,6 @@ import { motion } from 'motion/react';
 import { 
   Calculator, 
   FileDown, 
-  Calendar, 
   Layers, 
   TrendingUp, 
   Info,

@@ -1,2 +1,5 @@
 # Proxy Netlify para consulta de CNPJ (evita erros de CORS e retorno de HTML 404 em produção)
 /api/cnpj/*  https://brasilapi.com.br/api/cnpj/v1/:splat  200
+
+# Fallback SPA para roteamento do React no Netlify (evita erro 404 ao atualizar a página)
+/*  /index.html  200

@@ -1,18 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Building2, 
-  Plus, 
   Trash2, 
   FileSpreadsheet, 
   Upload, 
   Download, 
-  Coins, 
   CheckCircle, 
-  TrendingUp, 
   FileDown, 
-  PieChart as PieIcon, 
-  Calendar,
   Layers,
   AlertCircle,
   AlertTriangle,
@@ -23,27 +17,17 @@ import {
   Check,
   Sparkles,
   ChevronDown,
-  Loader2,
   Search,
   ArrowLeft
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip as RechartsTooltip, 
-  Legend, 
-  ResponsiveContainer, 
-  AreaChart, 
-  Area 
-} from 'recharts';
 import { Company, FaturamentoItem } from '../types_debits';
 import importedCompaniesJson from '../data/imported_companies.json';
+import { convertPdfToCsvString } from '../utils/pdfToCsv';
+import { extractTextFromPdf } from '../utils/pdfExtractor';
+import { fetchCnpjSafe, parseCnpjResponseData } from '../utils/cnpjHelper';
 
 export interface Accountant {
   id: string;
@@ -91,67 +75,6 @@ export interface BatchFileResult {
   errorMessage?: string;
 }
 
-// Proxy/API Safe Fetcher - Evita erro 'Unexpected token <' ao ler respostas HTML (404/proxy incorreto)
-async function fetchCnpjSafe(cleanCnpj: string): Promise<any> {
-  const response = await fetch(`/api/cnpj/${cleanCnpj}`);
-  const text = await response.text();
-
-  if (!text || text.trim().startsWith("<") || !text.trim().startsWith("{")) {
-    throw new Error("A API retornou HTML em vez de JSON. Verifique as configurações de proxy (_redirects).");
-  }
-
-  let data: any;
-  try {
-    data = JSON.parse(text);
-  } catch (e) {
-    throw new Error("A resposta recebida não está no formato JSON válido.");
-  }
-
-  if (!response.ok) {
-    throw new Error(data.error || data.message || `Erro ao consultar CNPJ (Status: ${response.status})`);
-  }
-
-  return data;
-}
-
-function parseCnpjResponseData(data: any) {
-  const razaoSocial = data.razao_social || data.nome || 'Empresa Sem Nome';
-
-  const est = data.estabelecimento || {};
-  const logradouro = est.logradouro || data.logradouro || '';
-  const numero = est.numero || data.numero || '';
-  const bairro = est.bairro || data.bairro || '';
-  const enderecoFormatted = [logradouro, numero, bairro].filter(Boolean).join(', ');
-
-  const cep = est.cep || data.cep || '';
-  const municipioNome = est.municipio?.nome || data.municipio || '';
-  const estadoSigla = est.estado?.sigla || data.uf || '';
-  const estadoNome = est.estado?.nome || data.uf || '';
-  const cidadeFormatted = municipioNome && estadoSigla ? `${municipioNome} (${estadoSigla})` : (municipioNome || estadoSigla || '');
-
-  const isSimples = data.simples?.optante === 'Sim' || data.simples?.optante === true || data.opcao_pelo_simples === true;
-  const regime = isSimples ? 'SIMPLES_NACIONAL' : 'LUCRO_PRESUMIDO';
-
-  const sociosRaw = data.socios || data.qsa || [];
-  const quadro = sociosRaw.map((s: any) => {
-    const nome = s.nome || s.nome_socio || '';
-    const desc = s.qualificacao_socio?.descricao || (typeof s.qualificacao_socio === 'string' ? s.qualificacao_socio : '') || '';
-    return desc ? `${nome} (${desc})` : nome;
-  }).filter(Boolean);
-
-  return {
-    razaoSocial,
-    enderecoFormatted,
-    cidadeFormatted,
-    cep,
-    regime,
-    quadro,
-    municipioNome,
-    estadoNome,
-    estadoSigla
-  };
-}
-
 interface FaturamentoGeradorProps {
   onNavigateToConfig?: () => void;
 }
@@ -172,9 +95,6 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     crc: ''
   });
   
-  // Settings Modal state
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [settingsSubTab, setSettingsSubTab] = useState<'gerenciar' | 'contadores'>('gerenciar');
   const [editingCompanyId, setEditingCompanyId] = useState<string | null>(null);
 
   // Screen and search states for company and accountant registrations
@@ -445,73 +365,55 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     lastLoadedCompanyIdRef.current = selectedCompanyId;
   }, [selectedCompanyId]);
 
-  // Load companies and accountants from localStorage on mount
+  // Load companies and accountants from localStorage on mount and when updated
   useEffect(() => {
-    const importedList = (importedCompaniesJson as unknown) as Company[];
-    const stored = localStorage.getItem('moreira_lima_companies');
-    let mergedCompanies: Company[] = [...importedList];
+    const loadAll = () => {
+      const importedList = (importedCompaniesJson as unknown) as Company[];
+      const stored = localStorage.getItem('moreira_lima_companies');
+      let mergedCompanies: Company[] = [...importedList];
 
-    if (stored) {
-      try {
-        const parsed = (JSON.parse(stored) as Company[]).filter(c => !c.id.startsWith('demo-'));
-        const existingCnpjs = new Set(parsed.map(c => c.cnpj.replace(/\D/g, '')));
-        const newFromImport = importedList.filter(c => !existingCnpjs.has(c.cnpj.replace(/\D/g, '')));
-        mergedCompanies = [...parsed, ...newFromImport];
-      } catch (err) {
-        console.error('Erro ao ler empresas do localStorage:', err);
-      }
-    }
-
-    mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
-
-    setCompanies(mergedCompanies);
-    localStorage.setItem('moreira_lima_companies', JSON.stringify(mergedCompanies));
-
-    if (mergedCompanies.length > 0) {
-      const firstCompanyId = mergedCompanies[0].id;
-      setSelectedCompanyId(firstCompanyId);
-      lastLoadedCompanyIdRef.current = firstCompanyId;
-      const storedFat = localStorage.getItem(`moreira_lima_faturamento_${firstCompanyId}`);
-      if (storedFat) {
+      if (stored) {
         try {
-          setFaturamentoData(JSON.parse(storedFat));
-        } catch {}
+          const parsed = (JSON.parse(stored) as Company[]).filter(c => !c.id.startsWith('demo-'));
+          const existingCnpjs = new Set(parsed.map(c => c.cnpj.replace(/\D/g, '')));
+          const newFromImport = importedList.filter(c => !existingCnpjs.has(c.cnpj.replace(/\D/g, '')));
+          mergedCompanies = [...parsed, ...newFromImport];
+        } catch (err) {
+          console.error('Erro ao ler empresas do localStorage:', err);
+        }
       }
-    } else {
-      setSelectedCompanyId('');
-      lastLoadedCompanyIdRef.current = null;
-    }
 
-    const storedAcc = localStorage.getItem('moreira_lima_accountants');
-    if (storedAcc) {
-      try {
-        setAccountants(JSON.parse(storedAcc));
-      } catch (err) {
+      mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+      setCompanies(mergedCompanies);
+      localStorage.setItem('moreira_lima_companies', JSON.stringify(mergedCompanies));
+
+      const storedAcc = localStorage.getItem('moreira_lima_accountants');
+      if (storedAcc) {
+        try {
+          setAccountants(JSON.parse(storedAcc));
+        } catch (err) {
+          setAccountants(DEFAULT_ACCOUNTANTS);
+        }
+      } else {
         setAccountants(DEFAULT_ACCOUNTANTS);
+        localStorage.setItem('moreira_lima_accountants', JSON.stringify(DEFAULT_ACCOUNTANTS));
       }
-    } else {
-      setAccountants(DEFAULT_ACCOUNTANTS);
-      localStorage.setItem('moreira_lima_accountants', JSON.stringify(DEFAULT_ACCOUNTANTS));
-    }
 
-    const storedSel = localStorage.getItem('moreira_lima_selected_accountant');
-    if (storedSel) {
-      setSelectedAccountantId(storedSel);
-    } else {
-      setSelectedAccountantId('paulo');
-    }
+      const storedSel = localStorage.getItem('moreira_lima_selected_accountant');
+      if (storedSel) {
+        setSelectedAccountantId(storedSel);
+      } else {
+        setSelectedAccountantId('paulo');
+      }
+    };
 
-    const storedCerts = localStorage.getItem('moreira_lima_certificates');
-    if (storedCerts) {
-      try {
-        const parsed = JSON.parse(storedCerts);
-        const filtered = parsed.filter((c: any) => 
-          c && c.razaoSocial && !c.razaoSocial.toUpperCase().includes("DAYMISSON") && 
-          c.fileName && !c.fileName.toUpperCase().includes("DAYMISSON")
-        );
-        setCertificates(filtered);
-      } catch {}
-    }
+    loadAll();
+    window.addEventListener('moreira_lima_companies_updated', loadAll);
+    window.addEventListener('moreira_lima_accountants_updated', loadAll);
+    return () => {
+      window.removeEventListener('moreira_lima_companies_updated', loadAll);
+      window.removeEventListener('moreira_lima_accountants_updated', loadAll);
+    };
   }, []);
 
   // Save certificates when changed
@@ -1305,7 +1207,11 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     });
   };
 
-  const convertXlsToCsvAndImport = (file: File): Promise<string> => {
+  const convertXlsToCsvAndImport = async (file: File): Promise<string> => {
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if (extension === 'pdf') {
+      return await convertPdfToCsvString(file);
+    }
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -1648,6 +1554,142 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     return items;
   };
 
+  const parseFaturamentoFromPdfDirect = (pdfContent: string, company: Company): FaturamentoItem[] => {
+    const lines = pdfContent.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const items: FaturamentoItem[] = [];
+    const ptMonths: { [key: string]: number } = {
+      'janeiro': 1, 'fevereiro': 2, 'março': 3, 'marco': 3, 'abril': 4, 'maio': 5, 'junho': 6,
+      'julho': 7, 'agosto': 8, 'setembro': 9, 'outubro': 10, 'novembro': 11, 'dezembro': 12,
+      'jul': 7, 'ago': 8, 'set': 9, 'out': 10, 'nov': 11, 'dez': 12, 'jan': 1, 'fev': 2, 'mar': 3, 'abr': 4, 'mai': 5, 'jun': 6
+    };
+
+    const parseNumericValue = (valStr: string): number => {
+      if (!valStr) return 0;
+      const clean = valStr.replace(/[R$\s"]/gi, '').trim();
+      if (!clean) return 0;
+      if (clean.includes(',') && clean.includes('.')) {
+        if (clean.indexOf('.') < clean.indexOf(',')) {
+          return parseFloat(clean.replace(/\./g, '').replace(',', '.')) || 0;
+        } else {
+          return parseFloat(clean.replace(/,/g, '')) || 0;
+        }
+      } else if (clean.includes(',')) {
+        const parts = clean.split(',');
+        if (parts[1].length === 2 || parts[1].length === 1) {
+          return parseFloat(clean.replace(',', '.')) || 0;
+        } else {
+          return parseFloat(clean.replace(',', '')) || 0;
+        }
+      } else {
+        return parseFloat(clean) || 0;
+      }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.toLowerCase().startsWith('totais') || line.toLowerCase().includes('total geral') || line.toLowerCase().startsWith('soma')) {
+        continue;
+      }
+
+      let monthNum = -1;
+      let yearNum = -1;
+
+      const numMatch = line.match(/\b(0?[1-9]|1[0-2])\s*[\/\.-]\s*(20\d{2})\b/);
+      if (numMatch) {
+        monthNum = parseInt(numMatch[1], 10);
+        yearNum = parseInt(numMatch[2], 10);
+      } else {
+        const words = line.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").split(/\s+/);
+        for (const w of words) {
+          const cleanW = w.replace(/[^a-z]/g, '');
+          if (ptMonths[cleanW] !== undefined) {
+            monthNum = ptMonths[cleanW];
+            break;
+          }
+        }
+        if (monthNum !== -1) {
+          const yearMatch = line.match(/\b(20\d{2})\b/);
+          if (yearMatch) {
+            yearNum = parseInt(yearMatch[1], 10);
+          }
+        }
+      }
+
+      if (monthNum !== -1 && yearNum !== -1) {
+        const competencia = `${monthNum.toString().padStart(2, '0')}/${yearNum}`;
+        const linesToCheck = [line];
+        if (i + 1 < lines.length) linesToCheck.push(lines[i + 1]);
+
+        let faturamentoTotal = 0;
+        for (const checkLine of linesToCheck) {
+          const matches = checkLine.match(/(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{2})|\d+,\d{2}|\d+\.\d{2})/g);
+          if (matches && matches.length > 0) {
+            const numbers = matches.map(m => parseNumericValue(m)).filter(n => n > 100);
+            if (numbers.length > 0) {
+              faturamentoTotal = Math.max(...numbers);
+              break;
+            }
+          }
+        }
+
+        if (faturamentoTotal <= 0) continue;
+
+        const vendaVista = faturamentoTotal * (company.vendaVistaPercent / 100);
+        const vendaPrazo = faturamentoTotal * (company.vendaPrazoPercent / 100);
+        const estimatedTaxes = calculateEstimatedTaxes(faturamentoTotal, company.regimeTributario);
+
+        const existingIdx = items.findIndex(item => item.competencia === competencia);
+        if (existingIdx !== -1) {
+          items[existingIdx] = {
+            id: items[existingIdx].id,
+            competencia,
+            faturamentoTotal,
+            vendaVista,
+            vendaPrazo,
+            estimatedTaxes
+          };
+        } else {
+          items.push({
+            id: `fat_pdf_${i}_${Date.now()}`,
+            competencia,
+            faturamentoTotal,
+            vendaVista,
+            vendaPrazo,
+            estimatedTaxes
+          });
+        }
+      }
+    }
+
+    items.sort((a, b) => {
+      const [mA, yA] = a.competencia.split('/').map(Number);
+      const [mB, yB] = b.competencia.split('/').map(Number);
+      if (yA !== yB) return yA - yB;
+      return mA - mB;
+    });
+
+    return items;
+  };
+
+  const extractFileContentAndType = async (file: File): Promise<{ content: string; isPdf: boolean }> => {
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if (extension === 'pdf') {
+      try {
+        const buffer = await file.arrayBuffer();
+        const pdfText = await extractTextFromPdf(buffer);
+        if (pdfText && pdfText.trim().length > 10) {
+          return { content: pdfText, isPdf: true };
+        }
+      } catch (err) {
+        console.warn('Falha na leitura direta do texto do PDF. Tentando conversão estruturada via CSV...', err);
+      }
+      const csvFallback = await convertPdfToCsvString(file);
+      return { content: csvFallback, isPdf: false };
+    }
+    const csvContent = await convertXlsToCsvAndImport(file);
+    return { content: csvContent, isPdf: false };
+  };
+
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -1668,16 +1710,15 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       setBatchProgress(`Processando arquivo: ${file.name}...`);
       
       const extension = file.name.split('.').pop()?.toLowerCase();
-      let csvContent = '';
 
-      if (extension !== 'xlsx' && extension !== 'xls' && extension !== 'csv') {
-        throw new Error('Formato de arquivo inválido. Por favor, envie uma planilha Excel (.xlsx, .xls) ou arquivo CSV.');
+      if (extension !== 'xlsx' && extension !== 'xls' && extension !== 'csv' && extension !== 'pdf') {
+        throw new Error('Formato de arquivo inválido. Por favor, envie uma planilha Excel (.xlsx, .xls), CSV ou demonstrativo em PDF (.pdf).');
       }
 
-      csvContent = await convertXlsToCsvAndImport(file);
+      const { content: fileText, isPdf } = await extractFileContentAndType(file);
 
       let currentCompanies = [...companies];
-      const { company: identifiedCompany, identifiedCnpj } = identifyCompanyForFile(file.name, csvContent, currentCompanies);
+      const { company: identifiedCompany, identifiedCnpj } = identifyCompanyForFile(file.name, fileText, currentCompanies);
 
       let targetCompany = identifiedCompany;
 
@@ -1752,7 +1793,15 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
         lastLoadedCompanyIdRef.current = targetCompany.id;
       }
 
-      const items = parseFaturamentoFromCsv(csvContent, targetCompany);
+      let items: FaturamentoItem[] = [];
+      if (isPdf) {
+        items = parseFaturamentoFromPdfDirect(fileText, targetCompany);
+        if (items.length === 0) {
+          items = parseFaturamentoFromCsv(fileText, targetCompany);
+        }
+      } else {
+        items = parseFaturamentoFromCsv(fileText, targetCompany);
+      }
 
       if (items.length === 0) {
         throw new Error("Não foi possível extrair nenhum faturamento válido. Verifique se o modelo está correto.");
@@ -1780,7 +1829,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       setBatchProgress(`Processando ${i + 1} de ${files.length}: ${file.name}...`);
       const extension = file.name.split('.').pop()?.toLowerCase();
 
-      if (extension !== 'xlsx' && extension !== 'xls' && extension !== 'csv') {
+      if (extension !== 'xlsx' && extension !== 'xls' && extension !== 'csv' && extension !== 'pdf') {
         results.push({
           id: `batch_${i}_${Date.now()}`,
           fileName: file.name,
@@ -1789,16 +1838,15 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
           companyId: null,
           items: [],
           status: 'error',
-          errorMessage: 'Formato de arquivo inválido. Use .xlsx, .xls ou .csv'
+          errorMessage: 'Formato de arquivo inválido. Use .xlsx, .xls, .csv ou .pdf'
         });
         continue;
       }
 
       try {
-        let csvContent = '';
-        csvContent = await convertXlsToCsvAndImport(file);
+        const { content: fileText, isPdf } = await extractFileContentAndType(file);
 
-        const { company: identifiedCompany, identifiedCnpj } = identifyCompanyForFile(file.name, csvContent, currentCompanies);
+        const { company: identifiedCompany, identifiedCnpj } = identifyCompanyForFile(file.name, fileText, currentCompanies);
 
         let finalCompany = identifiedCompany;
         let autoCreated = false;
@@ -1852,7 +1900,15 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
           createdAt: ''
         };
 
-        const items = parseFaturamentoFromCsv(csvContent, parsingCompany);
+        let items: FaturamentoItem[] = [];
+        if (isPdf) {
+          items = parseFaturamentoFromPdfDirect(fileText, parsingCompany);
+          if (items.length === 0) {
+            items = parseFaturamentoFromCsv(fileText, parsingCompany);
+          }
+        } else {
+          items = parseFaturamentoFromCsv(fileText, parsingCompany);
+        }
 
         if (items.length === 0) {
           results.push({
@@ -1974,10 +2030,10 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       if (files.length === 1) {
         const file = files[0];
         const extension = file.name.split('.').pop()?.toLowerCase();
-        if (extension === 'xlsx' || extension === 'xls' || extension === 'csv') {
+        if (extension === 'xlsx' || extension === 'xls' || extension === 'csv' || extension === 'pdf') {
           await parseExcelFile(file);
         } else {
-          setUploadError('Formato de arquivo inválido. Por favor, envie uma planilha Excel (.xlsx, .xls) ou arquivo CSV.');
+          setUploadError('Formato de arquivo inválido. Por favor, envie uma planilha Excel (.xlsx, .xls), arquivo CSV ou PDF demonstrativo.');
         }
       } else {
         await handleBatchFiles(files);
@@ -2033,11 +2089,11 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       
       const validFiles = files.filter(f => {
         const ext = f.name.split('.').pop()?.toLowerCase();
-        return ext === 'xlsx' || ext === 'xls' || ext === 'csv';
+        return ext === 'xlsx' || ext === 'xls' || ext === 'csv' || ext === 'pdf';
       });
 
       if (validFiles.length === 0) {
-        alert("Nenhum arquivo válido (.xlsx, .xls, .csv) foi detectado.");
+        alert("Nenhum arquivo válido (.xlsx, .xls, .csv, .pdf) foi detectado.");
         return;
       }
 
@@ -2923,18 +2979,6 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
               DAYMISSON
             </button>
           </div>
-
-          {/* Config Gear Button */}
-          <button
-            onClick={() => {
-              setSettingsSubTab('gerenciar');
-              setShowSettingsModal(true);
-            }}
-            className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-[#04243b] transition-all cursor-pointer shadow-xs"
-            title="Configurações (Empresas e CSV)"
-          >
-            <Settings className="h-5 w-5 animate-hover-spin" />
-          </button>
         </div>
       </div>
 
@@ -3048,7 +3092,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                 type="file"
                 ref={fileInputRef}
                 onChange={handleFileSelect}
-                accept=".xlsx, .xls, .csv"
+                accept=".xlsx, .xls, .csv, .pdf"
                 multiple
                 className="hidden"
               />
@@ -3062,7 +3106,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                     Arraste ou Selecione o Arquivo de Faturamento
                   </h3>
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Formatos suportados: Excel (.xlsx, .xls) ou CSV
+                    Formatos suportados: Excel (.xlsx, .xls), CSV ou Demonstrativo PDF (.pdf)
                   </p>
                 </div>
                 
@@ -3554,618 +3598,13 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
           </p>
         </div>
         <button
-          onClick={() => {
-            if (onNavigateToConfig) onNavigateToConfig();
-            else setShowSettingsModal(true);
-          }}
+          onClick={() => { if (onNavigateToConfig) onNavigateToConfig(); }}
           className="px-5 py-2.5 rounded-xl bg-[#e4b35e] text-[#04243b] hover:bg-[#d4a34e] text-xs font-bold transition-all shrink-0 flex items-center gap-2 shadow-sm cursor-pointer uppercase"
         >
           <Settings className="h-4 w-4" />
           Abrir Configurações Gerais
         </button>
       </div>
-
-      {/* CONFIGURATION SETTINGS MODAL */}
-      <AnimatePresence>
-        {showSettingsModal && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.15 }}
-              className="bg-white w-full max-w-4xl rounded-3xl shadow-xl flex flex-col overflow-hidden max-h-[90vh]"
-            >
-              {/* Modal Header */}
-              <div className="bg-[#04243b] text-white p-5 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Settings className="h-5 w-5 text-[#e4b35e]" />
-                  <h3 className="text-sm font-bold tracking-tight">Configuração de Empresas Parceiras</h3>
-                </div>
-                <button
-                  onClick={() => {
-                    setEditingCompanyId(null);
-                    setEditingAccountantId(null);
-                    setCompanyScreen('list');
-                    setAccountantScreen('list');
-                    setCompanySearchQuery('');
-                    setAccountantSearchQuery('');
-                    setShowSettingsModal(false);
-                  }}
-                  className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              {/* Modal Sub-tabs */}
-              <div className="bg-slate-50 border-b border-slate-200 px-6 py-2 flex gap-4 select-none">
-                <button
-                  onClick={() => {
-                    setSettingsSubTab('gerenciar');
-                    setCompanyScreen('list');
-                    setCompanySearchQuery('');
-                  }}
-                  className={`py-2 text-xs font-bold border-b-2 transition-all cursor-pointer ${
-                    settingsSubTab === 'gerenciar'
-                      ? 'border-[#04243b] text-[#04243b]'
-                      : 'border-transparent text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  Cadastrar e Gerenciar Empresas
-                </button>
-                <button
-                  onClick={() => {
-                    setSettingsSubTab('contadores');
-                    setAccountantScreen('list');
-                    setAccountantSearchQuery('');
-                  }}
-                  className={`py-2 text-xs font-bold border-b-2 transition-all cursor-pointer ${
-                    settingsSubTab === 'contadores'
-                      ? 'border-[#04243b] text-[#04243b]'
-                      : 'border-transparent text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  Assinaturas de Contadores
-                </button>
-
-              </div>
-
-              {/* Modal Body */}
-              <div className="flex-1 overflow-y-auto p-6 bg-slate-50/30">
-                {settingsSubTab === 'gerenciar' ? (
-                  <div>
-                    {companyScreen === 'list' ? (
-                      <div className="space-y-4">
-                        {/* Header controls for list */}
-                        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between pb-3 border-b border-slate-200">
-                          <div className="relative w-full sm:max-w-md">
-                            <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
-                              <Search className="h-4 w-4" />
-                            </span>
-                            <input
-                              type="text"
-                              value={companySearchQuery}
-                              onChange={(e) => setCompanySearchQuery(e.target.value)}
-                              placeholder="Pesquisar por razão social (digite as primeiras letras)..."
-                              className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs focus:outline-none focus:border-[#04243b] transition-all"
-                            />
-                          </div>
-                          
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingCompanyId(null);
-                              setNewCompany({
-                                razaoSocial: '',
-                                cnpj: '',
-                                regimeTributario: 'LUCRO_REAL',
-                                vendaVistaPercent: 10,
-                                vendaPrazoPercent: 90,
-                                endereco: '',
-                                cidade: 'Fortaleza (CE)',
-                                cep: '',
-                                inscEst: '',
-                                pmr: 21,
-                                pr: 'R',
-                                cartoesPercent: 0,
-                                chequesPercent: 0,
-                                duplicatasPercent: 100,
-                                contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
-                                contadorCrc: 'CRC CE 022956-O6',
-                                quadroSocietario: [],
-                                municipio: '',
-                                estado: '',
-                                uf: '',
-                                certificateFile: '',
-                                certificatePassword: '',
-                                certificateName: '',
-                                certificateValidTo: '',
-                                certificateIssuer: '',
-                                certificateSerialNumber: ''
-                              });
-                              setCompanyScreen('form');
-                            }}
-                            className="w-full sm:w-auto px-4 py-2 bg-[#04243b] hover:bg-[#031d30] text-white font-bold rounded-xl text-xs uppercase flex items-center justify-center gap-1.5 transition-colors shadow-xs cursor-pointer"
-                          >
-                            <Plus className="h-4 w-4 text-[#e4b35e]" />
-                            Incluir Nova Empresa
-                          </button>
-                        </div>
-
-                        {/* List of companies */}
-                        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-left border-collapse">
-                              <thead>
-                                <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                                  <th className="px-5 py-3">Razão Social / CNPJ</th>
-                                  <th className="px-5 py-3">Divisão de Faturamento</th>
-                                  <th className="px-5 py-3">Regime</th>
-                                  <th className="px-5 py-3 text-right">Ações</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {companies.filter(c => {
-                                  const q = companySearchQuery.toUpperCase().trim();
-                                  if (!q) return true;
-                                  return c.razaoSocial.toUpperCase().startsWith(q) || c.razaoSocial.toUpperCase().includes(q);
-                                }).length === 0 ? (
-                                  <tr>
-                                    <td colSpan={4} className="px-5 py-10 text-center text-slate-400 italic text-xs">
-                                      Nenhuma empresa encontrada com os termos de busca.
-                                    </td>
-                                  </tr>
-                                ) : (
-                                  companies.filter(c => {
-                                    const q = companySearchQuery.toUpperCase().trim();
-                                    if (!q) return true;
-                                    return c.razaoSocial.toUpperCase().startsWith(q) || c.razaoSocial.toUpperCase().includes(q);
-                                  }).map((company) => {
-                                    const isSelected = selectedCompanyId === company.id;
-                                    return (
-                                      <tr 
-                                        key={company.id} 
-                                        className={`hover:bg-slate-50/50 transition-colors ${isSelected ? 'bg-[#e4b35e]/3' : ''}`}
-                                      >
-                                        <td className="px-5 py-3.5">
-                                          <div className="font-bold text-slate-800 text-xs">
-                                            {company.razaoSocial}
-                                          </div>
-                                          <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                                            CNPJ: {company.cnpj}
-                                          </div>
-                                        </td>
-                                        <td className="px-5 py-3.5">
-                                          <div className="text-xs font-semibold text-slate-700">
-                                            Vista: <span className="font-mono font-bold text-[#04243b]">{company.vendaVistaPercent}%</span> | Prazo: <span className="font-mono font-bold text-[#04243b]">{company.vendaPrazoPercent}%</span>
-                                          </div>
-                                        </td>
-                                        <td className="px-5 py-3.5">
-                                          <span className="px-2 py-0.5 bg-slate-100 text-[#04243b] text-[9px] font-bold rounded uppercase tracking-wider">
-                                            {company.regimeTributario.replace('_', ' ')}
-                                          </span>
-                                        </td>
-                                        <td className="px-5 py-3.5 text-right">
-                                          <div className="flex justify-end gap-1.5">
-                                            <button
-                                              type="button"
-                                              onClick={(e) => {
-                                                setSelectedCompanyId(company.id);
-                                                handleEditCompanyInit(company, e);
-                                              }}
-                                              className="p-1.5 rounded-lg text-slate-500 hover:text-[#04243b] hover:bg-slate-100 cursor-pointer transition-all"
-                                              title="Editar Empresa"
-                                            >
-                                              <Edit className="h-4 w-4" />
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={(e) => handleDeleteCompany(company.id, e)}
-                                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-slate-100 cursor-pointer transition-all"
-                                              title="Excluir Empresa"
-                                            >
-                                              <Trash2 className="h-4 w-4" />
-                                            </button>
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    );
-                                  })
-                                )}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      /* Company Form Screen */
-                      <div className="space-y-4 max-w-2xl mx-auto bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCompanyScreen('list');
-                              setEditingCompanyId(null);
-                            }}
-                            className="text-slate-500 hover:text-slate-800 text-xs font-bold uppercase flex items-center gap-1 cursor-pointer transition-colors"
-                          >
-                            <ArrowLeft className="h-4 w-4" />
-                            Voltar à Lista
-                          </button>
-                          
-                          <h4 className="text-xs font-extrabold text-[#04243b] uppercase tracking-wider flex items-center gap-1.5">
-                            {editingCompanyId ? <Edit className="h-4 w-4 text-[#e4b35e]" /> : <Plus className="h-4 w-4 text-[#e4b35e]" />}
-                            {editingCompanyId ? 'Editar Cadastro da Empresa' : 'Incluir Nova Empresa'}
-                          </h4>
-                        </div>
-
-                        <form onSubmit={handleSaveCompany} className="space-y-4 pt-2">
-                          {/* Section 1: Dados Gerais */}
-                          <div className="space-y-3">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Identificação e Regime</span>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                              <div className="sm:col-span-2 space-y-1">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase">Razão Social</label>
-                                <input
-                                  type="text"
-                                  value={newCompany.razaoSocial}
-                                  onChange={(e) => setNewCompany(prev => ({ ...prev, razaoSocial: e.target.value }))}
-                                  className="w-full bg-slate-50/50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
-                                  placeholder="Razão social completa sem abreviações"
-                                  required
-                                />
-                              </div>
-                              
-                              <div className="space-y-1">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase">CNPJ</label>
-                                <div className="flex gap-1.5">
-                                  <input
-                                    type="text"
-                                    value={newCompany.cnpj}
-                                    onChange={(e) => setNewCompany(prev => ({ ...prev, cnpj: e.target.value }))}
-                                    className="flex-1 bg-slate-50/50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
-                                    placeholder="00.000.000/0001-00"
-                                    required
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={handleFetchCnpjData}
-                                    disabled={isFetchingCnpj}
-                                    className={`px-4 py-2 rounded-lg text-xs font-semibold text-[#04243b] bg-[#e4b35e] hover:bg-[#d4a34e] disabled:bg-slate-100 disabled:text-slate-400 transition-all shadow-sm cursor-pointer uppercase`}
-                                    title="Buscar dados do Cartão CNPJ na API Pública"
-                                  >
-                                    {isFetchingCnpj ? '...' : 'Buscar'}
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="space-y-1">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase">Cidade (UF)</label>
-                                <input
-                                  type="text"
-                                  value={newCompany.cidade || ''}
-                                  onChange={(e) => setNewCompany(prev => ({ ...prev, cidade: e.target.value }))}
-                                  className="w-full bg-slate-50/50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
-                                  placeholder="Ex: Fortaleza (CE)"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-2 space-y-1">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase">Regime de Tributação</label>
-                                <select
-                                  value={newCompany.regimeTributario}
-                                  onChange={(e) => setNewCompany(prev => ({ ...prev, regimeTributario: e.target.value as any }))}
-                                  className="w-full bg-slate-50/50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
-                                >
-                                  <option value="SIMPLES_NACIONAL">Simples Nacional</option>
-                                  <option value="LUCRO_PRESUMIDO">Lucro Presumido</option>
-                                  <option value="LUCRO_REAL">Lucro Real</option>
-                                  <option value="LUCRO_ARBITRADO">Lucro Arbitrado</option>
-                                  <option value="ISENTO_IMUNE">Isento / Imune</option>
-                                </select>
-                              </div>
-
-                              <div className="space-y-1">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase flex items-center justify-between">
-                                  <span>Vendas à Vista (%)</span>
-                                </label>
-                                <div className="relative">
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max="100"
-                                    step="any"
-                                    value={newCompany.vendaVistaPercent}
-                                    onChange={(e) => handleVistaChange(Number(e.target.value))}
-                                    className="w-full bg-slate-50/50 border border-slate-200 rounded-lg pl-3 pr-8 py-2 text-xs font-mono font-bold text-emerald-700 focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
-                                    required
-                                  />
-                                  <span className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400 font-mono text-xs">%</span>
-                                </div>
-                              </div>
-
-                              <div className="space-y-1">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase flex items-center justify-between">
-                                  <span>Vendas a Prazo (%)</span>
-                                </label>
-                                <div className="relative">
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max="100"
-                                    step="any"
-                                    value={newCompany.vendaPrazoPercent}
-                                    onChange={(e) => handlePrazoChange(Number(e.target.value))}
-                                    className="w-full bg-slate-50/50 border border-slate-200 rounded-lg pl-3 pr-8 py-2 text-xs font-mono font-bold text-blue-700 focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
-                                    required
-                                  />
-                                  <span className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400 font-mono text-xs">%</span>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Buttons */}
-                          <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCompanyScreen('list');
-                                setEditingCompanyId(null);
-                              }}
-                              className="px-5 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold rounded-xl text-xs uppercase cursor-pointer transition-colors"
-                            >
-                              Cancelar
-                            </button>
-                            
-                            <button
-                              type="submit"
-                              className="px-6 py-2 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] border border-[#e4b35e]/30 font-bold rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm"
-                            >
-                              Salvar Cadastro
-                            </button>
-                          </div>
-                        </form>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  /* Accountants Management Sub-tab */
-                  <div>
-                    {accountantScreen === 'list' ? (
-                      <div className="space-y-4">
-                        {/* Header controls for accountant list */}
-                        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between pb-3 border-b border-slate-200">
-                          <div className="relative w-full sm:max-w-md">
-                            <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
-                              <Search className="h-4 w-4" />
-                            </span>
-                            <input
-                              type="text"
-                              value={accountantSearchQuery}
-                              onChange={(e) => setAccountantSearchQuery(e.target.value)}
-                              placeholder="Pesquisar por nome do contador (digite as primeiras letras)..."
-                              className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs focus:outline-none focus:border-[#04243b] transition-all"
-                            />
-                          </div>
-                          
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingAccountantId(null);
-                              setNewAccountant({ nome: '', cpf: '', crc: '' });
-                              setAccountantScreen('form');
-                            }}
-                            className="w-full sm:w-auto px-4 py-2 bg-[#04243b] hover:bg-[#031d30] text-white font-bold rounded-xl text-xs uppercase flex items-center justify-center gap-1.5 transition-colors shadow-xs cursor-pointer"
-                          >
-                            <Plus className="h-4 w-4 text-[#e4b35e]" />
-                            Incluir Novo Contador
-                          </button>
-                        </div>
-
-                        {/* List of accountants */}
-                        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-left border-collapse">
-                              <thead>
-                                <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                                  <th className="px-5 py-3">Nome do Contador</th>
-                                  <th className="px-5 py-3">CPF</th>
-                                  <th className="px-5 py-3">Registro CRC</th>
-                                  <th className="px-5 py-3 text-right">Ações</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {accountants.filter(acc => {
-                                  const q = accountantSearchQuery.toUpperCase().trim();
-                                  if (!q) return true;
-                                  return acc.nome.toUpperCase().startsWith(q) || acc.nome.toUpperCase().includes(q);
-                                }).length === 0 ? (
-                                  <tr>
-                                    <td colSpan={4} className="px-5 py-10 text-center text-slate-400 italic text-xs">
-                                      Nenhum contador encontrado com os termos de busca.
-                                    </td>
-                                  </tr>
-                                ) : (
-                                  accountants.filter(acc => {
-                                    const q = accountantSearchQuery.toUpperCase().trim();
-                                    if (!q) return true;
-                                    return acc.nome.toUpperCase().startsWith(q) || acc.nome.toUpperCase().includes(q);
-                                  }).map((acc) => {
-                                    const isSelected = selectedAccountantId === acc.id;
-                                    return (
-                                      <tr 
-                                        key={acc.id} 
-                                        className={`hover:bg-slate-50/50 transition-colors ${isSelected ? 'bg-[#e4b35e]/3' : ''}`}
-                                      >
-                                        <td className="px-5 py-3.5">
-                                          <div className="font-bold text-slate-800 text-xs flex items-center gap-2">
-                                            {acc.nome}
-                                            {isSelected && (
-                                              <span className="bg-[#e4b35e]/20 text-[#04243b] text-[8px] font-extrabold px-1.5 py-0.5 rounded-full uppercase tracking-wider">
-                                                Ativo
-                                              </span>
-                                            )}
-                                          </div>
-                                        </td>
-                                        <td className="px-5 py-3.5">
-                                          <div className="text-xs font-mono text-slate-600">
-                                            {acc.cpf}
-                                          </div>
-                                        </td>
-                                        <td className="px-5 py-3.5">
-                                          <div className="text-xs font-mono text-slate-600">
-                                            {acc.crc}
-                                          </div>
-                                        </td>
-                                        <td className="px-5 py-3.5 text-right">
-                                          <div className="flex justify-end gap-1.5">
-                                            <button
-                                              type="button"
-                                              onClick={() => {
-                                                setEditingAccountantId(acc.id);
-                                                setNewAccountant({ nome: acc.nome, cpf: acc.cpf, crc: acc.crc });
-                                                setAccountantScreen('form');
-                                              }}
-                                              className="p-1.5 rounded-lg text-slate-500 hover:text-[#04243b] hover:bg-slate-100 cursor-pointer transition-all"
-                                              title="Editar Contador"
-                                            >
-                                              <Edit className="h-4 w-4" />
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => handleDeleteAccountant(acc.id)}
-                                              disabled={accountants.length <= 1}
-                                              className={`p-1.5 rounded-lg transition-all ${
-                                                accountants.length <= 1
-                                                  ? 'text-slate-200 cursor-not-allowed'
-                                                  : 'text-slate-400 hover:text-red-600 hover:bg-slate-100 cursor-pointer'
-                                              }`}
-                                              title="Excluir Contador"
-                                            >
-                                              <Trash2 className="h-4 w-4" />
-                                            </button>
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    );
-                                  })
-                                )}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      /* Accountant Form Screen */
-                      <div className="space-y-4 max-w-2xl mx-auto bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAccountantScreen('list');
-                              setEditingAccountantId(null);
-                            }}
-                            className="text-slate-500 hover:text-slate-800 text-xs font-bold uppercase flex items-center gap-1 cursor-pointer transition-colors"
-                          >
-                            <ArrowLeft className="h-4 w-4" />
-                            Voltar à Lista
-                          </button>
-                          
-                          <h4 className="text-xs font-extrabold text-[#04243b] uppercase tracking-wider flex items-center gap-1.5">
-                            {editingAccountantId ? <Edit className="h-4 w-4 text-[#e4b35e]" /> : <Plus className="h-4 w-4 text-[#e4b35e]" />}
-                            {editingAccountantId ? 'Editar Assinatura de Contador' : 'Incluir Assinatura de Contador'}
-                          </h4>
-                        </div>
-
-                        <form onSubmit={handleSaveAccountant} className="space-y-4 pt-2">
-                          <div className="space-y-1.5">
-                            <label className="text-[9px] font-bold text-slate-500 uppercase">Nome do Contador</label>
-                            <input
-                              type="text"
-                              value={newAccountant.nome}
-                              onChange={(e) => setNewAccountant(prev => ({ ...prev, nome: e.target.value }))}
-                              className="w-full bg-slate-50/50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
-                              placeholder="Ex: DAYMISSON LIMA DA COSTA"
-                              required
-                            />
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div className="space-y-1.5">
-                              <label className="text-[9px] font-bold text-slate-500 uppercase">CPF</label>
-                              <input
-                                type="text"
-                                value={newAccountant.cpf}
-                                onChange={(e) => setNewAccountant(prev => ({ ...prev, cpf: e.target.value }))}
-                                className="w-full bg-slate-50/50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
-                                placeholder="000.000.000-00"
-                                required
-                              />
-                            </div>
-                            
-                            <div className="space-y-1.5">
-                              <label className="text-[9px] font-bold text-slate-500 uppercase">Registro CRC</label>
-                              <input
-                                type="text"
-                                value={newAccountant.crc}
-                                onChange={(e) => setNewAccountant(prev => ({ ...prev, crc: e.target.value }))}
-                                className="w-full bg-slate-50/50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
-                                placeholder="CRC CE 000000/O"
-                                required
-                              />
-                            </div>
-                          </div>
-
-                          {/* Buttons */}
-                          <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setAccountantScreen('list');
-                                setEditingAccountantId(null);
-                              }}
-                              className="px-5 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold rounded-xl text-xs uppercase cursor-pointer transition-colors"
-                            >
-                              Cancelar
-                            </button>
-                            
-                            <button
-                              type="submit"
-                              className="px-6 py-2 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] border border-[#e4b35e]/30 font-bold rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm"
-                            >
-                              Salvar Assinatura
-                            </button>
-                          </div>
-                        </form>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Modal Footer */}
-              <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex justify-end">
-                <button
-                  onClick={() => {
-                    setEditingCompanyId(null);
-                    setEditingAccountantId(null);
-                    setCompanyScreen('list');
-                    setAccountantScreen('list');
-                    setCompanySearchQuery('');
-                    setAccountantSearchQuery('');
-                    setShowSettingsModal(false);
-                  }}
-                  className="px-5 py-2 bg-[#04243b] text-white hover:bg-[#031d30] font-bold rounded-xl text-xs uppercase cursor-pointer"
-                >
-                  Fechar Configurações
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* BATCH PROCESSING LOADING OVERLAY */}
       {isProcessingBatch && (
@@ -4215,9 +3654,9 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
               <div className="bg-amber-50 border-b border-amber-100 p-4 flex gap-3 text-xs text-amber-800">
                 <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
                 <div className="space-y-1">
-                  <p className="font-bold">Validação e conversão XLS para CSV concluída com sucesso!</p>
+                  <p className="font-bold">Validação concluída com sucesso!</p>
                   <p className="text-[11px] font-medium leading-relaxed opacity-90">
-                    O sistema converteu automaticamente as planilhas para formato CSV e tentou mapear cada arquivo à sua respectiva empresa parceira pelo CNPJ ou Razão Social. Revise abaixo as correspondências e selecione manualmente caso necessário.
+                    Revise abaixo as correspondências e selecione manualmente caso necessário.
                   </p>
                 </div>
               </div>

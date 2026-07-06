@@ -10,7 +10,6 @@ import {
   Search, 
   Filter, 
   X, 
-  Check, 
   Edit2, 
   Settings, 
   Plus, 

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import html2pdf from 'html2pdf.js';
 import { 
   FileText, Upload, Save, AlertCircle, CheckCircle2, 
-  Trash2, FileOutput, Sparkles, ShieldCheck
+  Trash2, FileOutput, Sparkles, ShieldCheck, Eraser
 } from 'lucide-react';
 import { saveToIDB, getFromIDB, removeFromIDB } from '../utils/idbStorage';
 
@@ -19,8 +19,8 @@ const STORAGE_KEY_BG = 'comunicados_background_img_v1';
 export const Comunicados: React.FC = () => {
   // Estado Principal do Módulo
   const [state, setState] = useState<ComunicadoState>({
-    titulo: 'COMUNICADO INSTITUCIONAL / CIRCULAR Nº 01/2026',
-    conteudo: `Prezados Clientes e Colaboradores,\n\nInformamos por meio deste comunicado oficial os novos procedimentos de envio e auditoria de documentos fiscais eletrônicos (NF-e e NFC-e) aplicáveis a partir do terceiro trimestre do corrente ano fiscal.\n\nCom o objetivo de aprimorar a conciliação contábil e garantir conformidade integral com as exigências da Secretaria da Fazenda e Receita Federal, solicitamos que todas as transmissões de relatórios CSV do SIGA e arquivos XML sejam realizadas impreterivelmente até o 5º dia útil de cada mês diretamente pelo nosso portal.\n\nAgradecemos a atenção e permanecemos à disposição para eventuais esclarecimentos e suporte técnico.`,
+    titulo: '',
+    conteudo: '',
     fontFamily: 'times',
     fontSize: 11
   });
@@ -35,8 +35,15 @@ export const Comunicados: React.FC = () => {
       try {
         const savedState = localStorage.getItem(STORAGE_KEY_STATE);
         if (savedState) {
-          setState(JSON.parse(savedState));
-          setIsSaved(true);
+          try {
+            const parsed = JSON.parse(savedState);
+            if (parsed.titulo === 'COMUNICADO INSTITUCIONAL / CIRCULAR Nº 01/2026') {
+              localStorage.removeItem(STORAGE_KEY_STATE);
+            } else {
+              setState(parsed);
+              setIsSaved(true);
+            }
+          } catch (e) {}
         }
 
         // 1. Prioriza buscar a imagem em HD direto do IndexedDB (suporta imagens pesadas de até 8MB sem erro de quota)
@@ -110,6 +117,17 @@ export const Comunicados: React.FC = () => {
     showFeedback('Papel timbrado removido do cache do navegador.', 'info');
   };
 
+  const handleClearFields = () => {
+    setState({
+      ...state,
+      titulo: '',
+      conteudo: ''
+    });
+    localStorage.removeItem(STORAGE_KEY_STATE);
+    setIsSaved(false);
+    showFeedback('Campos de texto limpos com sucesso.', 'info');
+  };
+
   // Tarefa 2: Botão Salvar (Validação + Cache IndexedDB/LocalStorage)
   const handleSave = async () => {
     if (!state.conteudo.trim()) {
@@ -181,7 +199,7 @@ export const Comunicados: React.FC = () => {
     // Pequena pausa para o navegador calcular o layout e carregar a imagem de fundo clonada
     await new Promise(resolve => setTimeout(resolve, 150));
 
-    const opt = {
+    const opt: any = {
       margin: 0,
       filename: `Comunicado_${new Date().toISOString().slice(0, 10)}.pdf`,
       image: { type: 'jpeg', quality: 1.0 },
@@ -244,7 +262,7 @@ export const Comunicados: React.FC = () => {
     };
 
     try {
-      await html2pdf()
+      const worker = (html2pdf() as any)
         .set(opt)
         .from(clonedContent)
         .toPdf()
@@ -258,8 +276,8 @@ export const Comunicados: React.FC = () => {
               pdf.deletePage(totalPages);
             }
           }
-        })
-        .save();
+        });
+      await worker.save();
       showFeedback('PDF gerado com sucesso!', 'success');
     } catch (err) {
       console.error('Erro na renderização html2pdf:', err);
@@ -299,6 +317,15 @@ export const Comunicados: React.FC = () => {
               <span>{statusMsg.text}</span>
             </div>
           )}
+
+          <button
+            onClick={handleClearFields}
+            className="flex items-center space-x-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer"
+            title="Limpar campos de texto"
+          >
+            <Eraser className="w-4 h-4 text-slate-600" />
+            <span>Limpar</span>
+          </button>
 
           <button
             onClick={handleSave}

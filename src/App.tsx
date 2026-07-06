@@ -13,11 +13,12 @@ import { FaturamentoGerador } from './components/FaturamentoGerador';
 import { ConfiguracoesGerais } from './components/ConfiguracoesGerais';
 import { ConversorNfceSiga } from './components/ConversorNfceSiga';
 import { Comunicados } from './components/Comunicados';
-import { FileSpreadsheet, Briefcase, Menu, X, Calculator, Coins, Settings, Table, FileText } from 'lucide-react';
+import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
+import { FileSpreadsheet, Briefcase, Menu, Calculator, Coins, Settings, Table, FileText, ShieldCheck } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'conversor_nfce_siga' | 'comunicados'
+    'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'conversor_nfce_siga' | 'comunicados' | 'opcao_simples_nacional'
   >('debit_levantamento');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
@@ -138,6 +139,20 @@ export default function App() {
                 <span className="hidden sm:inline md:inline">Comunicados</span>
               </button>
 
+              {/* Button 7: Opção Simples Nacional */}
+              <button
+                onClick={() => setActiveTab('opcao_simples_nacional')}
+                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
+                  activeTab === 'opcao_simples_nacional'
+                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
+                    : 'hover:bg-[#031d30] text-slate-300'
+                }`}
+                title="Consulta e Relatório de Opção pelo Simples Nacional (API Pública)"
+              >
+                <ShieldCheck className="h-4.5 w-4.5 shrink-0" />
+                <span className="hidden sm:inline md:inline">Opção Simples</span>
+              </button>
+
               {/* Button 6: Configurações Gerais (Logotipo up to 5MB and Reports) */}
               <button
                 onClick={() => setActiveTab('configuracoes_gerais')}
@@ -190,6 +205,8 @@ export default function App() {
             <ConversorNfceSiga />
           ) : activeTab === 'comunicados' ? (
             <Comunicados />
+          ) : activeTab === 'opcao_simples_nacional' ? (
+            <OpcaoSimplesNacional />
           ) : activeTab === 'configuracoes_gerais' ? (
             <ConfiguracoesGerais />
           ) : (

@@ -12,12 +12,10 @@ import {
   CheckCircle2, 
   AlertTriangle, 
   Search, 
-  Trash2, 
   RefreshCw, 
   FileText,
   DollarSign,
-  Calendar,
-  Filter
+  Calendar
 } from 'lucide-react';
 
 export interface InvoiceRow {

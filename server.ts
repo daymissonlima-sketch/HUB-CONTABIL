@@ -327,19 +327,32 @@ Instruções importantes:
             qualificacao_socio: { descricao: s.qualificacao_socio || "" }
           }));
           return res.json({
+            ...bData,
             razao_social: bData.razao_social || "",
             logradouro: bData.logradouro || "",
             numero: bData.numero || "",
+            complemento: bData.complemento || "",
             bairro: bData.bairro || "",
             cep: bData.cep || "",
             municipio: bData.municipio || "",
             uf: bData.uf || "",
-            simples: { optante: isSimples ? "Sim" : "Não" },
+            simples: { 
+              optante: isSimples ? "Sim" : "Não",
+              data_opcao: bData.data_opcao_pelo_simples || "",
+              data_exclusao: bData.data_exclusao_do_simples || ""
+            },
+            mei: {
+              optante: bData.opcao_pelo_mei === true || bData.opcao_pelo_mei === "Sim"
+            },
             estabelecimento: {
               logradouro: bData.logradouro || "",
               numero: bData.numero || "",
+              complemento: bData.complemento || "",
               bairro: bData.bairro || "",
               cep: bData.cep || "",
+              email: bData.email || bData.correio_eletronico || "",
+              telefone1: bData.ddd_telefone_1 || "",
+              telefone2: bData.ddd_telefone_2 || "",
               cidade: { nome: bData.municipio || "" },
               estado: { sigla: bData.uf || "", nome: bData.uf || "" }
             },
