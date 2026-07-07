@@ -86,33 +86,8 @@ export async function exportDebtsToPDF(
   doc.setFillColor(colorAccent.r, colorAccent.g, colorAccent.b);
   doc.rect(0, 35, pageWidth, 1.5, 'F');
 
-  const pdfLogo = getPdfLogoData();
-  const logoScale = getAppLogoScale();
+  // Logo removed by user request
   let hasDrawnLogo = false;
-  if (pdfLogo && pdfLogo.dataUrl) {
-    try {
-      let aspect = 1.54;
-      if (typeof doc.getImageProperties === 'function') {
-        try {
-          const imgProps = doc.getImageProperties(pdfLogo.dataUrl);
-          if (imgProps && imgProps.width && imgProps.height) {
-            aspect = imgProps.width / imgProps.height;
-          }
-        } catch (err) {}
-      }
-      let targetH = Math.min(12, 10 * logoScale);
-      let targetW = targetH * aspect;
-      if (targetW > 40) {
-        targetW = 40;
-        targetH = targetW / aspect;
-      }
-      const offsetY = Math.max(3, (35 - targetH) / 2);
-      doc.addImage(pdfLogo.dataUrl, pdfLogo.format || 'PNG', margin, offsetY, targetW, targetH);
-      hasDrawnLogo = true;
-    } catch (e) {
-      console.warn("Could not draw logo in PDF:", e);
-    }
-  }
 
   const titleCenterX = pageWidth / 2;
 

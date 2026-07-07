@@ -228,7 +228,7 @@ export function ParcelamentoSimulador() {
     }
   }, [parcelamentoTypes]);
 
-  // Run calculation logic (simple linear amortization where entry is installment #1) for current input
+  // Run calculation logic for current input
   const simulationResults = useMemo(() => {
     if (input.installmentsCount <= 0) {
       return { rows: [] as InstallmentRow[], totalPaid: 0, avgInstallment: 0 };
@@ -236,11 +236,10 @@ export function ParcelamentoSimulador() {
 
     const rows: InstallmentRow[] = [];
     const totalN = input.installmentsCount;
-    const remainingN = totalN > 1 ? totalN - 1 : 0;
     const principalToFinance = Math.max(0, input.totalDebt - input.downPayment);
     const pmt = input.installmentValue && input.installmentValue > 0
       ? input.installmentValue
-      : (remainingN > 0 ? principalToFinance / remainingN : 0);
+      : (totalN > 0 ? principalToFinance / totalN : 0);
 
     const baseDate = new Date();
     if (input.firstDueDate) {
@@ -250,29 +249,33 @@ export function ParcelamentoSimulador() {
       }
     }
 
-    // Parcela 1: Entrada (Down payment)
-    rows.push({
-      number: 1,
-      dueDate: baseDate.toLocaleDateString('pt-BR'),
-      previousBalance: input.totalDebt,
-      amortization: input.downPayment,
-      interest: 0,
-      penalty: 0,
-      total: input.downPayment,
-      currentBalance: principalToFinance
-    });
+    let rowIndex = 1;
+    // Parcela/Entrada initial payment (only if downPayment > 0)
+    if (input.downPayment > 0) {
+      rows.push({
+        number: rowIndex++,
+        dueDate: baseDate.toLocaleDateString('pt-BR'),
+        previousBalance: input.totalDebt,
+        amortization: input.downPayment,
+        interest: 0,
+        penalty: 0,
+        total: input.downPayment,
+        currentBalance: principalToFinance
+      });
+    }
 
-    // Parcela 2 a N: Saldo restante dividido em (N-1) parcelas
+    // N monthly installments
     let runningBalance = principalToFinance;
-    for (let i = 2; i <= totalN; i++) {
+    for (let i = 1; i <= totalN; i++) {
       const previousBalance = runningBalance;
       runningBalance = Math.max(0, runningBalance - pmt);
 
       const dueDate = new Date(baseDate);
-      dueDate.setMonth(baseDate.getMonth() + (i - 1));
+      const monthOffset = input.downPayment > 0 ? i : (i - 1);
+      dueDate.setMonth(baseDate.getMonth() + monthOffset);
 
       rows.push({
-        number: i,
+        number: rowIndex++,
         dueDate: dueDate.toLocaleDateString('pt-BR'),
         previousBalance,
         amortization: pmt,
@@ -306,11 +309,10 @@ export function ParcelamentoSimulador() {
       const financed = Math.max(0, sim.totalDebt - sim.downPayment);
       totalFinancedSum += financed;
       totalInstallmentsSum += sim.installmentsCount;
-      const remainingN = sim.installmentsCount > 1 ? sim.installmentsCount - 1 : 0;
       if (sim.installmentValue && sim.installmentValue > 0) {
         totalAvgInstallmentSum += sim.installmentValue;
-      } else if (remainingN > 0) {
-        totalAvgInstallmentSum += (financed / remainingN);
+      } else if (sim.installmentsCount > 0) {
+        totalAvgInstallmentSum += (financed / sim.installmentsCount);
       }
     });
 
@@ -369,7 +371,7 @@ export function ParcelamentoSimulador() {
     }
     setEditingId(sim.id);
     const financed = Math.max(0, sim.totalDebt - sim.downPayment);
-    const fallbackVal = sim.installmentsCount > 1 ? financed / (sim.installmentsCount - 1) : 0;
+    const fallbackVal = sim.installmentsCount > 0 ? financed / sim.installmentsCount : 0;
     setInput({
       totalDebt: sim.totalDebt,
       downPayment: sim.downPayment,
@@ -428,8 +430,9 @@ export function ParcelamentoSimulador() {
     if (sim.installmentsCount <= 0) {
       return { totalPaid: 0, avgInstallment: 0 };
     }
-    const remainingN = sim.installmentsCount > 1 ? sim.installmentsCount - 1 : 0;
-    const pmt = remainingN > 0 ? principalToFinance / remainingN : 0;
+    const pmt = sim.installmentValue && sim.installmentValue > 0
+      ? sim.installmentValue
+      : (sim.installmentsCount > 0 ? principalToFinance / sim.installmentsCount : 0);
     return {
       totalPaid: sim.totalDebt,
       avgInstallment: pmt
@@ -491,33 +494,8 @@ export function ParcelamentoSimulador() {
     doc.setFillColor(accentColor.r, accentColor.g, accentColor.b);
     doc.rect(0, 35, pageWidth, 1.5, 'F');
 
-    const pdfLogo = getPdfLogoData();
-    const logoScale = getAppLogoScale();
+    // Logo removed by user request
     let hasDrawnLogo = false;
-    if (pdfLogo && pdfLogo.dataUrl) {
-      try {
-        let aspect = 1.54;
-        if (typeof doc.getImageProperties === 'function') {
-          try {
-            const imgProps = doc.getImageProperties(pdfLogo.dataUrl);
-            if (imgProps && imgProps.width && imgProps.height) {
-              aspect = imgProps.width / imgProps.height;
-            }
-          } catch (err) {}
-        }
-        let targetH = Math.min(12, 10 * logoScale);
-        let targetW = targetH * aspect;
-        if (targetW > 40) {
-          targetW = 40;
-          targetH = targetW / aspect;
-        }
-        const offsetY = Math.max(3, (35 - targetH) / 2);
-        doc.addImage(pdfLogo.dataUrl, pdfLogo.format || 'PNG', margin, offsetY, targetW, targetH);
-        hasDrawnLogo = true;
-      } catch (e) {
-        console.warn("Could not draw logo in simulation PDF:", e);
-      }
-    }
 
     const titleCenterX = pageWidth / 2;
 
