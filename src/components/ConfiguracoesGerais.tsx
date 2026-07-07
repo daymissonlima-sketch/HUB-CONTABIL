@@ -160,6 +160,13 @@ export function ConfiguracoesGerais() {
       }
     }
 
+    // Strict filter for MODULUS and CNPJ 37.345.284
+    mergedCompanies = mergedCompanies.filter(c => {
+      const name = (c.razaoSocial || '').toUpperCase();
+      const cnpj = (c.cnpj || '').replace(/\D/g, '');
+      return !name.includes('MODULUS') && !cnpj.includes('37345284');
+    });
+
     mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
     setCompanies(mergedCompanies);
 
@@ -208,7 +215,12 @@ export function ConfiguracoesGerais() {
 
   // Funções de Gestão de Empresas
   const saveCompaniesToStorage = (updatedList: Company[]) => {
-    const sorted = [...updatedList].sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+    const filtered = updatedList.filter(c => {
+      const name = (c.razaoSocial || '').toUpperCase();
+      const cnpj = (c.cnpj || '').replace(/\D/g, '');
+      return !name.includes('MODULUS') && !cnpj.includes('37345284');
+    });
+    const sorted = [...filtered].sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
     setCompanies(sorted);
     localStorage.setItem('moreira_lima_companies', JSON.stringify(sorted));
     window.dispatchEvent(new Event('moreira_lima_companies_updated'));

@@ -170,6 +170,13 @@ export function ParcelamentoSimulador() {
       }
     }
 
+    // Strict filter for MODULUS and CNPJ 37.345.284
+    mergedCompanies = mergedCompanies.filter(c => {
+      const name = (c.razaoSocial || '').toUpperCase();
+      const cnpj = (c.cnpj || '').replace(/\D/g, '');
+      return !name.includes('MODULUS') && !cnpj.includes('37345284');
+    });
+
     mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
 
     setCompanies(mergedCompanies);

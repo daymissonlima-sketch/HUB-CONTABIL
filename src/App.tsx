@@ -16,27 +16,48 @@ import { Comunicados } from './components/Comunicados';
 import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
 import { FileSpreadsheet, Briefcase, Menu, Calculator, Coins, Settings, Table, FileText, ShieldCheck } from 'lucide-react';
 
+// Synchronously purge all records referencing MODULUS or CNPJ 37.345.284/0001-68
+try {
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key) {
+      const val = localStorage.getItem(key);
+      if (val) {
+        const upperVal = val.toUpperCase();
+        const hasModulus = upperVal.includes('MODULUS') || val.includes('37345284') || val.includes('37.345.284');
+        if (hasModulus) {
+          if (key === 'moreira_lima_companies') {
+            try {
+              const list = JSON.parse(val);
+              if (Array.isArray(list)) {
+                const filtered = list.filter((c: any) => {
+                  const name = (c.razaoSocial || '').toUpperCase();
+                  const cnpj = (c.cnpj || '').replace(/\D/g, '');
+                  return !name.includes('MODULUS') && !cnpj.includes('37345284');
+                });
+                localStorage.setItem('moreira_lima_companies', JSON.stringify(filtered));
+              }
+            } catch {
+              localStorage.removeItem('moreira_lima_companies');
+            }
+          } else if (key === 'debt_client_info') {
+            localStorage.removeItem('debt_client_info');
+          } else if (key === 'debt_items') {
+            localStorage.removeItem('debt_items');
+          } else {
+            localStorage.removeItem(key);
+          }
+        }
+      }
+    }
+  }
+} catch (e) {}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<
     'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'conversor_nfce_siga' | 'comunicados' | 'opcao_simples_nacional'
   >('debit_levantamento');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
-
-  useEffect(() => {
-    try {
-      const keysToRemove: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key) {
-          const val = localStorage.getItem(key);
-          if (val && (val.toUpperCase().includes('MODULUS') || val.includes('37345284') || val.includes('37.345.284'))) {
-            keysToRemove.push(key);
-          }
-        }
-      }
-      keysToRemove.forEach(k => localStorage.removeItem(k));
-    } catch (e) {}
-  }, []);
 
   return (
     <div 

@@ -383,6 +383,13 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
         }
       }
 
+      // Strict filter for MODULUS and CNPJ 37.345.284
+      mergedCompanies = mergedCompanies.filter(c => {
+        const name = (c.razaoSocial || '').toUpperCase();
+        const cnpj = (c.cnpj || '').replace(/\D/g, '');
+        return !name.includes('MODULUS') && !cnpj.includes('37345284');
+      });
+
       mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
       setCompanies(mergedCompanies);
       localStorage.setItem('moreira_lima_companies', JSON.stringify(mergedCompanies));
@@ -423,7 +430,12 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
 
   // Save companies when changed
   const saveCompanies = (updatedList: Company[]) => {
-    const sorted = [...updatedList].sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+    const filtered = updatedList.filter(c => {
+      const name = (c.razaoSocial || '').toUpperCase();
+      const cnpj = (c.cnpj || '').replace(/\D/g, '');
+      return !name.includes('MODULUS') && !cnpj.includes('37345284');
+    });
+    const sorted = [...filtered].sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
     setCompanies(sorted);
     localStorage.setItem('moreira_lima_companies', JSON.stringify(sorted));
   };

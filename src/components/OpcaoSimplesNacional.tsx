@@ -67,23 +67,33 @@ export const OpcaoSimplesNacional: React.FC = () => {
     try {
       const saved = localStorage.getItem('moreira_lima_companies');
       if (saved) {
-        const parsed: Company[] = JSON.parse(saved);
+        const parsed: Company[] = JSON.parse(saved).filter((c: any) => {
+          const name = (c.razaoSocial || '').toUpperCase();
+          const cnpj = (c.cnpj || '').replace(/\D/g, '');
+          return !name.includes('MODULUS') && !cnpj.includes('37345284');
+        });
         setCompanies(parsed);
       } else {
-        const fallback: Company[] = (importedCompaniesJson as any[]).map((item, idx) => ({
-          id: item.id || `imp_${idx}`,
-          razaoSocial: item.razaoSocial || item.razao_social || 'Empresa Importada',
-          cnpj: item.cnpj || '',
-          regimeTributario: (item.regimeTributario || 'SIMPLES_NACIONAL') as any,
-          vendaVistaPercent: item.vendaVistaPercent ?? 60,
-          vendaPrazoPercent: item.vendaPrazoPercent ?? 40,
-          createdAt: new Date().toISOString(),
-          opcaoSimples: item.opcaoSimples ?? (item.regimeTributario === 'SIMPLES_NACIONAL'),
-          dataOpcaoSimples: item.dataOpcaoSimples || '',
-          dataExclusaoSimples: item.dataExclusaoSimples || '',
-          motivoExclusaoSimples: item.motivoExclusaoSimples || (item.dataExclusaoSimples ? 'Ato Administrativo / Desenquadramento RFB' : ''),
-          opcaoMei: item.opcaoMei || false
-        }));
+        const fallback: Company[] = (importedCompaniesJson as any[])
+          .filter((c: any) => {
+            const name = (c.razaoSocial || '').toUpperCase();
+            const cnpj = (c.cnpj || '').replace(/\D/g, '');
+            return !name.includes('MODULUS') && !cnpj.includes('37345284');
+          })
+          .map((item, idx) => ({
+            id: item.id || `imp_${idx}`,
+            razaoSocial: item.razaoSocial || item.razao_social || 'Empresa Importada',
+            cnpj: item.cnpj || '',
+            regimeTributario: (item.regimeTributario || 'SIMPLES_NACIONAL') as any,
+            vendaVistaPercent: item.vendaVistaPercent ?? 60,
+            vendaPrazoPercent: item.vendaPrazoPercent ?? 40,
+            createdAt: new Date().toISOString(),
+            opcaoSimples: item.opcaoSimples ?? (item.regimeTributario === 'SIMPLES_NACIONAL'),
+            dataOpcaoSimples: item.dataOpcaoSimples || '',
+            dataExclusaoSimples: item.dataExclusaoSimples || '',
+            motivoExclusaoSimples: item.motivoExclusaoSimples || (item.dataExclusaoSimples ? 'Ato Administrativo / Desenquadramento RFB' : ''),
+            opcaoMei: item.opcaoMei || false
+          }));
         setCompanies(fallback);
         localStorage.setItem('moreira_lima_companies', JSON.stringify(fallback));
       }
@@ -103,7 +113,12 @@ export const OpcaoSimplesNacional: React.FC = () => {
   }, []);
 
   const saveToStorage = (list: Company[]) => {
-    const sorted = [...list].sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+    const filtered = list.filter((c: any) => {
+      const name = (c.razaoSocial || '').toUpperCase();
+      const cnpj = (c.cnpj || '').replace(/\D/g, '');
+      return !name.includes('MODULUS') && !cnpj.includes('37345284');
+    });
+    const sorted = [...filtered].sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
     setCompanies(sorted);
     localStorage.setItem('moreira_lima_companies', JSON.stringify(sorted));
     window.dispatchEvent(new Event('moreira_lima_companies_updated'));

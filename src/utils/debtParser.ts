@@ -413,8 +413,8 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
   // Fallback default client info if empty
   if (!clientInfo.cnpj && !clientInfo.name) {
     clientInfo = {
-      cnpj: '12.345.678/0001-95',
-      name: 'EMPRESA EXEMPLO COMERCIO E SERVICOS LTDA'
+      cnpj: '',
+      name: ''
     };
   }
 
