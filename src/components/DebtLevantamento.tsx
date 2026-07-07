@@ -418,6 +418,7 @@ export function DebtLevantamento() {
   const [selectedCategory, setSelectedCategory] = useState<DebtCategory | null>(null);
   const [importStep, setImportStep] = useState<'select-category' | 'choose-method' | 'validate-debts' | 'success'>('select-category');
   const [categorySearchQuery, setCategorySearchQuery] = useState<string>('');
+  const [companySearchQuery, setCompanySearchQuery] = useState<string>('');
   const [isCreatingCategoryInWizard, setIsCreatingCategoryInWizard] = useState<boolean>(false);
   const [newCatTitle, setNewCatTitle] = useState<string>('');
   const [newCatOrigin, setNewCatOrigin] = useState<'FEDERAL' | 'ESTADUAL' | 'MUNICIPAL'>('FEDERAL');
@@ -2435,31 +2436,149 @@ export function DebtLevantamento() {
                     </div>
                   </div>
 
-                  {/* Client / Contribuinte identification inside validation if extracted */}
-                  {(tempClientInfo.cnpj || tempClientInfo.name) && (
-                    <div className="bg-white p-3 rounded-2xl border border-slate-150 flex flex-col md:flex-row gap-3 justify-between items-start md:items-center text-xs">
+                  {/* Company linking widget */}
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 pb-2.5">
                       <div>
-                        <p className="text-[10px] font-black text-slate-400 uppercase">Nome Identificado</p>
-                        <p className="font-extrabold text-[#04243b]">{tempClientInfo.name || 'Não identificado'}</p>
+                        <h4 className="text-xs font-black text-[#04243b] uppercase tracking-wider">
+                          Empresa Vinculada ao Lançamento
+                        </h4>
+                        <p className="text-[10px] text-slate-500">
+                          Selecione uma das empresas cadastradas ou pesquise para associar os débitos corretamente.
+                        </p>
                       </div>
-                      <div>
-                        <p className="text-[10px] font-black text-slate-400 uppercase">CNPJ Identificado</p>
-                        <p className="font-mono font-bold text-slate-700">{tempClientInfo.cnpj || 'Não identificado'}</p>
+                      {tempClientInfo.cnpj && (
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800 animate-pulse">
+                            VINCULADO
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTempClientInfo({ cnpj: '', name: '' });
+                              setCompanySearchQuery('');
+                              showTempNotification('Empresa desvinculada.');
+                            }}
+                            className="text-[10px] font-bold text-red-500 hover:text-red-700 hover:underline"
+                          >
+                            Desvincular
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Left: Search and Select */}
+                      <div className="space-y-2">
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase">
+                          Pesquisar Empresa Cadastrada
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={companySearchQuery}
+                            onChange={(e) => setCompanySearchQuery(e.target.value)}
+                            placeholder="Buscar por Razão Social ou CNPJ..."
+                            className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#e4b35e] transition"
+                          />
+                          {companySearchQuery && (
+                            <button
+                              type="button"
+                              onClick={() => setCompanySearchQuery('')}
+                              className="absolute right-2 top-2 text-[10px] text-slate-400 hover:text-slate-600 font-bold"
+                            >
+                              Limpar
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Dropdown list of registered companies matching */}
+                        <div className="max-h-32 overflow-y-auto border border-slate-150 rounded-lg divide-y divide-slate-100 text-xs bg-white shadow-inner">
+                          {registeredCompanies.filter(c => {
+                            const query = companySearchQuery.toLowerCase();
+                            return (
+                              c.razaoSocial.toLowerCase().includes(query) ||
+                              c.cnpj.replace(/\D/g, '').includes(query) ||
+                              c.cnpj.includes(query)
+                            );
+                          }).length === 0 ? (
+                            <div className="p-3 text-center text-slate-400 italic text-[11px]">
+                              Nenhuma empresa cadastrada corresponde à busca.
+                            </div>
+                          ) : (
+                            registeredCompanies
+                              .filter(c => {
+                                const query = companySearchQuery.toLowerCase();
+                                return (
+                                  c.razaoSocial.toLowerCase().includes(query) ||
+                                  c.cnpj.replace(/\D/g, '').includes(query) ||
+                                  c.cnpj.includes(query)
+                                );
+                              })
+                              .map(c => {
+                                const isSelected = tempClientInfo.cnpj === c.cnpj;
+                                return (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setTempClientInfo({ cnpj: c.cnpj, name: c.razaoSocial });
+                                      setCompanySearchQuery(''); // clear search on select
+                                    }}
+                                    className={`w-full text-left p-2.5 transition flex justify-between items-center ${
+                                      isSelected
+                                        ? 'bg-amber-50 text-[#04243b] font-bold'
+                                        : 'hover:bg-slate-50 text-slate-700'
+                                    }`}
+                                  >
+                                    <div className="truncate pr-2">
+                                      <p className="font-extrabold truncate text-[11px]">{c.razaoSocial}</p>
+                                      <p className="font-mono text-[9px] text-slate-500">{c.cnpj}</p>
+                                    </div>
+                                    <span className={`text-[10px] shrink-0 font-bold px-2 py-0.5 rounded-md ${
+                                      isSelected ? 'bg-[#e4b35e] text-[#04243b]' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                    }`}>
+                                      {isSelected ? 'Selecionada' : 'Selecionar'}
+                                    </span>
+                                  </button>
+                                );
+                              })
+                          )}
+                        </div>
                       </div>
-                      <div className="border-t md:border-t-0 md:border-l border-slate-200 pt-2 md:pt-0 md:pl-4">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTempClientInfo({ cnpj: '', name: '' });
-                            showTempNotification('Dados do contribuinte descartados da importação.');
-                          }}
-                          className="text-red-500 hover:text-red-700 font-bold hover:underline"
-                        >
-                          Desconsiderar estes dados
-                        </button>
+
+                      {/* Right: Current Active Info View/Manual Form */}
+                      <div className="bg-slate-50 p-3 rounded-xl border border-slate-150 flex flex-col justify-between space-y-2">
+                        <div>
+                          <span className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                            Dados Atuais da Empresa do Lançamento
+                          </span>
+                          <div className="space-y-1.5 text-xs">
+                            <div>
+                              <p className="text-[9px] font-extrabold text-slate-400 uppercase">Razão Social</p>
+                              <input
+                                type="text"
+                                value={tempClientInfo.name || ''}
+                                onChange={(e) => setTempClientInfo(prev => ({ ...prev, name: e.target.value }))}
+                                placeholder="Razão social identificada..."
+                                className="w-full text-xs px-2 py-1 bg-white border border-slate-200 rounded-md focus:outline-none focus:border-[#e4b35e] font-bold text-[#04243b]"
+                              />
+                            </div>
+                            <div>
+                              <p className="text-[9px] font-extrabold text-slate-400 uppercase">CNPJ</p>
+                              <input
+                                type="text"
+                                value={tempClientInfo.cnpj || ''}
+                                onChange={(e) => setTempClientInfo(prev => ({ ...prev, cnpj: e.target.value }))}
+                                placeholder="00.000.000/0000-00"
+                                className="w-full text-xs px-2 py-1 bg-white border border-slate-200 rounded-md focus:outline-none focus:border-[#e4b35e] font-mono text-slate-700 font-bold"
+                              />
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  )}
+                  </div>
 
                   {/* Grouped Editable Tables by Category */}
                   {tempParsedDebts.length === 0 ? (

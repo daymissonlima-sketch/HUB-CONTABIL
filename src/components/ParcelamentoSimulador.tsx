@@ -431,10 +431,14 @@ export function ParcelamentoSimulador() {
 
   // Generate Report in PDF with corporate identity containing ALL simulations for the active company
   const handleGeneratePDF = () => {
-    const doc = new jsPDF();
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+    });
     const margin = 14;
-    const pageWidth = doc.internal.pageSize.width;
-    const pageHeight = doc.internal.pageSize.height;
+    const pageWidth = typeof doc.internal.pageSize.getWidth === 'function' ? doc.internal.pageSize.getWidth() : (doc.internal.pageSize.width || 210);
+    const pageHeight = typeof doc.internal.pageSize.getHeight === 'function' ? doc.internal.pageSize.getHeight() : (doc.internal.pageSize.height || 297);
  
     // Corporate Color Scheme
     const primaryColor = { r: 4, g: 36, b: 59 };    // #04243b (Deep Blue)
@@ -445,7 +449,7 @@ export function ParcelamentoSimulador() {
     let totalPages = 1;
  
     // Helper to draw Footer
-    const drawFooter = (pageNum: number) => {
+    const drawFooter = (pageNum: number, totalCount: number) => {
       doc.setDrawColor(203, 213, 225);
       doc.setLineWidth(0.3);
       doc.line(margin, pageHeight - 14, pageWidth - margin, pageHeight - 14);
@@ -453,7 +457,7 @@ export function ParcelamentoSimulador() {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(7.5);
       doc.setTextColor(100, 116, 139);
-      doc.text(`Página ${pageNum} de ${totalPages}`, pageWidth - margin, pageHeight - 9, { align: 'right' });
+      doc.text(`Página ${pageNum} de ${totalCount}`, pageWidth - margin, pageHeight - 9, { align: 'right' });
     };
 
     const drawCompactHeader = () => {
@@ -475,53 +479,66 @@ export function ParcelamentoSimulador() {
 
     // Header Block (First page) with dark blue background
     doc.setFillColor(primaryColor.r, primaryColor.g, primaryColor.b);
-    doc.rect(0, 0, pageWidth, 30, 'F');
+    doc.rect(0, 0, pageWidth, 35, 'F');
 
     doc.setFillColor(accentColor.r, accentColor.g, accentColor.b);
-    doc.rect(0, 30, pageWidth, 1.5, 'F');
+    doc.rect(0, 35, pageWidth, 1.5, 'F');
 
     const pdfLogo = getPdfLogoData();
     const logoScale = getAppLogoScale();
     let hasDrawnLogo = false;
     if (pdfLogo && pdfLogo.dataUrl) {
       try {
-        const imgProps = doc.getImageProperties(pdfLogo.dataUrl);
-        const aspect = (imgProps.width && imgProps.height) ? (imgProps.width / imgProps.height) : 1.54;
-        let targetH = Math.min(17, 14 * logoScale);
+        let aspect = 1.54;
+        if (typeof doc.getImageProperties === 'function') {
+          try {
+            const imgProps = doc.getImageProperties(pdfLogo.dataUrl);
+            if (imgProps && imgProps.width && imgProps.height) {
+              aspect = imgProps.width / imgProps.height;
+            }
+          } catch (err) {}
+        }
+        let targetH = Math.min(12, 10 * logoScale);
         let targetW = targetH * aspect;
-        if (targetW > 52) {
-          targetW = 52;
+        if (targetW > 40) {
+          targetW = 40;
           targetH = targetW / aspect;
         }
-        const offsetY = Math.max(4, (30 - targetH) / 2);
+        const offsetY = Math.max(3, (35 - targetH) / 2);
         doc.addImage(pdfLogo.dataUrl, pdfLogo.format || 'PNG', margin, offsetY, targetW, targetH);
         hasDrawnLogo = true;
       } catch (e) {
-        doc.addImage(pdfLogo.dataUrl, pdfLogo.format || 'PNG', margin, 7, 30, 16);
-        hasDrawnLogo = true;
+        console.warn("Could not draw logo in simulation PDF:", e);
       }
     }
 
-    if (!hasDrawnLogo) {
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(13);
-      doc.text('MOREIRA & LIMA CONTADORES', margin, 17);
-    }
-  
-    // Document Title & Metadata centered in the middle of the sheet
     const titleCenterX = pageWidth / 2;
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13.5);
-    doc.text('SIMULAÇÕES DE PARCELAMENTO', titleCenterX, 13.5, { align: 'center' });
-    doc.setFontSize(8.5);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(210, 220, 230);
-    doc.text(`Emissão: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`, titleCenterX, 19.5, { align: 'center' });
 
-    // Active Company Box (Y: 36 to Y: 52)
-    let currentY = 36;
+    // 1. "Moreira & Lima" (Gold accent color)
+    doc.setTextColor(accentColor.r, accentColor.g, accentColor.b);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.text('Moreira & Lima', titleCenterX, 9.5, { align: 'center' });
+
+    // 2. "CONTADORES ASSOCIADOS" (Gold accent color)
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CONTADORES ASSOCIADOS', titleCenterX, 15, { align: 'center' });
+
+    // 3. Document Title: "SIMULAÇÕES DE PARCELAMENTO" (White)
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(12.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SIMULAÇÕES DE PARCELAMENTO', titleCenterX, 22.5, { align: 'center' });
+
+    // 4. "Emissão: DD/MM/AAAA às HH:MM"
+    doc.setTextColor(210, 220, 230);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Emissão: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`, titleCenterX, 29, { align: 'center' });
+
+    // Active Company Box (Y: 41 to Y: 57)
+    let currentY = 41;
     doc.setFillColor(grayBg.r, grayBg.g, grayBg.b);
     doc.rect(margin, currentY, pageWidth - (margin * 2), 16, 'F');
     doc.setDrawColor(borderGray.r, borderGray.g, borderGray.b);
@@ -544,7 +561,7 @@ export function ParcelamentoSimulador() {
     doc.text(companyLabel, margin + 6, currentY + 11);
 
     // Simulations list
-    currentY = 58;
+    currentY = 63;
 
     const listToPrint = simulations.length > 0 ? simulations : [
       {
@@ -558,7 +575,6 @@ export function ParcelamentoSimulador() {
 
       // Check for page overflow before rendering next simulation panel (height is 32)
       if (currentY + 38 > pageHeight - 35) {
-        drawFooter(totalPages);
         doc.addPage();
         totalPages++;
         
@@ -612,7 +628,6 @@ export function ParcelamentoSimulador() {
 
     // Check overflow for Consolidated totals and final blocks
     if (currentY + 35 > pageHeight - 35) {
-      drawFooter(totalPages);
       doc.addPage();
       totalPages++;
       
@@ -648,8 +663,12 @@ export function ParcelamentoSimulador() {
       currentY += 28;
     }
 
-    // Draw final page footer
-    drawFooter(totalPages);
+    // --- APPLY PAGE DECORATIONS (FOOTER) TO ALL PAGES ---
+    const totalPagesCount = typeof doc.getNumberOfPages === 'function' ? doc.getNumberOfPages() : totalPages;
+    for (let i = 1; i <= totalPagesCount; i++) {
+      doc.setPage(i);
+      drawFooter(i, totalPagesCount);
+    }
 
     // Save File
     const compNameClean = (selectedCompany ? selectedCompany.razaoSocial : 'geral').toLowerCase().replace(/[^a-z0-9]/g, '_');

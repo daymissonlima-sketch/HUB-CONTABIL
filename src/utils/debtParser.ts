@@ -413,8 +413,8 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
   // Fallback default client info if empty
   if (!clientInfo.cnpj && !clientInfo.name) {
     clientInfo = {
-      cnpj: '37.345.284/0001-68',
-      name: 'MODULUS ENGENHARIA SERVICOS E SOLUCOES LTDA'
+      cnpj: '12.345.678/0001-95',
+      name: 'EMPRESA EXEMPLO COMERCIO E SERVICOS LTDA'
     };
   }
 
@@ -424,13 +424,13 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
 // Quick samples for users to test
 export const SAMPLE_RECEITA_FEDERAL = `
 MINISTÉRIO DA FAZENDA Por meio do Portal de Serviços da Receita Federal
-SECRETARIA ESPECIAL DA RECEITA FEDERAL DO BRASIL CNPJ do certificado: 37.345.284/0001-68
+SECRETARIA ESPECIAL DA RECEITA FEDERAL DO BRASIL CNPJ do certificado: 12.345.678/0001-95
 PROCURADORIA-GERAL DA FAZENDA NACIONAL 25/06/2026 08:43:01
 INFORMAÇÕES DE APOIO PARA EMISSÃO DE CERTIDÃO
-CNPJ: 37.345.284 - MODULUS ENGENHARIA SERVICOS E SOLUCOES LTDA
+CNPJ: 12.345.678 - EMPRESA EXEMPLO COMERCIO E SERVICOS LTDA
 
 Pendência - Parcelamento (PARCSN/PARCMEI) _______________________________________________________________________
-CNPJ: 37.345.284/0001-68
+CNPJ: 12.345.678/0001-95
 MEI - EM PARCELAMENTO
 Parcelas em atraso
 5
@@ -439,7 +439,7 @@ Parcelas em atraso
 3
 
 Pendência - Débito (SIEF) _______________________________________________________________________________________
-CNPJ: 37.345.284/0001-68
+CNPJ: 12.345.678/0001-95
 Receita PA/Exerc. Dt. Vcto Vl. Original Sdo. Devedor Multa Juros Sdo. Dev. Cons. Situação
 1099-01 - CP-SEGUR. 01/2026 20/02/2026 440,00 440,00 88,00 19,22 547,22 DEVEDOR
 1099-01 - CP-SEGUR. 02/2026 20/03/2026 440,00 440,00 88,00 13,90 541,90 DEVEDOR
@@ -448,7 +448,7 @@ Receita PA/Exerc. Dt. Vcto Vl. Original Sdo. Devedor Multa Juros Sdo. Dev. Cons.
 SIMPLES NACIONAL. 03/2026 20/04/2026 298,84 298,84 59,76 6,18 364,78 DEVEDOR
 
 Pendência – Parcelamento (SIEFPAR) ______________________________________________________________________________
-CNPJ: 37.345.284/0001-68
+CNPJ: 12.345.678/0001-95
 Parcelamento: 0211.00012.0013744355.26-73 Parcelas em Atraso: 3 Valor em Atraso: 1.589,34
 Parcelamento Simplificado
 `;
@@ -463,7 +463,7 @@ export const SAMPLE_SEFAZ = `
 export const SAMPLE_SEFIN = `
 SEFIN - SECRETARIA MUNICIPAL DAS FINANÇAS
 EXTRATO DE DÉBITOS EM ABERTO - ISSQN
-CNPJ: 37.345.284/0001-68 - MODULUS ENGENHARIA SERVICOS E SOLUCOES LTDA
+CNPJ: 12.345.678/0001-95 - EMPRESA EXEMPLO COMERCIO E SERVICOS LTDA
 
 ISS 03/2026 Principal 900,00 Multa 90,00 Juros 18,00
 ISS 04/2026 Principal 1.150,00 Multa 115,00 Juros 23,00
