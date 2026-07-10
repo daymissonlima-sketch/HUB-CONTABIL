@@ -15,8 +15,20 @@ import {
   RefreshCw, 
   FileText,
   DollarSign,
-  Calendar
+  Calendar,
+  ShieldAlert,
+  FileCheck2,
+  ArrowLeft,
+  ClipboardCheck,
+  X,
+  AlertCircle
 } from 'lucide-react';
+import { 
+  executeDataAudit, 
+  exportAuditExcel, 
+  AuditItem, 
+  AuditSummary 
+} from '../utils/auditHelper';
 
 export interface InvoiceRow {
   id: string;
@@ -493,6 +505,16 @@ export function ConversorNfceSiga() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'valid' | 'invalid'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // States for Bilateral Audit Layer
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState<boolean>(false);
+  const [isAuditActive, setIsAuditActive] = useState<boolean>(false);
+  const [auditItems, setAuditItems] = useState<AuditItem[]>([]);
+  const [auditSummary, setAuditSummary] = useState<AuditSummary | null>(null);
+  const [auditSearchTerm, setAuditSearchTerm] = useState<string>('');
+  const [auditFilterStatus, setAuditFilterStatus] = useState<'all' | 'OK' | 'FALTANTE_ERP' | 'NAO_CONSTA_SEFAZ' | 'SALTO_SEQUENCIA'>('all');
+  const [dragOverModal, setDragOverModal] = useState<boolean>(false);
+  const erpFileInputRef = useRef<HTMLInputElement>(null);
+
   const stats = useMemo(() => calculateStats(rows), [rows]);
 
   const filteredRows = useMemo(() => {
@@ -516,6 +538,22 @@ export function ConversorNfceSiga() {
     });
   }, [rows, searchTerm, filterStatus]);
 
+  const filteredAuditItems = useMemo(() => {
+    return auditItems.filter(item => {
+      const matchesSearch = !auditSearchTerm ||
+        item.nota.toString().includes(auditSearchTerm) ||
+        (item.chaveDeAcesso && item.chaveDeAcesso.toLowerCase().includes(auditSearchTerm.toLowerCase())) ||
+        (item.cliente && item.cliente.toLowerCase().includes(auditSearchTerm.toLowerCase()));
+
+      let matchesStatus = true;
+      if (auditFilterStatus !== 'all') {
+        matchesStatus = item.status === auditFilterStatus;
+      }
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [auditItems, auditSearchTerm, auditFilterStatus]);
+
   const handleFileProcess = (file: File) => {
     if (!file) return;
     setFileName(file.name);
@@ -525,6 +563,22 @@ export function ConversorNfceSiga() {
       if (text) {
         const parsed = parseCSV(text);
         setRows(parsed);
+      }
+    };
+    reader.readAsText(file, 'utf-8');
+  };
+
+  const handleErpFileProcess = (file: File) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      if (text) {
+        const { items, summary } = executeDataAudit(rows, text);
+        setAuditItems(items);
+        setAuditSummary(summary);
+        setIsAuditModalOpen(false);
+        setIsAuditActive(true);
       }
     };
     reader.readAsText(file, 'utf-8');
@@ -543,8 +597,266 @@ export function ConversorNfceSiga() {
     setFileName('');
     setSearchTerm('');
     setFilterStatus('all');
+    // Clear Audit state
+    setIsAuditActive(false);
+    setAuditItems([]);
+    setAuditSummary(null);
+    setAuditSearchTerm('');
+    setAuditFilterStatus('all');
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (erpFileInputRef.current) erpFileInputRef.current.value = '';
   };
+
+  if (isAuditActive && auditSummary) {
+    return (
+      <div className="space-y-6 animate-fadeIn">
+        {/* Title Block of Audit */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="p-2 rounded-xl bg-[#04243b] text-[#e4b35e]">
+                <FileCheck2 className="w-5 h-5" />
+              </span>
+              <h2 className="text-lg font-extrabold text-[#04243b] tracking-tight">
+                Auditoria de Confronto de Dados
+              </h2>
+            </div>
+            <p className="text-xs text-slate-500 mt-1 ml-9">
+              Visualização cruzada entre a base da SEFAZ (SIGA) e o Relatório do ERP Contábil.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => exportAuditExcel(auditItems, auditSummary)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-bold text-xs transition-all shadow-xs cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              Exportar Relatório (.XLSX)
+            </button>
+            <button
+              onClick={() => setIsAuditActive(false)}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 font-bold text-xs transition-all cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Voltar ao Conversor
+            </button>
+          </div>
+        </div>
+
+        {/* Compliance Dashboard KPI Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Sincronizadas (OK)</span>
+              <span className="text-xl font-black text-emerald-600 font-mono mt-0.5 block">{auditSummary.sincronizadas}</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">Presente nas duas bases</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Faltantes no ERP</span>
+              <span className="text-xl font-black text-red-600 font-mono mt-0.5 block">{auditSummary.faltantesErp}</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">Consta na SEFAZ, não no ERP</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Não Consta na SEFAZ</span>
+              <span className="text-xl font-black text-amber-600 font-mono mt-0.5 block">{auditSummary.naoConstamSefaz}</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">Consta no ERP, não na SEFAZ</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Saltos de Sequência</span>
+              <span className="text-xl font-black text-orange-600 font-mono mt-0.5 block">{auditSummary.saltosSequencia}</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">Falta na SEFAZ e no ERP</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center">
+              <AlertCircle className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+
+        {/* Audit List Table with search and status filter */}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 bg-slate-50/50">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-xs uppercase tracking-wider text-[#04243b]">
+                Relatório Cruzado de Auditoria
+              </span>
+              <span className="px-2 py-0.5 rounded-md bg-[#04243b] text-white text-[10px] font-bold font-mono">
+                {filteredAuditItems.length} registros
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+              <div className="relative flex-grow sm:w-64">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={auditSearchTerm}
+                  onChange={(e) => setAuditSearchTerm(e.target.value)}
+                  placeholder="Buscar nota, chave, emitente..."
+                  className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:border-[#04243b]"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1 bg-white border border-slate-200 rounded-xl p-0.5">
+                <button
+                  onClick={() => setAuditFilterStatus('all')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer ${
+                    auditFilterStatus === 'all' ? 'bg-[#04243b] text-white' : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Todas ({auditItems.length})
+                </button>
+                <button
+                  onClick={() => setAuditFilterStatus('OK')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer ${
+                    auditFilterStatus === 'OK' ? 'bg-emerald-700 text-white' : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  OK ({auditSummary.sincronizadas})
+                </button>
+                <button
+                  onClick={() => setAuditFilterStatus('FALTANTE_ERP')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer ${
+                    auditFilterStatus === 'FALTANTE_ERP' ? 'bg-red-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Faltante ERP ({auditSummary.faltantesErp})
+                </button>
+                <button
+                  onClick={() => setAuditFilterStatus('NAO_CONSTA_SEFAZ')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer ${
+                    auditFilterStatus === 'NAO_CONSTA_SEFAZ' ? 'bg-amber-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Falta SEFAZ ({auditSummary.naoConstamSefaz})
+                </button>
+                <button
+                  onClick={() => setAuditFilterStatus('SALTO_SEQUENCIA')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer ${
+                    auditFilterStatus === 'SALTO_SEQUENCIA' ? 'bg-orange-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Salto ({auditSummary.saltosSequencia})
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto max-h-[500px]">
+            <table className="w-full text-left border-collapse">
+              <thead className="bg-slate-100 text-slate-600 uppercase text-[10px] font-bold tracking-wider sticky top-0 z-10 border-b border-slate-200">
+                <tr>
+                  <th className="py-3 px-4">Status de Auditoria</th>
+                  <th className="py-3 px-4">Nº Nota</th>
+                  <th className="py-3 px-4">Série</th>
+                  <th className="py-3 px-4 text-right">Valor SEFAZ</th>
+                  <th className="py-3 px-4 text-right">Valor ERP</th>
+                  <th className="py-3 px-4 text-center">Diferença de Valor</th>
+                  <th className="py-3 px-4">Data Emissão</th>
+                  <th className="py-3 px-4">Info Adicional</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {filteredAuditItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="text-center py-8 text-slate-400">
+                      Nenhum registro encontrado com os filtros atuais de auditoria.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredAuditItems.map((item) => {
+                    const diff = (item.sefazValue !== undefined && item.erpValue !== undefined) 
+                      ? Number((item.sefazValue - item.erpValue).toFixed(2))
+                      : 0;
+                    const hasValueDiff = Math.abs(diff) > 0.01;
+
+                    return (
+                      <tr key={`audit-${item.nota}`} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-2.5 px-4">
+                          {item.status === 'OK' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-[10px] border border-emerald-200 font-sans">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              OK - Sincronizado
+                            </span>
+                          ) : item.status === 'FALTANTE_ERP' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-red-50 text-red-700 font-bold text-[10px] border border-red-200 font-sans">
+                              <ShieldAlert className="w-3 h-3 text-red-600" />
+                              Faltante no ERP
+                            </span>
+                          ) : item.status === 'NAO_CONSTA_SEFAZ' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-amber-50 text-amber-700 font-bold text-[10px] border border-amber-200 font-sans">
+                              <AlertTriangle className="w-3 h-3 text-amber-600" />
+                              Não Consta na SEFAZ
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-orange-50 text-orange-700 font-bold text-[10px] border border-orange-200 font-sans">
+                              <AlertCircle className="w-3 h-3 text-orange-600" />
+                              Salto de Sequência
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-4 font-mono font-bold text-[#04243b]">
+                          {item.nota}
+                        </td>
+                        <td className="py-2.5 px-4 font-mono text-slate-600">
+                          {item.serie || '1'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-700">
+                          {item.sefazValue !== undefined ? `R$ ${item.sefazValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-700">
+                          {item.erpValue !== undefined ? `R$ ${item.erpValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-center">
+                          {item.status === 'OK' ? (
+                            hasValueDiff ? (
+                              <span className="inline-block px-2 py-0.5 rounded bg-red-50 text-red-700 font-bold text-[10px] border border-red-100 font-sans">
+                                Dif: R$ {diff.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              </span>
+                            ) : (
+                              <span className="inline-block px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold text-[10px] border border-emerald-100 font-sans">
+                                Valores Batem
+                              </span>
+                            )
+                          ) : (
+                            <span className="text-slate-400 font-mono">-</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-4 text-slate-600 font-mono text-[11px]">
+                          {item.sefazDate || item.erpDate || '-'}
+                        </td>
+                        <td className="py-2.5 px-4 font-mono text-[10px] text-slate-500 max-w-xs truncate" title={item.chaveDeAcesso || item.cliente}>
+                          {item.chaveDeAcesso || item.cliente || '-'}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -579,6 +891,13 @@ export function ConversorNfceSiga() {
             >
               <Download className="w-4 h-4" />
               Exportar Detalhado
+            </button>
+            <button
+              onClick={() => setIsAuditModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl border-2 border-[#e4b35e] text-[#04243b] hover:bg-[#e4b35e]/10 bg-transparent font-extrabold text-xs transition-all shadow-xs cursor-pointer"
+            >
+              <ClipboardCheck className="w-4 h-4 text-[#e4b35e]" />
+              Executar Auditoria de Dados
             </button>
             <button
               onClick={resetAll}
@@ -780,6 +1099,87 @@ export function ConversorNfceSiga() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Modal de Upload do ERP */}
+      {isAuditModalOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl max-w-lg w-full overflow-hidden animate-fadeIn">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-2">
+                <ClipboardCheck className="w-5 h-5 text-[#C5A059]" />
+                <h3 className="font-extrabold text-[#001F3F] text-sm uppercase tracking-tight font-sans">
+                  Iniciar Auditoria de Dados
+                </h3>
+              </div>
+              <button 
+                onClick={() => setIsAuditModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-slate-500 leading-relaxed font-sans">
+                Para confrontar as notas fiscais processadas da SEFAZ com o seu ERP Contábil, faça o upload do relatório de acompanhamento de saídas de faturamento.
+              </p>
+
+              <div 
+                onDragOver={(e) => { e.preventDefault(); setDragOverModal(true); }}
+                onDragLeave={() => setDragOverModal(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverModal(false);
+                  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    handleErpFileProcess(e.dataTransfer.files[0]);
+                  }
+                }}
+                onClick={() => erpFileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer flex flex-col items-center justify-center ${
+                  dragOverModal 
+                    ? 'border-[#e4b35e] bg-[#e4b35e]/5' 
+                    : 'border-slate-300 hover:border-[#04243b] hover:bg-slate-50/50'
+                }`}
+              >
+                <input 
+                  ref={erpFileInputRef}
+                  type="file" 
+                  accept=".csv,.txt"
+                  onChange={(e) => e.target.files && handleErpFileProcess(e.target.files[0])}
+                  className="hidden" 
+                />
+                <div className="w-12 h-12 rounded-xl bg-[#04243b]/5 text-[#04243b] flex items-center justify-center mb-3">
+                  <Upload className="w-6 h-6 text-[#e4b35e]" />
+                </div>
+                <h4 className="text-xs font-bold text-[#04243b] font-sans">
+                  Selecione ou arraste o Relatório do ERP
+                </h4>
+                <p className="text-[10px] text-slate-400 mt-1 font-sans">
+                  Suporta arquivos .csv ou .txt (delimitador ponto e vírgula)
+                </p>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-100 p-3 rounded-xl">
+                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block font-sans">
+                  Instruções de Formato ERP
+                </span>
+                <span className="text-[10px] text-slate-500 mt-1 block leading-relaxed font-sans">
+                  O relatório contábil deve conter colunas de <strong className="text-slate-700 font-sans">Nota</strong>, <strong className="text-slate-700 font-sans">Data Emissão</strong>, <strong className="text-slate-700 font-sans">Série</strong> e <strong className="text-slate-700 font-sans">Valor Contábil</strong>.
+                </span>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50/50 border-t border-slate-100 flex justify-end gap-2">
+              <button
+                onClick={() => setIsAuditModalOpen(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all cursor-pointer font-sans"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
