@@ -14,7 +14,8 @@ import { ConfiguracoesGerais } from './components/ConfiguracoesGerais';
 import { ConversorNfceSiga } from './components/ConversorNfceSiga';
 import { Comunicados } from './components/Comunicados';
 import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
-import { FileSpreadsheet, Briefcase, Menu, Calculator, Coins, Settings, Table, FileText, ShieldCheck } from 'lucide-react';
+import { ChaveSanitizer } from './components/ChaveSanitizer';
+import { FileSpreadsheet, Briefcase, Menu, Calculator, Coins, Settings, Table, FileText, ShieldCheck, Sparkles } from 'lucide-react';
 
 // Synchronously purge all records referencing MODULUS or CNPJ 37.345.284/0001-68
 try {
@@ -55,7 +56,7 @@ try {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'conversor_nfce_siga' | 'comunicados' | 'opcao_simples_nacional'
+    'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'conversor_nfce_siga' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
   >('debit_levantamento');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
@@ -118,6 +119,20 @@ export default function App() {
               >
                 <Table className="h-4.5 w-4.5 shrink-0" />
                 <span className="hidden sm:inline md:inline">Conversor NFC-e - SIGA</span>
+              </button>
+
+              {/* Button: Saneador de Chaves */}
+              <button
+                onClick={() => setActiveTab('chave_sanitizer')}
+                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
+                  activeTab === 'chave_sanitizer'
+                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
+                    : 'hover:bg-[#031d30] text-slate-300'
+                }`}
+                title="Saneador de Chaves de Acesso (Modelos 55 e 65)"
+              >
+                <Sparkles className="h-4.5 w-4.5 shrink-0" />
+                <span className="hidden sm:inline md:inline">Saneador de Chaves</span>
               </button>
 
               {/* Button 3: Debt Levantamento (Existing module) */}
@@ -240,6 +255,8 @@ export default function App() {
             <ParcelamentoSimulador />
           ) : activeTab === 'conversor_nfce_siga' ? (
             <ConversorNfceSiga />
+          ) : activeTab === 'chave_sanitizer' ? (
+            <ChaveSanitizer />
           ) : activeTab === 'comunicados' ? (
             <Comunicados />
           ) : activeTab === 'opcao_simples_nacional' ? (
