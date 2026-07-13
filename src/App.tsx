@@ -115,10 +115,10 @@ export default function App() {
                     ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
                     : 'hover:bg-[#031d30] text-slate-300'
                 }`}
-                title="Conversor NFC-e - SIGA (CSV para Excel)"
+                title="Auditoria Fiscal - SIGA (Conversor e Auditoria)"
               >
                 <Table className="h-4.5 w-4.5 shrink-0" />
-                <span className="hidden sm:inline md:inline">Conversor NFC-e - SIGA</span>
+                <span className="hidden sm:inline md:inline">Auditoria Fiscal - SIGA</span>
               </button>
 
               {/* Button: Saneador de Chaves */}

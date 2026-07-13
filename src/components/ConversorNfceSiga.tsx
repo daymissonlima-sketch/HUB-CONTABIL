@@ -21,489 +21,46 @@ import {
   ArrowLeft,
   ClipboardCheck,
   X,
-  AlertCircle
+  AlertCircle,
+  Table
 } from 'lucide-react';
 import { 
   executeDataAudit, 
   exportAuditExcel, 
+  parseSefazReport,
   AuditItem, 
-  AuditSummary 
+  AuditSummary,
+  InvoiceRow,
+  parseCurrencySafe,
+  parseSefazReportAsync,
+  parseErpReportAsync,
+  executeDataAuditAsync
 } from '../utils/auditHelper';
-
-export interface InvoiceRow {
-  id: string;
-  chaveDeAcesso: string;
-  dataEmissao: string;
-  valorString: string;
-  valorDecimal: number;
-  ufCodigo: string;
-  ufNome: string;
-  anoMes: string;
-  cnpj: string;
-  cnpjFormatado: string;
-  modelo: string;
-  serie: string;
-  numeroNota: string;
-  numeroNotaFormatado: string;
-  tipoEmissao: string;
-  tipoEmissaoFriendly: string;
-  isValidChave: boolean;
-  chaveError?: string;
-}
-
-export interface StatsData {
-  totalCount: number;
-  totalValor: number;
-  minValor: number;
-  maxValor: number;
-  statesDistribution: Record<string, number>;
-  seriesDistribution: Record<string, number>;
-  modeloDistribution: Record<string, number>;
-  periodo: { inicio: string; fim: string } | null;
-}
 
 const BRAND_CONFIG = {
   COMPANY_NAME: 'MOREIRA & LIMA CONTADORES ASSOCIADOS',
   SUBTITLE: 'RELATÓRIO DE FATURAMENTO NFC-E (INTEGRAÇÃO SIGA)',
 } as const;
 
-const UF_MAP: Record<string, { sigla: string; nome: string }> = {
-  '11': { sigla: 'RO', nome: 'Rondônia' }, '12': { sigla: 'AC', nome: 'Acre' },
-  '13': { sigla: 'AM', nome: 'Amazonas' }, '14': { sigla: 'RR', nome: 'Roraima' },
-  '15': { sigla: 'PA', nome: 'Pará' }, '16': { sigla: 'AP', nome: 'Amapá' },
-  '17': { sigla: 'TO', nome: 'Tocantins' }, '21': { sigla: 'MA', nome: 'Maranhão' },
-  '22': { sigla: 'PI', nome: 'Piauí' }, '23': { sigla: 'CE', nome: 'Ceará' },
-  '24': { sigla: 'RN', nome: 'Rio Grande do Norte' }, '25': { sigla: 'PB', nome: 'Paraíba' },
-  '26': { sigla: 'PE', nome: 'Pernambuco' }, '27': { sigla: 'AL', nome: 'Alagoas' },
-  '28': { sigla: 'SE', nome: 'Sergipe' }, '29': { sigla: 'BA', nome: 'Bahia' },
-  '31': { sigla: 'MG', nome: 'Minas Gerais' }, '32': { sigla: 'ES', nome: 'Espírito Santo' },
-  '33': { sigla: 'RJ', nome: 'Rio de Janeiro' }, '35': { sigla: 'SP', nome: 'São Paulo' },
-  '41': { sigla: 'PR', nome: 'Paraná' }, '42': { sigla: 'SC', nome: 'Santa Catarina' },
-  '43': { sigla: 'RS', nome: 'Rio Grande do Sul' }, '50': { sigla: 'MS', nome: 'Mato Grosso do Sul' },
-  '51': { sigla: 'MT', nome: 'Mato Grosso' }, '52': { sigla: 'GO', nome: 'Goiás' },
-  '53': { sigla: 'DF', nome: 'Distrito Federal' },
-};
-
-const EMISSION_TYPES: Record<string, string> = {
-  '1': 'Normal', '2': 'Contingência FS-IA', '3': 'Contingência SCAN',
-  '4': 'Contingência EPEC', '5': 'Contingência FS-DA', '9': 'Contingência offline NFC-e',
-};
-
-const EXCEL_STYLES = {
-  NAVY: '0F172A', GOLD: 'D4AF37', GRAY_BG: 'F1F5F9', ZEBRA: 'F8FAFC', TOTAL: 'FEF08A',
-} as const;
-
-function sanitizeFiscalCell(val: string): string {
-  return val.trim().replace(/\s+/g, ' ');
-}
-
-function parseCurrencySafe(valStr: string): number {
-  if (!valStr) return 0;
-  let clean = valStr.replace(/[R$\s]/g, '');
-  if (clean.includes(',') && clean.includes('.')) {
-    clean = clean.replace(/\./g, '').replace(',', '.');
-  } else if (clean.includes(',')) {
-    clean = clean.replace(',', '.');
-  }
-  const num = parseFloat(clean);
-  return Number.isNaN(num) ? 0 : Number(num.toFixed(2));
-}
-
-function validateFiscalKey(key: string): { isValid: boolean; cleanKey?: string; error?: string } {
-  const clean = key.replace(/\D/g, '');
-  if (clean.length !== 44) {
-    return { isValid: false, cleanKey: clean, error: `Chave com ${clean.length} dígitos (esperado: 44)` };
-  }
-  return { isValid: true, cleanKey: clean };
-}
-
-function validateAndCleanDate(dateStr: string): string {
-  if (!dateStr) return '-';
-  const match = dateStr.match(/(\d{2})[/-](\d{2})[/-](\d{4})/);
-  if (match) return `${match[1]}/${match[2]}/${match[3]}`;
-  return dateStr;
-}
-
-function formatCNPJ(cnpj: string): string {
-  return cnpj.length === 14 ? cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') : cnpj;
-}
-
-function parseChaveDeAcesso(chaveRaw: string): Omit<InvoiceRow, 'id' | 'dataEmissao' | 'valorString' | 'valorDecimal'> & { isValidChave: boolean; chaveError?: string } {
-  const validation = validateFiscalKey(chaveRaw);
-  if (!validation.isValid) {
-    return {
-      chaveDeAcesso: validation.cleanKey || chaveRaw, ufCodigo: '', ufNome: 'Inválido', anoMes: '',
-      cnpj: '', cnpjFormatado: '', modelo: '', serie: '', numeroNota: '', numeroNotaFormatado: '',
-      tipoEmissao: '', tipoEmissaoFriendly: '', isValidChave: false, chaveError: validation.error,
-    };
-  }
-
-  const chave = validation.cleanKey;
-  const ufCodigo = chave.substring(0, 2);
-  const anoMesRaw = chave.substring(2, 6);
-  const cnpj = chave.substring(6, 20);
-  const modelo = chave.substring(20, 22);
-  const serie = chave.substring(22, 25);
-  const numeroNota = chave.substring(25, 34);
-  const tipoEmissao = chave.substring(34, 35);
-  const ufInfo = UF_MAP[ufCodigo] || { sigla: '??', nome: 'UF Desconhecida' };
-  const numNotaClean = parseInt(numeroNota, 10);
-
-  return {
-    chaveDeAcesso: chave, ufCodigo, ufNome: `${ufInfo.nome} (${ufInfo.sigla})`,
-    anoMes: /^\d{4}$/.test(anoMesRaw) ? `${anoMesRaw.substring(2, 4)}/20${anoMesRaw.substring(0, 2)}` : anoMesRaw,
-    cnpj, cnpjFormatado: formatCNPJ(cnpj), modelo, serie: parseInt(serie, 10).toString(),
-    numeroNota, numeroNotaFormatado: Number.isNaN(numNotaClean) ? numeroNota : numNotaClean.toString(),
-    tipoEmissao, tipoEmissaoFriendly: EMISSION_TYPES[tipoEmissao] || 'Desconhecido', isValidChave: true,
-  };
-}
-
-function parseCSV(text: string): InvoiceRow[] {
-  if (!text) return [];
-  const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
-  if (lines.length <= 1) return [];
-
-  const delimiter = lines[0].includes(';') ? ';' : ',';
-  const parseLine = (line: string): string[] => {
-    const cells: string[] = [];
-    let current = '', inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"') inQuotes = !inQuotes;
-      else if (char === delimiter && !inQuotes) {
-        cells.push(sanitizeFiscalCell(current.trim().replace(/^"|"$/g, ''))); current = '';
-      } else current += char;
-    }
-    cells.push(sanitizeFiscalCell(current.trim().replace(/^"|"$/g, '')));
-    return cells;
-  };
-
-  const headers = parseLine(lines[0]).map(h => h.toLowerCase());
-  const chaveIdx = Math.max(0, headers.findIndex(h => h.includes('chave') || h.includes('acesso')));
-  const dataIdx = Math.max(1, headers.findIndex(h => h.includes('data') || h.includes('emiss')));
-  const valorIdx = Math.max(2, headers.findIndex(h => h.includes('valor') || h.includes('r$')));
-
-  const parsedRows = lines.slice(1).map((line, i) => {
-    const cells = parseLine(line);
-    if (cells.length < 2) return null;
-    const chaveRaw = cells[chaveIdx] || '';
-    const valorRaw = cells[valorIdx] || '0';
-    return {
-      id: `inv-${i}-${Math.random().toString(36).substring(2, 7)}`,
-      dataEmissao: validateAndCleanDate(cells[dataIdx] || ''),
-      valorString: valorRaw, valorDecimal: parseCurrencySafe(valorRaw),
-      ...parseChaveDeAcesso(chaveRaw),
-    };
-  }).filter(Boolean) as InvoiceRow[];
-
-  return parsedRows.sort((a, b) => {
-    const numA = parseInt(a.numeroNota, 10) || 0;
-    const numB = parseInt(b.numeroNota, 10) || 0;
-    return numA - numB;
-  });
-}
-
-function calculateStats(rows: InvoiceRow[]): StatsData {
-  let totalValor = 0, minValor = rows.length ? Infinity : 0, maxValor = rows.length ? -Infinity : 0;
-  const statesDist: Record<string, number> = {}, seriesDist: Record<string, number> = {}, modeloDist: Record<string, number> = {};
-  let minDT = Infinity, maxDT = -Infinity, minDateRaw = '', maxDateRaw = '';
-
-  for (const r of rows) {
-    totalValor += r.valorDecimal;
-    if (r.valorDecimal < minValor) minValor = r.valorDecimal;
-    if (r.valorDecimal > maxValor) maxValor = r.valorDecimal;
-    if (r.ufNome) statesDist[r.ufNome] = (statesDist[r.ufNome] || 0) + 1;
-    if (r.serie) seriesDist[`Série ${r.serie}`] = (seriesDist[`Série ${r.serie}`] || 0) + 1;
-    if (r.modelo) {
-      const mLabel = r.modelo === '65' ? 'NFC-e (65)' : r.modelo === '55' ? 'NF-e (55)' : `Modelo ${r.modelo}`;
-      modeloDist[mLabel] = (modeloDist[mLabel] || 0) + 1;
-    }
-    const p = r.dataEmissao.split('/');
-    if (p.length === 3) {
-      const t = new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0])).getTime();
-      if (!Number.isNaN(t)) {
-        if (t < minDT) { minDT = t; minDateRaw = r.dataEmissao; }
-        if (t > maxDT) { maxDT = t; maxDateRaw = r.dataEmissao; }
-      }
-    }
-  }
-
-  return {
-    totalCount: rows.length, totalValor: Number(totalValor.toFixed(2)),
-    minValor: minValor === Infinity ? 0 : Number(minValor.toFixed(2)),
-    maxValor: maxValor === -Infinity ? 0 : Number(maxValor.toFixed(2)),
-    statesDistribution: statesDist, seriesDistribution: seriesDist, modeloDistribution: modeloDist,
-    periodo: minDateRaw ? { inicio: minDateRaw, fim: maxDateRaw } : null,
-  };
-}
-
-function exportToExcel(rows: InvoiceRow[], customFileName = 'Relatorio_NFCe_Processado.xlsx', includeExtras = false): void {
-  const maxColIndex = includeExtras ? 8 : 3;
-  const exportDate = `${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
-  const sortedRows = [...rows].sort((a, b) => (parseInt(a.numeroNota, 10) || 0) - (parseInt(b.numeroNota, 10) || 0));
-  const totalValue = sortedRows.reduce((acc, curr) => acc + curr.valorDecimal, 0);
-
-  const ws: any = {};
-  let currentRow = 0;
-  const merges: any[] = [];
-  const rowHeights: any[] = [];
-
-  const getCellRef = (r: number, c: number) => XLSX.utils.encode_cell({ r, c });
-
-  const writeCell = (r: number, c: number, val: any, type: 's' | 'n', style: any = {}, format: string = '') => {
-    const ref = getCellRef(r, c);
-    ws[ref] = { v: val, t: type, s: style };
-    if (format) ws[ref].z = format;
-  };
-
-  // Styles definitions (Corporate Blue #04243B & Gold #E4B35E)
-  const styleHeaderTitle = {
-    fill: { fgColor: { rgb: "04243B" } },
-    font: { name: "Arial", sz: 15, bold: true, color: { rgb: "E4B35E" } },
-    alignment: { horizontal: "center", vertical: "center" }
-  };
-  const styleHeaderSub = {
-    fill: { fgColor: { rgb: "04243B" } },
-    font: { name: "Arial", sz: 9.5, bold: true, color: { rgb: "FFFFFF" } },
-    alignment: { horizontal: "center", vertical: "center" }
-  };
-  const styleHeaderBannerBase = {
-    fill: { fgColor: { rgb: "04243B" } }
-  };
-
-  const styleBarLeft = {
-    fill: { fgColor: { rgb: "F8FAFC" } },
-    font: { name: "Arial", sz: 10, color: { rgb: "334155" } },
-    alignment: { horizontal: "left", vertical: "center", indent: 1 },
-    border: {
-      top: { style: "thin", color: { rgb: "E2E8F0" } },
-      bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-      left: { style: "thin", color: { rgb: "E2E8F0" } },
-      right: { style: "thin", color: { rgb: "E2E8F0" } }
-    }
-  };
-  const styleBarCenter = {
-    fill: { fgColor: { rgb: "F8FAFC" } },
-    font: { name: "Arial", sz: 10, bold: true, color: { rgb: "04243B" } },
-    alignment: { horizontal: "center", vertical: "center" },
-    border: {
-      top: { style: "thin", color: { rgb: "E2E8F0" } },
-      bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-      left: { style: "thin", color: { rgb: "E2E8F0" } },
-      right: { style: "thin", color: { rgb: "E2E8F0" } }
-    }
-  };
-  const styleBarRight = {
-    fill: { fgColor: { rgb: "F8FAFC" } },
-    font: { name: "Arial", sz: 10.5, bold: true, color: { rgb: "059669" } },
-    alignment: { horizontal: "right", vertical: "center" },
-    border: {
-      top: { style: "thin", color: { rgb: "E2E8F0" } },
-      bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-      left: { style: "thin", color: { rgb: "E2E8F0" } },
-      right: { style: "thin", color: { rgb: "E2E8F0" } }
-    }
-  };
-
-  const styleTableHeaderCenter = {
-    fill: { fgColor: { rgb: "04243B" } },
-    font: { name: "Arial", sz: 10.5, bold: true, color: { rgb: "FFFFFF" } },
-    alignment: { horizontal: "center", vertical: "center" },
-    border: {
-      top: { style: "medium", color: { rgb: "04243B" } },
-      bottom: { style: "medium", color: { rgb: "E4B35E" } }
-    }
-  };
-  const styleTableHeaderRight = {
-    fill: { fgColor: { rgb: "04243B" } },
-    font: { name: "Arial", sz: 10.5, bold: true, color: { rgb: "FFFFFF" } },
-    alignment: { horizontal: "right", vertical: "center" },
-    border: {
-      top: { style: "medium", color: { rgb: "04243B" } },
-      bottom: { style: "medium", color: { rgb: "E4B35E" } }
-    }
-  };
-  const styleTableHeaderLeft = {
-    fill: { fgColor: { rgb: "04243B" } },
-    font: { name: "Arial", sz: 10.5, bold: true, color: { rgb: "FFFFFF" } },
-    alignment: { horizontal: "left", vertical: "center" },
-    border: {
-      top: { style: "medium", color: { rgb: "04243B" } },
-      bottom: { style: "medium", color: { rgb: "E4B35E" } }
-    }
-  };
-
-  const getRowStyle = (isEven: boolean, align: 'left' | 'center' | 'right', bold = false, color = "1E293B") => ({
-    fill: { fgColor: { rgb: isEven ? "FFFFFF" : "F8FAFC" } },
-    font: { name: "Arial", sz: 9.5, bold, color: { rgb: color } },
-    alignment: { horizontal: align, vertical: "center" },
-    border: {
-      bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-      left: { style: "thin", color: { rgb: "F1F5F9" } },
-      right: { style: "thin", color: { rgb: "F1F5F9" } }
-    }
-  });
-
-  const styleGrandTotalLabel = {
-    fill: { fgColor: { rgb: "04243B" } },
-    font: { name: "Arial", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
-    alignment: { horizontal: "right", vertical: "center" },
-    border: {
-      top: { style: "medium", color: { rgb: "E4B35E" } },
-      bottom: { style: "double", color: { rgb: "E4B35E" } }
-    }
-  };
-  const styleGrandTotalValue = {
-    fill: { fgColor: { rgb: "04243B" } },
-    font: { name: "Arial", sz: 11.5, bold: true, color: { rgb: "E4B35E" } },
-    alignment: { horizontal: "right", vertical: "center" },
-    border: {
-      top: { style: "medium", color: { rgb: "E4B35E" } },
-      bottom: { style: "double", color: { rgb: "E4B35E" } }
-    }
-  };
-
-  // Row 0: Company Name Banner
-  for (let c = 0; c <= maxColIndex; c++) {
-    writeCell(currentRow, c, c === 0 ? BRAND_CONFIG.COMPANY_NAME : '', 's', c === 0 ? styleHeaderTitle : styleHeaderBannerBase);
-  }
-  merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: maxColIndex } });
-  rowHeights.push({ hpt: 28 });
-  currentRow++;
-
-  // Row 1: Subtitle Banner
-  for (let c = 0; c <= maxColIndex; c++) {
-    writeCell(currentRow, c, c === 0 ? BRAND_CONFIG.SUBTITLE : '', 's', c === 0 ? styleHeaderSub : styleHeaderBannerBase);
-  }
-  merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: maxColIndex } });
-  rowHeights.push({ hpt: 20 });
-  currentRow++;
-
-  // Row 2: Spacer
-  rowHeights.push({ hpt: 10 });
-  currentRow++;
-
-  // Row 3: Summary Bar (All 3 fields on the same line)
-  const strExport = `Exportado em: ${exportDate}`;
-  const strCount = `Total de Notas: ${sortedRows.length}`;
-  const strValue = `Valor Acumulado: R$ ${totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-  if (includeExtras) {
-    writeCell(currentRow, 0, strExport, 's', styleBarLeft);
-    writeCell(currentRow, 1, '', 's', styleBarLeft);
-    writeCell(currentRow, 2, '', 's', styleBarLeft);
-    merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } });
-
-    writeCell(currentRow, 3, strCount, 's', styleBarCenter);
-    writeCell(currentRow, 4, '', 's', styleBarCenter);
-    writeCell(currentRow, 5, '', 's', styleBarCenter);
-    merges.push({ s: { r: currentRow, c: 3 }, e: { r: currentRow, c: 5 } });
-
-    writeCell(currentRow, 6, strValue, 's', styleBarRight);
-    writeCell(currentRow, 7, '', 's', styleBarRight);
-    writeCell(currentRow, 8, '', 's', styleBarRight);
-    merges.push({ s: { r: currentRow, c: 6 }, e: { r: currentRow, c: 8 } });
-  } else {
-    writeCell(currentRow, 0, strExport, 's', styleBarLeft);
-    writeCell(currentRow, 1, strCount, 's', styleBarCenter);
-    writeCell(currentRow, 2, strValue, 's', styleBarRight);
-    writeCell(currentRow, 3, '', 's', styleBarRight);
-    merges.push({ s: { r: currentRow, c: 2 }, e: { r: currentRow, c: 3 } });
-  }
-  rowHeights.push({ hpt: 24 });
-  currentRow++;
-
-  // Row 4: Spacer
-  rowHeights.push({ hpt: 14 });
-  currentRow++;
-
-  // Row 6: Table Headers
-  const headers = includeExtras 
-    ? ['Chave de Acesso', 'Número da Nota', 'Data de Emissão', 'Valor', 'Série', 'Modelo', 'CNPJ Emitente', 'UF Emitente', 'Tipo Emissão']
-    : ['Chave de Acesso', 'Número da Nota', 'Data de Emissão', 'Valor'];
-
-  headers.forEach((h, c) => {
-    const alignStyle = c === 3 ? styleTableHeaderRight : (c >= 7 ? styleTableHeaderLeft : styleTableHeaderCenter);
-    writeCell(currentRow, c, h, 's', alignStyle);
-  });
-  rowHeights.push({ hpt: 26 });
-  currentRow++;
-
-  // Table Data Rows
-  sortedRows.forEach((r, idx) => {
-    const isEven = idx % 2 === 0;
-    const numNota = r.isValidChave ? parseInt(r.numeroNota, 10) : 'Erro';
-    const numNotaVal = Number.isNaN(Number(numNota)) ? 'Erro' : Number(numNota);
-
-    writeCell(currentRow, 0, r.chaveDeAcesso, 's', getRowStyle(isEven, 'center', false, "475569"));
-    writeCell(currentRow, 1, numNotaVal, typeof numNotaVal === 'number' ? 'n' : 's', getRowStyle(isEven, 'center', true, "0F172A"));
-    writeCell(currentRow, 2, r.dataEmissao, 's', getRowStyle(isEven, 'center', false, "334155"));
-    writeCell(currentRow, 3, r.valorDecimal, 'n', getRowStyle(isEven, 'right', true, "04243B"), '"R$ " #,##0.00');
-
-    if (includeExtras) {
-      const serieVal = r.isValidChave ? parseInt(r.serie, 10) : 'N/A';
-      const modVal = r.isValidChave ? parseInt(r.modelo, 10) : 'N/A';
-      writeCell(currentRow, 4, Number.isNaN(Number(serieVal)) ? 'N/A' : Number(serieVal), typeof serieVal === 'number' && !Number.isNaN(Number(serieVal)) ? 'n' : 's', getRowStyle(isEven, 'center'));
-      writeCell(currentRow, 5, Number.isNaN(Number(modVal)) ? 'N/A' : Number(modVal), typeof modVal === 'number' && !Number.isNaN(Number(modVal)) ? 'n' : 's', getRowStyle(isEven, 'center'));
-      writeCell(currentRow, 6, r.isValidChave ? r.cnpjFormatado : 'N/A', 's', getRowStyle(isEven, 'center'));
-      writeCell(currentRow, 7, r.isValidChave ? r.ufNome : 'N/A', 's', getRowStyle(isEven, 'left'));
-      writeCell(currentRow, 8, r.isValidChave ? r.tipoEmissaoFriendly : 'N/A', 's', getRowStyle(isEven, 'left'));
-    }
-    rowHeights.push({ hpt: 20 });
-    currentRow++;
-  });
-
-  // Grand Total Row
-  writeCell(currentRow, 0, 'TOTAL ACUMULADO DO LOTE', 's', styleGrandTotalLabel);
-  writeCell(currentRow, 1, '', 's', styleGrandTotalLabel);
-  writeCell(currentRow, 2, '', 's', styleGrandTotalLabel);
-  merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } });
-
-  writeCell(currentRow, 3, totalValue, 'n', styleGrandTotalValue, '"R$ " #,##0.00');
-
-  for (let c = 4; c <= maxColIndex; c++) {
-    writeCell(currentRow, c, '', 's', styleGrandTotalLabel);
-  }
-  rowHeights.push({ hpt: 26 });
-  currentRow++;
-
-  // Metadata setup
-  ws['!merges'] = merges;
-  ws['!rows'] = rowHeights;
-
-  const cols = [
-    { wch: 50 }, // Chave de Acesso
-    { wch: 24 }, // Número da Nota
-    { wch: 22 }, // Data de Emissão
-    { wch: 28 }, // Valor
-  ];
-  if (includeExtras) {
-    cols.push(
-      { wch: 16 }, // Série
-      { wch: 16 }, // Modelo
-      { wch: 24 }, // CNPJ Emitente
-      { wch: 26 }, // UF Emitente
-      { wch: 28 }  // Tipo Emissão
-    );
-  }
-  ws['!cols'] = cols;
-  ws['!views'] = [{ showGridLines: false }];
-
-  const lastRef = getCellRef(currentRow - 1, maxColIndex);
-  ws['!ref'] = `A1:${lastRef}`;
-
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, ws, 'Relatório NFC-e');
-  XLSX.writeFile(workbook, customFileName.endsWith('.xlsx') ? customFileName : `${customFileName}.xlsx`);
-}
-
 export function ConversorNfceSiga() {
+  // Flow selector mode: nfce (SIGA), nfe_vendas (Saídas), nfe_compras (Entradas)
+  const [flowMode, setFlowMode] = useState<'nfce' | 'nfe_vendas' | 'nfe_compras'>('nfce');
+
+  // Single file state (for NFC-e)
   const [rows, setRows] = useState<InvoiceRow[]>([]);
   const [fileName, setFileName] = useState<string>('');
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'valid' | 'invalid'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Dual file state (for NF-e Vendas and Compras)
+  const [sefazFile, setSefazFile] = useState<File | null>(null);
+  const [erpFile, setErpFile] = useState<File | null>(null);
+  const [sefazDragOver, setSefazDragOver] = useState<boolean>(false);
+  const [erpDragOver, setErpDragOver] = useState<boolean>(false);
+  const sefazFileInputRef = useRef<HTMLInputElement>(null);
+  const erpFileInputRef = useRef<HTMLInputElement>(null);
 
   // States for Bilateral Audit Layer
   const [isAuditModalOpen, setIsAuditModalOpen] = useState<boolean>(false);
@@ -513,9 +70,45 @@ export function ConversorNfceSiga() {
   const [auditSearchTerm, setAuditSearchTerm] = useState<string>('');
   const [auditFilterStatus, setAuditFilterStatus] = useState<'all' | 'OK' | 'FALTANTE_ERP' | 'NAO_CONSTA_SEFAZ' | 'SALTO_SEQUENCIA'>('all');
   const [dragOverModal, setDragOverModal] = useState<boolean>(false);
-  const erpFileInputRef = useRef<HTMLInputElement>(null);
 
-  const stats = useMemo(() => calculateStats(rows), [rows]);
+  // States for Progress Tracking of large files
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [processingProgress, setProcessingProgress] = useState<number>(0);
+  const [processingStage, setProcessingStage] = useState<string>('');
+
+  // Basic stats for the currently loaded SEFAZ data in NFC-e
+  const stats = useMemo(() => {
+    let totalValor = 0;
+    let minValor = rows.length ? Infinity : 0;
+    let maxValor = rows.length ? -Infinity : 0;
+    let minDT = Infinity;
+    let maxDT = -Infinity;
+    let minDateRaw = '';
+    let maxDateRaw = '';
+
+    for (const r of rows) {
+      totalValor += r.valorDecimal;
+      if (r.valorDecimal < minValor) minValor = r.valorDecimal;
+      if (r.valorDecimal > maxValor) maxValor = r.valorDecimal;
+      
+      const p = r.dataEmissao.split('/');
+      if (p.length === 3) {
+        const t = new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0])).getTime();
+        if (!Number.isNaN(t)) {
+          if (t < minDT) { minDT = t; minDateRaw = r.dataEmissao; }
+          if (t > maxDT) { maxDT = t; maxDateRaw = r.dataEmissao; }
+        }
+      }
+    }
+
+    return {
+      totalCount: rows.length,
+      totalValor: Number(totalValor.toFixed(2)),
+      minValor: minValor === Infinity ? 0 : Number(minValor.toFixed(2)),
+      maxValor: maxValor === -Infinity ? 0 : Number(maxValor.toFixed(2)),
+      periodo: minDateRaw ? { inicio: minDateRaw, fim: maxDateRaw } : null,
+    };
+  }, [rows]);
 
   const filteredRows = useMemo(() => {
     return rows.filter(r => {
@@ -554,41 +147,119 @@ export function ConversorNfceSiga() {
     });
   }, [auditItems, auditSearchTerm, auditFilterStatus]);
 
-  const handleFileProcess = (file: File) => {
+  // Handle SEFAZ file process in NFC-e flow
+  const handleFileProcess = async (file: File) => {
     if (!file) return;
     setFileName(file.name);
+    setIsProcessing(true);
+    setProcessingProgress(0);
+    setProcessingStage('Carregando arquivo SEFAZ...');
+
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const text = e.target?.result as string;
       if (text) {
-        const parsed = parseCSV(text);
-        setRows(parsed);
+        setProcessingStage('Processando registros da SEFAZ...');
+        try {
+          const parsed = await parseSefazReportAsync(text, (pct) => {
+            setProcessingProgress(pct);
+          });
+          setRows(parsed);
+        } catch (error) {
+          console.error(error);
+        } finally {
+          setIsProcessing(false);
+        }
+      } else {
+        setIsProcessing(false);
       }
     };
     reader.readAsText(file, 'utf-8');
   };
 
-  const handleErpFileProcess = (file: File) => {
+  // Handle ERP file process in NFC-e flow
+  const handleErpFileProcess = async (file: File) => {
     if (!file) return;
+    setIsProcessing(true);
+    setProcessingProgress(0);
+    setProcessingStage('Carregando relatório do ERP...');
+
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const text = e.target?.result as string;
       if (text) {
-        const { items, summary } = executeDataAudit(rows, text);
-        setAuditItems(items);
-        setAuditSummary(summary);
-        setIsAuditModalOpen(false);
-        setIsAuditActive(true);
+        setProcessingStage('Processando registros do ERP...');
+        try {
+          const parsedErp = await parseErpReportAsync(text, (pct) => {
+            setProcessingProgress(Math.round(pct * 0.4)); // 0-40%
+          });
+
+          setProcessingStage('Executando confronto e cruzamento...');
+          const { items, summary } = await executeDataAuditAsync(rows, parsedErp, (pct) => {
+            setProcessingProgress(40 + Math.round(pct * 0.6)); // 40-100%
+          });
+
+          setAuditItems(items);
+          setAuditSummary(summary);
+          setIsAuditModalOpen(false);
+          setIsAuditActive(true);
+        } catch (error) {
+          console.error(error);
+        } finally {
+          setIsProcessing(false);
+        }
+      } else {
+        setIsProcessing(false);
       }
     };
     reader.readAsText(file, 'utf-8');
   };
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFileProcess(e.dataTransfer.files[0]);
+  // Execute dual file cross-audit processing for NF-e
+  const handleDualProcess = async () => {
+    if (!sefazFile || !erpFile) return;
+    setIsProcessing(true);
+    setProcessingProgress(0);
+    setProcessingStage('Iniciando carregamento das bases...');
+
+    const readSefaz = (): Promise<string> => new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string || '');
+      reader.readAsText(sefazFile, 'utf-8');
+    });
+
+    const readErp = (): Promise<string> => new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string || '');
+      reader.readAsText(erpFile, 'utf-8');
+    });
+
+    try {
+      const [sefazText, erpText] = await Promise.all([readSefaz(), readErp()]);
+
+      setProcessingStage('Analisando arquivo SEFAZ (0%)...');
+      const parsedSefaz = await parseSefazReportAsync(sefazText, (pct) => {
+        setProcessingProgress(Math.round(pct * 0.3)); // 0% to 30%
+      });
+      setRows(parsedSefaz);
+
+      setProcessingStage('Analisando arquivo ERP (30%)...');
+      const parsedErp = await parseErpReportAsync(erpText, (pct) => {
+        setProcessingProgress(30 + Math.round(pct * 0.3)); // 30% to 60%
+      });
+
+      setProcessingStage('Executando cruzamento bidirecional (60%)...');
+      const { items, summary } = await executeDataAuditAsync(parsedSefaz, parsedErp, (pct) => {
+        setProcessingProgress(60 + Math.round(pct * 0.4)); // 60% to 100%
+      });
+
+      setAuditItems(items);
+      setAuditSummary(summary);
+      setIsAuditActive(true);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -597,19 +268,282 @@ export function ConversorNfceSiga() {
     setFileName('');
     setSearchTerm('');
     setFilterStatus('all');
-    // Clear Audit state
+    // Dual states
+    setSefazFile(null);
+    setErpFile(null);
+    setSefazDragOver(false);
+    setErpDragOver(false);
+    // Audit state
     setIsAuditActive(false);
     setAuditItems([]);
     setAuditSummary(null);
     setAuditSearchTerm('');
     setAuditFilterStatus('all');
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (sefazFileInputRef.current) sefazFileInputRef.current.value = '';
     if (erpFileInputRef.current) erpFileInputRef.current.value = '';
   };
 
+  // Export NFC-e converted base directly (Before Audit is ran)
+  const handleDirectExport = (includeExtras: boolean) => {
+    const customFileName = includeExtras ? 'NFCe_SIGA_Completo.xlsx' : 'NFCe_SIGA.xlsx';
+    const exportDate = `${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+    const sortedRows = [...rows].sort((a, b) => (parseInt(a.numeroNota, 10) || 0) - (parseInt(b.numeroNota, 10) || 0));
+    const totalValue = sortedRows.reduce((acc, curr) => acc + curr.valorDecimal, 0);
+
+    const ws: any = {};
+    let currentRow = 0;
+    const merges: any[] = [];
+    const rowHeights: any[] = [];
+    const maxColIndex = includeExtras ? 8 : 3;
+
+    const getCellRef = (r: number, c: number) => XLSX.utils.encode_cell({ r, c });
+    const writeCell = (r: number, c: number, val: any, type: 's' | 'n', style: any = {}, format: string = '') => {
+      const ref = getCellRef(r, c);
+      ws[ref] = { v: val, t: type, s: style };
+      if (format) ws[ref].z = format;
+    };
+
+    // Styles definitions (Corporate Blue #04243B & Gold #E4B35E)
+    const styleHeaderTitle = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 15, bold: true, color: { rgb: "E4B35E" } },
+      alignment: { horizontal: "center", vertical: "center" }
+    };
+    const styleHeaderSub = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 9.5, bold: true, color: { rgb: "FFFFFF" } },
+      alignment: { horizontal: "center", vertical: "center" }
+    };
+    const styleHeaderBannerBase = {
+      fill: { fgColor: { rgb: "04243B" } }
+    };
+
+    const styleBarLeft = {
+      fill: { fgColor: { rgb: "F8FAFC" } },
+      font: { name: "Arial", sz: 10, color: { rgb: "334155" } },
+      alignment: { horizontal: "left", vertical: "center", indent: 1 },
+      border: {
+        top: { style: "thin", color: { rgb: "E2E8F0" } },
+        bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+        left: { style: "thin", color: { rgb: "E2E8F0" } },
+        right: { style: "thin", color: { rgb: "E2E8F0" } }
+      }
+    };
+    const styleBarCenter = {
+      fill: { fgColor: { rgb: "F8FAFC" } },
+      font: { name: "Arial", sz: 10, bold: true, color: { rgb: "04243B" } },
+      alignment: { horizontal: "center", vertical: "center" },
+      border: {
+        top: { style: "thin", color: { rgb: "E2E8F0" } },
+        bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+        left: { style: "thin", color: { rgb: "E2E8F0" } },
+        right: { style: "thin", color: { rgb: "E2E8F0" } }
+      }
+    };
+    const styleBarRight = {
+      fill: { fgColor: { rgb: "F8FAFC" } },
+      font: { name: "Arial", sz: 10.5, bold: true, color: { rgb: "059669" } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: {
+        top: { style: "thin", color: { rgb: "E2E8F0" } },
+        bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+        left: { style: "thin", color: { rgb: "E2E8F0" } },
+        right: { style: "thin", color: { rgb: "E2E8F0" } }
+      }
+    };
+
+    const styleTableHeaderCenter = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 10.5, bold: true, color: { rgb: "FFFFFF" } },
+      alignment: { horizontal: "center", vertical: "center" },
+      border: {
+        top: { style: "medium", color: { rgb: "04243B" } },
+        bottom: { style: "medium", color: { rgb: "E4B35E" } }
+      }
+    };
+    const styleTableHeaderRight = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 10.5, bold: true, color: { rgb: "FFFFFF" } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: {
+        top: { style: "medium", color: { rgb: "04243B" } },
+        bottom: { style: "medium", color: { rgb: "E4B35E" } }
+      }
+    };
+    const styleTableHeaderLeft = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 10.5, bold: true, color: { rgb: "FFFFFF" } },
+      alignment: { horizontal: "left", vertical: "center" },
+      border: {
+        top: { style: "medium", color: { rgb: "04243B" } },
+        bottom: { style: "medium", color: { rgb: "E4B35E" } }
+      }
+    };
+
+    const getRowStyle = (isEven: boolean, align: 'left' | 'center' | 'right', bold = false, color = "1E293B") => ({
+      fill: { fgColor: { rgb: isEven ? "FFFFFF" : "F8FAFC" } },
+      font: { name: "Arial", sz: 9.5, bold, color: { rgb: color } },
+      alignment: { horizontal: align, vertical: "center" },
+      border: {
+        bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+        left: { style: "thin", color: { rgb: "F1F5F9" } },
+        right: { style: "thin", color: { rgb: "F1F5F9" } }
+      }
+    });
+
+    const styleGrandTotalLabel = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: {
+        top: { style: "medium", color: { rgb: "E4B35E" } },
+        bottom: { style: "double", color: { rgb: "E4B35E" } }
+      }
+    };
+    const styleGrandTotalValue = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 11.5, bold: true, color: { rgb: "E4B35E" } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: {
+        top: { style: "medium", color: { rgb: "E4B35E" } },
+        bottom: { style: "double", color: { rgb: "E4B35E" } }
+      }
+    };
+
+    // Row 0: Company Banner
+    for (let c = 0; c <= maxColIndex; c++) {
+      writeCell(currentRow, c, c === 0 ? BRAND_CONFIG.COMPANY_NAME : '', 's', c === 0 ? styleHeaderTitle : styleHeaderBannerBase);
+    }
+    merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: maxColIndex } });
+    rowHeights.push({ hpt: 28 });
+    currentRow++;
+
+    // Row 1: Subtitle Banner
+    for (let c = 0; c <= maxColIndex; c++) {
+      writeCell(currentRow, c, c === 0 ? BRAND_CONFIG.SUBTITLE : '', 's', c === 0 ? styleHeaderSub : styleHeaderBannerBase);
+    }
+    merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: maxColIndex } });
+    rowHeights.push({ hpt: 20 });
+    currentRow++;
+
+    // Spacer
+    rowHeights.push({ hpt: 10 });
+    currentRow++;
+
+    // Summary Metric Bar
+    const strExport = `Exportado em: ${exportDate}`;
+    const strCount = `Total de Notas: ${sortedRows.length}`;
+    const strValue = `Valor Acumulado: R$ ${totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    if (includeExtras) {
+      writeCell(currentRow, 0, strExport, 's', styleBarLeft);
+      writeCell(currentRow, 1, '', 's', styleBarLeft);
+      writeCell(currentRow, 2, '', 's', styleBarLeft);
+      merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } });
+
+      writeCell(currentRow, 3, strCount, 's', styleBarCenter);
+      writeCell(currentRow, 4, '', 's', styleBarCenter);
+      writeCell(currentRow, 5, '', 's', styleBarCenter);
+      merges.push({ s: { r: currentRow, c: 3 }, e: { r: currentRow, c: 5 } });
+
+      writeCell(currentRow, 6, strValue, 's', styleBarRight);
+      writeCell(currentRow, 7, '', 's', styleBarRight);
+      writeCell(currentRow, 8, '', 's', styleBarRight);
+      merges.push({ s: { r: currentRow, c: 6 }, e: { r: currentRow, c: 8 } });
+    } else {
+      writeCell(currentRow, 0, strExport, 's', styleBarLeft);
+      writeCell(currentRow, 1, strCount, 's', styleBarCenter);
+      writeCell(currentRow, 2, strValue, 's', styleBarRight);
+      writeCell(currentRow, 3, '', 's', styleBarRight);
+      merges.push({ s: { r: currentRow, c: 2 }, e: { r: currentRow, c: 3 } });
+    }
+    rowHeights.push({ hpt: 24 });
+    currentRow++;
+
+    // Spacer
+    rowHeights.push({ hpt: 14 });
+    currentRow++;
+
+    const headers = includeExtras 
+      ? ['Chave de Acesso', 'Número da Nota', 'Data de Emissão', 'Valor', 'Série', 'Modelo', 'CNPJ Emitente', 'UF Emitente', 'Tipo Emissão']
+      : ['Chave de Acesso', 'Número da Nota', 'Data de Emissão', 'Valor'];
+
+    headers.forEach((h, c) => {
+      const alignStyle = c === 3 ? styleTableHeaderRight : (c >= 7 ? styleTableHeaderLeft : styleTableHeaderCenter);
+      writeCell(currentRow, c, h, 's', alignStyle);
+    });
+    rowHeights.push({ hpt: 26 });
+    currentRow++;
+
+    sortedRows.forEach((r, idx) => {
+      const isEven = idx % 2 === 0;
+      const numNota = r.isValidChave ? parseInt(r.numeroNota, 10) : 'Erro';
+      const numNotaVal = Number.isNaN(Number(numNota)) ? 'Erro' : Number(numNota);
+
+      writeCell(currentRow, 0, r.chaveDeAcesso, 's', getRowStyle(isEven, 'center', false, "475569"));
+      writeCell(currentRow, 1, numNotaVal, typeof numNotaVal === 'number' ? 'n' : 's', getRowStyle(isEven, 'center', true, "0F172A"));
+      writeCell(currentRow, 2, r.dataEmissao, 's', getRowStyle(isEven, 'center', false, "334155"));
+      writeCell(currentRow, 3, r.valorDecimal, 'n', getRowStyle(isEven, 'right', true, "04243B"), '"R$ " #,##0.00');
+
+      if (includeExtras) {
+        const serieVal = r.isValidChave ? parseInt(r.serie, 10) : 'N/A';
+        const modVal = r.isValidChave ? parseInt(r.modelo, 10) : 'N/A';
+        writeCell(currentRow, 4, Number.isNaN(Number(serieVal)) ? 'N/A' : Number(serieVal), typeof serieVal === 'number' && !Number.isNaN(Number(serieVal)) ? 'n' : 's', getRowStyle(isEven, 'center'));
+        writeCell(currentRow, 5, Number.isNaN(Number(modVal)) ? 'N/A' : Number(modVal), typeof modVal === 'number' && !Number.isNaN(Number(modVal)) ? 'n' : 's', getRowStyle(isEven, 'center'));
+        writeCell(currentRow, 6, r.isValidChave ? r.cnpjFormatado : 'N/A', 's', getRowStyle(isEven, 'center'));
+        writeCell(currentRow, 7, r.isValidChave ? r.ufNome : 'N/A', 's', getRowStyle(isEven, 'left'));
+        writeCell(currentRow, 8, r.isValidChave ? r.tipoEmissaoFriendly : 'N/A', 's', getRowStyle(isEven, 'left'));
+      }
+      rowHeights.push({ hpt: 20 });
+      currentRow++;
+    });
+
+    writeCell(currentRow, 0, 'TOTAL ACUMULADO DO LOTE', 's', styleGrandTotalLabel);
+    writeCell(currentRow, 1, '', 's', styleGrandTotalLabel);
+    writeCell(currentRow, 2, '', 's', styleGrandTotalLabel);
+    merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } });
+    writeCell(currentRow, 3, totalValue, 'n', styleGrandTotalValue, '"R$ " #,##0.00');
+
+    for (let c = 4; c <= maxColIndex; c++) {
+      writeCell(currentRow, c, '', 's', styleGrandTotalLabel);
+    }
+    rowHeights.push({ hpt: 26 });
+    currentRow++;
+
+    ws['!merges'] = merges;
+    ws['!rows'] = rowHeights;
+
+    const cols = [{ wch: 50 }, { wch: 24 }, { wch: 22 }, { wch: 28 }];
+    if (includeExtras) {
+      cols.push({ wch: 16 }, { wch: 16 }, { wch: 24 }, { wch: 26 }, { wch: 28 });
+    }
+    ws['!cols'] = cols;
+    ws['!views'] = [{ showGridLines: false }];
+    ws['!ref'] = `A1:${getCellRef(currentRow - 1, maxColIndex)}`;
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, ws, 'Relatório NFC-e');
+    XLSX.writeFile(workbook, customFileName);
+  };
+
+  // Switch between operation tabs and reset state
+  const handleTabSwitch = (mode: 'nfce' | 'nfe_vendas' | 'nfe_compras') => {
+    setFlowMode(mode);
+    resetAll();
+  };
+
+  // Return the customized Title prefix for excel exports
+  const getFlowTitle = () => {
+    if (flowMode === 'nfce') return 'Auditoria NFC-e (Modelo 65)';
+    if (flowMode === 'nfe_vendas') return 'Auditoria NF-e Vendas (Saídas)';
+    return 'Auditoria NF-e Compras (Entradas)';
+  };
+
+  // If audit is active, render the Compliance Dashboard and detailed tables
   if (isAuditActive && auditSummary) {
     return (
-      <div className="space-y-6 animate-fadeIn">
+      <div className="space-y-6 animate-fadeIn" id="audit-active-view">
         {/* Title Block of Audit */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
@@ -617,36 +551,42 @@ export function ConversorNfceSiga() {
               <span className="p-2 rounded-xl bg-[#04243b] text-[#e4b35e]">
                 <FileCheck2 className="w-5 h-5" />
               </span>
-              <h2 className="text-lg font-extrabold text-[#04243b] tracking-tight">
-                Auditoria de Confronto de Dados
+              <h2 className="text-lg font-extrabold text-[#04243b] tracking-tight" id="audit-title">
+                {flowMode === 'nfce' ? 'Auditoria de Confronto de Dados - NFC-e' : 
+                 flowMode === 'nfe_vendas' ? 'Auditoria de Confronto - NF-e Vendas (Saídas)' : 
+                 'Auditoria de Confronto - NF-e Compras (Entradas)'}
               </h2>
             </div>
             <p className="text-xs text-slate-500 mt-1 ml-9">
-              Visualização cruzada entre a base da SEFAZ (SIGA) e o Relatório do ERP Contábil.
+              {flowMode === 'nfce' ? 'Visualização cruzada de Modelo 65 entre a base da SEFAZ e o Relatório do ERP.' :
+               flowMode === 'nfe_vendas' ? 'Confronto bidirecional e análise de lacunas (Gap Analysis) de faturamento de saída (Modelo 55).' :
+               'Confronto bidirecional e análise de lacunas (Gap Analysis) de faturamento de compras (Modelo 55).'}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => exportAuditExcel(auditItems, auditSummary)}
+              id="export-audit-excel-btn"
+              onClick={() => exportAuditExcel(rows, auditItems, auditSummary, getFlowTitle())}
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-bold text-xs transition-all shadow-xs cursor-pointer"
             >
               <Download className="w-4 h-4" />
-              Exportar Relatório (.XLSX)
+              Exportar Relatório Consolidado (.XLSX)
             </button>
             <button
-              onClick={() => setIsAuditActive(false)}
+              id="back-to-converter-btn"
+              onClick={() => { setIsAuditActive(false); if (flowMode !== 'nfce') { resetAll(); } }}
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 font-bold text-xs transition-all cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4" />
-              Voltar ao Conversor
+              Voltar ao Início
             </button>
           </div>
         </div>
 
         {/* Compliance Dashboard KPI Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="kpi-grid">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between" id="kpi-sincronizadas">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Sincronizadas (OK)</span>
               <span className="text-xl font-black text-emerald-600 font-mono mt-0.5 block">{auditSummary.sincronizadas}</span>
@@ -657,20 +597,20 @@ export function ConversorNfceSiga() {
             </div>
           </div>
 
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between" id="kpi-faltantes">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Faltantes no ERP</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Omissão no ERP</span>
               <span className="text-xl font-black text-red-600 font-mono mt-0.5 block">{auditSummary.faltantesErp}</span>
-              <span className="text-[10px] text-slate-500 block mt-0.5">Consta na SEFAZ, não no ERP</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5 font-sans">Consta na SEFAZ, não no ERP</span>
             </div>
             <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center">
               <ShieldAlert className="w-5 h-5" />
             </div>
           </div>
 
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between" id="kpi-divergencias">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Não Consta na SEFAZ</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans font-sans">Divergência SEFAZ</span>
               <span className="text-xl font-black text-amber-600 font-mono mt-0.5 block">{auditSummary.naoConstamSefaz}</span>
               <span className="text-[10px] text-slate-500 block mt-0.5">Consta no ERP, não na SEFAZ</span>
             </div>
@@ -679,11 +619,11 @@ export function ConversorNfceSiga() {
             </div>
           </div>
 
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between" id="kpi-saltos">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Saltos de Sequência</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans font-sans">Saltos de Sequência</span>
               <span className="text-xl font-black text-orange-600 font-mono mt-0.5 block">{auditSummary.saltosSequencia}</span>
-              <span className="text-[10px] text-slate-500 block mt-0.5">Falta na SEFAZ e no ERP</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">Lacuna na numeração do lote</span>
             </div>
             <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center">
               <AlertCircle className="w-5 h-5" />
@@ -692,18 +632,18 @@ export function ConversorNfceSiga() {
         </div>
 
         {/* Audit List Table with search and status filter */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 bg-slate-50/50">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden" id="audit-table-card">
+          <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3 bg-slate-50/50">
             <div className="flex items-center gap-2">
-              <span className="font-bold text-xs uppercase tracking-wider text-[#04243b]">
-                Relatório Cruzado de Auditoria
+              <span className="font-bold text-xs uppercase tracking-wider text-[#04243b] font-sans">
+                Relatório Cruzado de Auditoria Bidirecional
               </span>
               <span className="px-2 py-0.5 rounded-md bg-[#04243b] text-white text-[10px] font-bold font-mono">
                 {filteredAuditItems.length} registros
               </span>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+            <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
               <div className="relative flex-grow sm:w-64">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
@@ -730,7 +670,7 @@ export function ConversorNfceSiga() {
                     auditFilterStatus === 'OK' ? 'bg-emerald-700 text-white' : 'text-slate-600 hover:bg-slate-50'
                   }`}
                 >
-                  OK ({auditSummary.sincronizadas})
+                  Sincronizado ({auditSummary.sincronizadas})
                 </button>
                 <button
                   onClick={() => setAuditFilterStatus('FALTANTE_ERP')}
@@ -738,7 +678,7 @@ export function ConversorNfceSiga() {
                     auditFilterStatus === 'FALTANTE_ERP' ? 'bg-red-600 text-white' : 'text-slate-600 hover:bg-slate-50'
                   }`}
                 >
-                  Faltante ERP ({auditSummary.faltantesErp})
+                  Omissão ERP ({auditSummary.faltantesErp})
                 </button>
                 <button
                   onClick={() => setAuditFilterStatus('NAO_CONSTA_SEFAZ')}
@@ -746,7 +686,7 @@ export function ConversorNfceSiga() {
                     auditFilterStatus === 'NAO_CONSTA_SEFAZ' ? 'bg-amber-600 text-white' : 'text-slate-600 hover:bg-slate-50'
                   }`}
                 >
-                  Falta SEFAZ ({auditSummary.naoConstamSefaz})
+                  Divergência SEFAZ ({auditSummary.naoConstamSefaz})
                 </button>
                 <button
                   onClick={() => setAuditFilterStatus('SALTO_SEQUENCIA')}
@@ -794,17 +734,17 @@ export function ConversorNfceSiga() {
                           {item.status === 'OK' ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-[10px] border border-emerald-200 font-sans">
                               <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              OK - Sincronizado
+                              Sincronizado (OK)
                             </span>
                           ) : item.status === 'FALTANTE_ERP' ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-red-50 text-red-700 font-bold text-[10px] border border-red-200 font-sans">
                               <ShieldAlert className="w-3 h-3 text-red-600" />
-                              Faltante no ERP
+                              Omissão no ERP
                             </span>
                           ) : item.status === 'NAO_CONSTA_SEFAZ' ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-amber-50 text-amber-700 font-bold text-[10px] border border-amber-200 font-sans">
                               <AlertTriangle className="w-3 h-3 text-amber-600" />
-                              Não Consta na SEFAZ
+                              Divergência SEFAZ
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-orange-50 text-orange-700 font-bold text-[10px] border border-orange-200 font-sans">
@@ -859,257 +799,435 @@ export function ConversorNfceSiga() {
   }
 
   return (
-    <div className="space-y-6 animate-fadeIn">
+    <div className="space-y-6 animate-fadeIn" id="config-module-root">
       {/* Title block */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="p-2 rounded-xl bg-[#04243b] text-[#e4b35e]">
-              <FileSpreadsheet className="w-5 h-5" />
-            </span>
-            <h2 className="text-lg font-extrabold text-[#04243b] tracking-tight">
-              Conversor NFC-e - SIGA
-            </h2>
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="p-2 rounded-xl bg-[#04243b] text-[#e4b35e]">
+                <FileSpreadsheet className="w-5 h-5" />
+              </span>
+              <h2 className="text-lg font-extrabold text-[#04243b] tracking-tight">
+                Auditoria Fiscal - SIGA
+              </h2>
+            </div>
+            <p className="text-xs text-slate-500 mt-1 ml-9 font-sans">
+              Plataforma integrada de conversão e auditoria de documentos fiscais (NFC-e e NF-e).
+            </p>
           </div>
-          <p className="text-xs text-slate-500 mt-1 ml-9">
-            Converta relatórios de NFC-e do SIGA para planilhas formatadas em Excel.
-          </p>
+
+          {rows.length > 0 && flowMode === 'nfce' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                id="export-direct-std-btn"
+                onClick={() => handleDirectExport(false)}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-bold text-xs transition-all shadow-xs cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                Exportar Excel (Padrão)
+              </button>
+              <button
+                id="export-direct-det-btn"
+                onClick={() => handleDirectExport(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs transition-all shadow-xs cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                Exportar Detalhado
+              </button>
+              <button
+                id="trigger-audit-modal-btn"
+                onClick={() => setIsAuditModalOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl border-2 border-[#e4b35e] text-[#04243b] hover:bg-[#e4b35e]/10 bg-transparent font-extrabold text-xs transition-all shadow-xs cursor-pointer"
+              >
+                <ClipboardCheck className="w-4 h-4 text-[#e4b35e]" />
+                Executar Auditoria de Dados
+              </button>
+              <button
+                id="reset-conversion-btn"
+                onClick={resetAll}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 font-bold text-xs transition-all cursor-pointer"
+                title="Limpar e enviar novo arquivo"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Limpar
+              </button>
+            </div>
+          )}
         </div>
 
-        {rows.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
+        {/* Operation Selection switcher tab layout */}
+        <div className="mt-5 border-t border-slate-100 pt-4" id="operation-selector-container">
+          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-2 font-sans">
+            Seletor de Operação Fiscal
+          </label>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-slate-100 p-1 rounded-2xl border border-slate-200/60" id="operation-tabs">
             <button
-              onClick={() => exportToExcel(rows, `NFCe_SIGA_${new Date().toISOString().slice(0,10)}.xlsx`, false)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-bold text-xs transition-all shadow-xs cursor-pointer"
+              id="tab-flow-nfce"
+              onClick={() => handleTabSwitch('nfce')}
+              className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${
+                flowMode === 'nfce' ? 'bg-[#04243b] text-[#e4b35e] shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
             >
-              <Download className="w-4 h-4" />
-              Exportar Excel (Padrão)
+              <Table className="w-4 h-4" />
+              NFC-e (SIGA)
             </button>
             <button
-              onClick={() => exportToExcel(rows, `NFCe_SIGA_Completo_${new Date().toISOString().slice(0,10)}.xlsx`, true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs transition-all shadow-xs cursor-pointer"
+              id="tab-flow-nfe-vendas"
+              onClick={() => handleTabSwitch('nfe_vendas')}
+              className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${
+                flowMode === 'nfe_vendas' ? 'bg-[#04243b] text-[#e4b35e] shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
             >
-              <Download className="w-4 h-4" />
-              Exportar Detalhado
+              <ArrowLeft className="w-4 h-4 rotate-180" />
+              NF-e Vendas (Saídas)
             </button>
             <button
-              onClick={() => setIsAuditModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl border-2 border-[#e4b35e] text-[#04243b] hover:bg-[#e4b35e]/10 bg-transparent font-extrabold text-xs transition-all shadow-xs cursor-pointer"
+              id="tab-flow-nfe-compras"
+              onClick={() => handleTabSwitch('nfe_compras')}
+              className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${
+                flowMode === 'nfe_compras' ? 'bg-[#04243b] text-[#e4b35e] shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
             >
-              <ClipboardCheck className="w-4 h-4 text-[#e4b35e]" />
-              Executar Auditoria de Dados
-            </button>
-            <button
-              onClick={resetAll}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 font-bold text-xs transition-all cursor-pointer"
-              title="Limpar e enviar novo arquivo"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Limpar
+              <ArrowLeft className="w-4 h-4" />
+              NF-e Compras (Entradas)
             </button>
           </div>
-        )}
+        </div>
       </div>
 
-      {/* Upload area when empty */}
-      {rows.length === 0 ? (
-        <div 
-          onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-          onDragLeave={() => setIsDragOver(false)}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-3xl p-10 text-center transition-all cursor-pointer flex flex-col items-center justify-center bg-white shadow-xs ${
-            isDragOver 
-              ? 'border-[#e4b35e] bg-[#e4b35e]/5' 
-              : 'border-slate-300 hover:border-[#04243b] hover:bg-slate-50/50'
-          }`}
-        >
-          <input 
-            ref={fileInputRef}
-            type="file" 
-            accept=".csv,.txt"
-            onChange={(e) => e.target.files && handleFileProcess(e.target.files[0])}
-            className="hidden" 
-          />
-          <div className="w-16 h-16 rounded-2xl bg-[#04243b] flex items-center justify-center text-[#e4b35e] mb-4 shadow-sm">
-            <Upload className="w-8 h-8" />
-          </div>
-          <h3 className="text-base font-bold text-[#04243b]">
-            Arraste o arquivo CSV do SIGA ou clique para selecionar
-          </h3>
-          <p className="text-xs text-slate-500 mt-1 max-w-md">
-            O sistema extrai automaticamente chaves de acesso de 44 dígitos, datas de emissão, números das notas e valores consolidados.
-          </p>
-          <span className="mt-4 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-slate-100 text-slate-600 text-[11px] font-semibold border border-slate-200">
-            Formatos suportados: CSV (separado por ponto e vírgula ou vírgula)
-          </span>
-        </div>
-      ) : (
+      {/* RENDER MODE A: NFC-e Standard flow */}
+      {flowMode === 'nfce' && (
         <>
-          {/* Stats KPI grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total de Notas</span>
-                <span className="text-xl font-black text-[#04243b] font-mono mt-0.5 block">{stats.totalCount}</span>
+          {/* Upload area when empty */}
+          {rows.length === 0 ? (
+            <div 
+              id="nfce-dropzone"
+              onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+              onDragLeave={() => setIsDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragOver(false);
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                  handleFileProcess(e.dataTransfer.files[0]);
+                }
+              }}
+              onClick={() => fileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-3xl p-10 text-center transition-all cursor-pointer flex flex-col items-center justify-center bg-white shadow-xs ${
+                isDragOver 
+                  ? 'border-[#e4b35e] bg-[#e4b35e]/5' 
+                  : 'border-slate-300 hover:border-[#04243b] hover:bg-slate-50/50'
+              }`}
+            >
+              <input 
+                ref={fileInputRef}
+                type="file" 
+                accept=".csv,.txt"
+                onChange={(e) => e.target.files && handleFileProcess(e.target.files[0])}
+                className="hidden" 
+              />
+              <div className="w-16 h-16 rounded-2xl bg-[#04243b] flex items-center justify-center text-[#e4b35e] mb-4 shadow-sm">
+                <Upload className="w-8 h-8" />
               </div>
-              <div className="w-10 h-10 rounded-xl bg-[#04243b]/5 text-[#04243b] flex items-center justify-center">
-                <FileText className="w-5 h-5" />
-              </div>
+              <h3 className="text-base font-bold text-[#04243b] font-sans">
+                Arraste o arquivo CSV da SEFAZ ou clique para selecionar. O sistema identifica automaticamente modelos 55 e 65.
+              </h3>
+              <p className="text-xs text-slate-500 mt-1 max-w-md font-sans">
+                O sistema extrai automaticamente chaves de acesso de 44 dígitos, datas de emissão, números das notas e valores consolidados.
+              </p>
+              <span className="mt-4 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-slate-100 text-slate-600 text-[11px] font-semibold border border-slate-200 font-sans">
+                Formatos suportados: CSV (separado por ponto e vírgula ou vírgula)
+              </span>
             </div>
-
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Valor Acumulado</span>
-                <span className="text-xl font-black text-emerald-600 font-mono mt-0.5 block">
-                  R$ {stats.totalValor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
-              </div>
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                <DollarSign className="w-5 h-5" />
-              </div>
-            </div>
-
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Período Identificado</span>
-                <span className="text-xs font-bold text-[#04243b] mt-1 block">
-                  {stats.periodo ? `${stats.periodo.inicio} a ${stats.periodo.fim}` : 'Período não identificado'}
-                </span>
-                <span className="text-[11px] text-slate-500 block mt-0.5">Com base na data de emissão</span>
-              </div>
-              <div className="w-10 h-10 rounded-xl bg-[#e4b35e]/15 text-[#e4b35e] flex items-center justify-center">
-                <Calendar className="w-5 h-5" />
-              </div>
-            </div>
-          </div>
-
-          {/* Table section with search and filter */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-            <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-slate-50/50">
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-xs uppercase tracking-wider text-[#04243b]">
-                  Pré-visualização do Relatório processado
-                </span>
-                <span className="px-2 py-0.5 rounded-md bg-[#04243b] text-white text-[10px] font-bold font-mono">
-                  {filteredRows.length} de {rows.length}
-                </span>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                <div className="relative flex-grow sm:w-64">
-                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Buscar por chave, nota, data..."
-                    className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:border-[#04243b]"
-                  />
+          ) : (
+            <>
+              {/* Stats KPI grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" id="nfce-stats-grid">
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Total de Notas</span>
+                    <span className="text-xl font-black text-[#04243b] font-mono mt-0.5 block">{stats.totalCount}</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-[#04243b]/5 text-[#04243b] flex items-center justify-center">
+                    <FileText className="w-5 h-5" />
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl p-0.5">
-                  <button
-                    onClick={() => setFilterStatus('all')}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                      filterStatus === 'all' ? 'bg-[#04243b] text-white' : 'text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    Todas
-                  </button>
-                  <button
-                    onClick={() => setFilterStatus('valid')}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                      filterStatus === 'valid' ? 'bg-emerald-700 text-white' : 'text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    Válidas
-                  </button>
-                  <button
-                    onClick={() => setFilterStatus('invalid')}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                      filterStatus === 'invalid' ? 'bg-red-600 text-white' : 'text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    Inválidas
-                  </button>
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Valor Acumulado</span>
+                    <span className="text-xl font-black text-emerald-600 font-mono mt-0.5 block">
+                      R$ {stats.totalValor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                    <DollarSign className="w-5 h-5" />
+                  </div>
+                </div>
+
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Período Identificado</span>
+                    <span className="text-xs font-bold text-[#04243b] mt-1 block font-mono">
+                      {stats.periodo ? `${stats.periodo.inicio} a ${stats.periodo.fim}` : 'Período não identificado'}
+                    </span>
+                    <span className="text-[11px] text-slate-500 block mt-0.5 font-sans">Com base na data de emissão</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-[#e4b35e]/15 text-[#e4b35e] flex items-center justify-center">
+                    <Calendar className="w-5 h-5" />
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="overflow-x-auto max-h-[500px]">
-              <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-100 text-slate-600 uppercase text-[10px] font-bold tracking-wider sticky top-0 z-10 border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4">Nº Nota</th>
-                    <th className="py-3 px-4">Data Emissão</th>
-                    <th className="py-3 px-4 text-right">Valor R$</th>
-                    <th className="py-3 px-4">Chave de Acesso</th>
-                    <th className="py-3 px-4">UF</th>
-                    <th className="py-3 px-4">Série / Mod</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-xs">
-                  {filteredRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="text-center py-8 text-slate-400">
-                        Nenhum registro encontrado com os filtros atuais.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredRows.map((r) => (
-                      <tr key={r.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-2.5 px-4">
-                          {r.isValidChave ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-[10px] border border-emerald-200">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              Válida
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 text-red-700 font-bold text-[10px] border border-red-200" title={r.chaveError}>
-                              <AlertTriangle className="w-3 h-3 text-red-600" />
-                              Inválida
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-4 font-mono font-bold text-[#04243b]">
-                          {r.numeroNotaFormatado}
-                        </td>
-                        <td className="py-2.5 px-4 text-slate-700">
-                          {r.dataEmissao}
-                        </td>
-                        <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-700">
-                          R$ {r.valorDecimal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                        <td className="py-2.5 px-4 font-mono text-[11px] text-slate-600 select-all max-w-xs truncate" title={r.chaveDeAcesso}>
-                          {r.chaveDeAcesso || '-'}
-                        </td>
-                        <td className="py-2.5 px-4 text-slate-700">
-                          {r.ufNome || '-'}
-                        </td>
-                        <td className="py-2.5 px-4 text-slate-600 font-mono text-[11px]">
-                          {r.isValidChave ? `S.${r.serie} / Mod.${r.modelo}` : '-'}
-                        </td>
+              {/* Table section with search and filter */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden" id="nfce-table-card">
+                <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-slate-50/50">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-xs uppercase tracking-wider text-[#04243b] font-sans">
+                      Pré-visualização do Relatório processado
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-[#04243b] text-white text-[10px] font-bold font-mono">
+                      {filteredRows.length} de {rows.length}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                    <div className="relative flex-grow sm:w-64">
+                      <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        placeholder="Buscar por chave, nota, data..."
+                        className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:border-[#04243b]"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl p-0.5">
+                      <button
+                        onClick={() => setFilterStatus('all')}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          filterStatus === 'all' ? 'bg-[#04243b] text-white' : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        Todas
+                      </button>
+                      <button
+                        onClick={() => setFilterStatus('valid')}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          filterStatus === 'valid' ? 'bg-emerald-700 text-white' : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        Válidas
+                      </button>
+                      <button
+                        onClick={() => setFilterStatus('invalid')}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          filterStatus === 'invalid' ? 'bg-red-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        Inválidas
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto max-h-[500px]">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-slate-100 text-slate-600 uppercase text-[10px] font-bold tracking-wider sticky top-0 z-10 border-b border-slate-200">
+                      <tr>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4">Nº Nota</th>
+                        <th className="py-3 px-4">Data Emissão</th>
+                        <th className="py-3 px-4 text-right">Valor R$</th>
+                        <th className="py-3 px-4">Chave de Acesso</th>
+                        <th className="py-3 px-4">UF</th>
+                        <th className="py-3 px-4">Série / Mod</th>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-xs">
+                      {filteredRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="text-center py-8 text-slate-400">
+                            Nenhum registro encontrado com os filtros atuais.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredRows.map((r) => (
+                          <tr key={r.id} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="py-2.5 px-4">
+                              {r.isValidChave ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-[10px] border border-emerald-200 font-sans">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  Válida
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 text-red-700 font-bold text-[10px] border border-red-200 font-sans" title={r.chaveError}>
+                                  <AlertTriangle className="w-3 h-3 text-red-600" />
+                                  Inválida
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-4 font-mono font-bold text-[#04243b]">
+                              {r.numeroNotaFormatado}
+                            </td>
+                            <td className="py-2.5 px-4 text-slate-700 font-mono">
+                              {r.dataEmissao}
+                            </td>
+                            <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-700">
+                              R$ {r.valorDecimal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-2.5 px-4 font-mono text-[11px] text-slate-600 select-all max-w-xs truncate" title={r.chaveDeAcesso}>
+                              {r.chaveDeAcesso || '-'}
+                            </td>
+                            <td className="py-2.5 px-4 text-slate-700">
+                              {r.ufNome || '-'}
+                            </td>
+                            <td className="py-2.5 px-4 text-slate-600 font-mono text-[11px]">
+                              {r.isValidChave ? `S.${r.serie} / Mod.${r.modelo}` : '-'}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
         </>
       )}
 
-      {/* Modal de Upload do ERP */}
+      {/* RENDER MODE B & C: NF-e Vendas (Saídas) & Compras (Entradas) - Joint Dual Upload */}
+      {(flowMode === 'nfe_vendas' || flowMode === 'nfe_compras') && (
+        <div className="space-y-6" id="nfe-dual-container">
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex items-center gap-3 text-slate-600">
+            <AlertCircle className="w-5 h-5 text-[#C5A059] shrink-0" />
+            <p className="text-xs leading-relaxed font-sans">
+              Os fluxos de auditoria estratégica de NF-e (Modelo 55) exigem o carregamento concomitante da base oficial da <strong>SEFAZ</strong> e do <strong>Relatório do ERP Contábil</strong> para a realização do confronto bidirecional e detecção automática de omissões e lacunas numéricas.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6" id="nfe-upload-grid">
+            {/* Box 1: SEFAZ File */}
+            <div 
+              id="sefaz-dropzone-box"
+              onDragOver={(e) => { e.preventDefault(); setSefazDragOver(true); }}
+              onDragLeave={() => setSefazDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setSefazDragOver(false);
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                  setSefazFile(e.dataTransfer.files[0]);
+                }
+              }}
+              onClick={() => sefazFileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-3xl p-8 text-center transition-all cursor-pointer flex flex-col items-center justify-center bg-white shadow-xs min-h-[220px] ${
+                sefazDragOver 
+                  ? 'border-[#e4b35e] bg-[#e4b35e]/5' 
+                  : sefazFile 
+                    ? 'border-emerald-500 bg-emerald-50/20' 
+                    : 'border-slate-300 hover:border-[#04243b] hover:bg-slate-50/50'
+              }`}
+            >
+              <input 
+                ref={sefazFileInputRef}
+                type="file" 
+                accept=".csv,.txt"
+                onChange={(e) => e.target.files && setSefazFile(e.target.files[0])}
+                className="hidden" 
+              />
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-3 shadow-sm ${
+                sefazFile ? 'bg-emerald-600 text-white' : 'bg-[#04243b] text-[#e4b35e]'
+              }`}>
+                {sefazFile ? <CheckCircle2 className="w-6 h-6" /> : <Upload className="w-6 h-6" />}
+              </div>
+              <h3 className="text-sm font-bold text-[#04243b] font-sans">
+                {sefazFile ? `Carregado: ${sefazFile.name}` : 'Arquivo SEFAZ (Modelo 55)'}
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-1 max-w-xs font-sans">
+                {sefazFile 
+                  ? `${(sefazFile.size / 1024).toFixed(1)} KB - Clique ou arraste para substituir` 
+                  : 'Arraste os arquivos CSV (SEFAZ e ERP) ou clique para selecionar. O sistema identifica automaticamente modelos 55 e 65.'}
+              </p>
+            </div>
+
+            {/* Box 2: ERP Contábil File */}
+            <div 
+              id="erp-dropzone-box"
+              onDragOver={(e) => { e.preventDefault(); setErpDragOver(true); }}
+              onDragLeave={() => setErpDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setErpDragOver(false);
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                  setErpFile(e.dataTransfer.files[0]);
+                }
+              }}
+              onClick={() => erpFileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-3xl p-8 text-center transition-all cursor-pointer flex flex-col items-center justify-center bg-white shadow-xs min-h-[220px] ${
+                erpDragOver 
+                  ? 'border-[#e4b35e] bg-[#e4b35e]/5' 
+                  : erpFile 
+                    ? 'border-emerald-500 bg-emerald-50/20' 
+                    : 'border-slate-300 hover:border-[#04243b] hover:bg-slate-50/50'
+              }`}
+            >
+              <input 
+                ref={erpFileInputRef}
+                type="file" 
+                accept=".csv,.txt"
+                onChange={(e) => e.target.files && setErpFile(e.target.files[0])}
+                className="hidden" 
+              />
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-3 shadow-sm ${
+                erpFile ? 'bg-emerald-600 text-white' : 'bg-[#04243b] text-[#e4b35e]'
+              }`}>
+                {erpFile ? <CheckCircle2 className="w-6 h-6" /> : <Upload className="w-6 h-6" />}
+              </div>
+              <h3 className="text-sm font-bold text-[#04243b] font-sans">
+                {erpFile ? `Carregado: ${erpFile.name}` : 'Relatório do ERP Contábil'}
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-1 max-w-xs font-sans">
+                {erpFile 
+                  ? `${(erpFile.size / 1024).toFixed(1)} KB - Clique ou arraste para substituir` 
+                  : 'Arraste os arquivos CSV (SEFAZ e ERP) ou clique para selecionar. O sistema identifica automaticamente modelos 55 e 65.'}
+              </p>
+            </div>
+          </div>
+
+          {/* Action trigger button when both are selected */}
+          {sefazFile && erpFile ? (
+            <div className="bg-[#04243b]/5 border-2 border-dashed border-[#e4b35e]/40 p-5 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-fadeIn" id="run-audit-action-bar">
+              <div>
+                <h4 className="font-extrabold text-[#04243b] text-sm font-sans">Ambos os relatórios fiscais carregados com sucesso!</h4>
+                <p className="text-xs text-slate-500 mt-1 font-sans">Clique ao lado para processar o cruzamento bidirecional e detecção de saltos numéricos.</p>
+              </div>
+              <button
+                id="process-dual-audit-btn"
+                onClick={handleDualProcess}
+                className="px-6 py-3 rounded-xl bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-extrabold text-xs tracking-wider uppercase transition-all shadow-md hover:shadow-lg cursor-pointer shrink-0"
+              >
+                Processar Confronto de Auditoria
+              </button>
+            </div>
+          ) : (
+            <div className="text-center p-4 text-slate-400 text-xs font-sans">
+              Carregue os dois arquivos acima para habilitar o botão de processamento.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal de Upload do ERP (only used during the NFC-e flow) */}
       {isAuditModalOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs" id="audit-modal">
           <div className="bg-white rounded-3xl border border-slate-200 shadow-xl max-w-lg w-full overflow-hidden animate-fadeIn">
             <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
               <div className="flex items-center gap-2">
                 <ClipboardCheck className="w-5 h-5 text-[#C5A059]" />
                 <h3 className="font-extrabold text-[#001F3F] text-sm uppercase tracking-tight font-sans">
-                  Iniciar Auditoria de Dados
+                  Iniciar Auditoria de Dados NFC-e
                 </h3>
               </div>
               <button 
@@ -1122,10 +1240,11 @@ export function ConversorNfceSiga() {
 
             <div className="p-6 space-y-4">
               <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Para confrontar as notas fiscais processadas da SEFAZ com o seu ERP Contábil, faça o upload do relatório de acompanhamento de saídas de faturamento.
+                Para confrontar as notas fiscais processadas da SEFAZ com o seu ERP Contábil, faça o upload do relatório de faturamento de saídas.
               </p>
 
               <div 
+                id="modal-drag-area"
                 onDragOver={(e) => { e.preventDefault(); setDragOverModal(true); }}
                 onDragLeave={() => setDragOverModal(false)}
                 onDrop={(e) => {
@@ -1156,7 +1275,7 @@ export function ConversorNfceSiga() {
                   Selecione ou arraste o Relatório do ERP
                 </h4>
                 <p className="text-[10px] text-slate-400 mt-1 font-sans">
-                  Suporta arquivos .csv ou .txt (delimitador ponto e vírgula)
+                  Suporta arquivos .csv ou .txt (separadores vírgula ou ponto e vírgula)
                 </p>
               </div>
 
@@ -1178,6 +1297,52 @@ export function ConversorNfceSiga() {
                 Cancelar
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* PROGRESS TRACKING OVERLAY */}
+      {isProcessing && (
+        <div className="fixed inset-0 z-[100] overflow-y-auto flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md animate-fadeIn" id="processing-overlay">
+          <div className="bg-white rounded-3xl border border-slate-200 p-8 max-w-md w-full shadow-2xl text-center space-y-6">
+            <div className="relative w-24 h-24 mx-auto flex items-center justify-center">
+              {/* Spinning background track */}
+              <div className="absolute inset-0 rounded-full border-4 border-slate-100"></div>
+              {/* Dynamic progress circle */}
+              <svg className="absolute inset-0 w-full h-full -rotate-90">
+                <circle
+                  cx="48"
+                  cy="48"
+                  r="40"
+                  className="stroke-[#04243b] stroke-[5] fill-none transition-all duration-300"
+                  strokeDasharray={251.2}
+                  strokeDashoffset={251.2 - (251.2 * processingProgress) / 100}
+                  strokeLinecap="round"
+                />
+              </svg>
+              <span className="text-base font-black text-[#04243b] font-mono">{processingProgress}%</span>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-base font-extrabold text-[#04243b] font-sans">
+                Processando Documentos Fiscais
+              </h3>
+              <p className="text-xs text-[#e4b35e] font-extrabold font-sans tracking-wide">
+                {processingStage}
+              </p>
+            </div>
+
+            {/* Horizontal progress bar */}
+            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+              <div 
+                className="bg-[#e4b35e] h-full rounded-full transition-all duration-300"
+                style={{ width: `${processingProgress}%` }}
+              ></div>
+            </div>
+
+            <p className="text-[10px] text-slate-400 font-sans leading-normal">
+              Otimizado para processar arquivos extremamente grandes sem congelar o navegador. Aguarde alguns instantes...
+            </p>
           </div>
         </div>
       )}
