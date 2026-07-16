@@ -1420,16 +1420,33 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
         return val === 'ano' || val === 'anos';
       });
 
-      // Preferred total faturamento matches
+      // Tier 1: Look for exact or highly specific total billing column matches
       let fIdx = cells.findIndex(c => {
         const val = c.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
-        return val === 'total' || val === 'totalr' || val === 'totalr$' || val.includes('faturamentototal') || val === 'receitatotal';
+        return val === 'total' || val === 'totalr' || val === 'totalr$' || val === 'faturamentototal' || val === 'receitatotal' || val === 'totalfaturamento' || val === 'faturamentototalr';
       });
-      
+
+      // Tier 2: Look for cells containing 'total' (e.g., 'Total R$', 'Faturamento Total', 'Total Geral')
       if (fIdx === -1) {
         fIdx = cells.findIndex(c => {
           const val = c.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
-          return val.includes('total') || val.includes('faturamento') || val.includes('receita') || val.includes('saidas') || val.includes('valor');
+          return val.includes('total') || val.includes('faturamentototal') || val.includes('receitatotal');
+        });
+      }
+
+      // Tier 3: Look for general billing/faturamento or receita matches
+      if (fIdx === -1) {
+        fIdx = cells.findIndex(c => {
+          const val = c.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+          return val.includes('faturamento') || val.includes('receita');
+        });
+      }
+
+      // Tier 4: Look for saidas or valor
+      if (fIdx === -1) {
+        fIdx = cells.findIndex(c => {
+          const val = c.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+          return val.includes('saidas') || val.includes('valor');
         });
       }
 
@@ -1450,12 +1467,48 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
 
     // Now loop over every line to extract the data
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      let line = lines[i];
+      
+      const lowerLine = line.toLowerCase();
+      if (
+        lowerLine.includes('emissao') || 
+        lowerLine.includes('emissáo') || 
+        lowerLine.includes('emissão') ||
+        lowerLine.includes('periodo') || 
+        lowerLine.includes('período') ||
+        lowerLine.includes('empresa:') ||
+        lowerLine.includes('cnpj:') ||
+        lowerLine.includes('cidade:') ||
+        lowerLine.includes('endereco') ||
+        lowerLine.includes('endereço') ||
+        lowerLine.includes('insc.est') ||
+        lowerLine.includes('inscricao') ||
+        lowerLine.includes('inscrição') ||
+        lowerLine.includes('relatorio') ||
+        lowerLine.includes('relatório') ||
+        lowerLine.includes('pagina') ||
+        lowerLine.includes('página') ||
+        lowerLine.includes('competencia') ||
+        lowerLine.includes('competência') ||
+        lowerLine.includes('faturamento bruto') ||
+        lowerLine.includes('vendas a vista') ||
+        lowerLine.includes('vendas a prazo') ||
+        lowerLine.includes('m e s') ||
+        lowerLine.includes('m ê s') ||
+        lowerLine.includes('totais') ||
+        lowerLine.includes('total geral') ||
+        lowerLine.includes('soma')
+      ) {
+        continue;
+      }
       
       // Skip obvious dividers or total lines
       if (line.startsWith('---') || line.startsWith('===') || line.toLowerCase().startsWith('totais') || line.toLowerCase().includes('soma')) {
         continue;
       }
+
+      // Strip full dates like DD/MM/YYYY to avoid partial matching as MM/YYYY
+      line = line.replace(/\b\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}\b/g, '');
 
       const cells = splitCsvLine(line, delimiter);
       if (cells.length < 2) continue;
@@ -1598,10 +1651,46 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     };
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      let line = lines[i];
+      const lowerLine = line.toLowerCase();
+      if (
+        lowerLine.includes('emissao') || 
+        lowerLine.includes('emissáo') || 
+        lowerLine.includes('emissão') ||
+        lowerLine.includes('periodo') || 
+        lowerLine.includes('período') ||
+        lowerLine.includes('empresa:') ||
+        lowerLine.includes('cnpj:') ||
+        lowerLine.includes('cidade:') ||
+        lowerLine.includes('endereco') ||
+        lowerLine.includes('endereço') ||
+        lowerLine.includes('insc.est') ||
+        lowerLine.includes('inscricao') ||
+        lowerLine.includes('inscrição') ||
+        lowerLine.includes('relatorio') ||
+        lowerLine.includes('relatório') ||
+        lowerLine.includes('pagina') ||
+        lowerLine.includes('página') ||
+        lowerLine.includes('competencia') ||
+        lowerLine.includes('competência') ||
+        lowerLine.includes('faturamento bruto') ||
+        lowerLine.includes('vendas a vista') ||
+        lowerLine.includes('vendas a prazo') ||
+        lowerLine.includes('m e s') ||
+        lowerLine.includes('m ê s') ||
+        lowerLine.includes('totais') ||
+        lowerLine.includes('total geral') ||
+        lowerLine.includes('soma')
+      ) {
+        continue;
+      }
+
       if (line.toLowerCase().startsWith('totais') || line.toLowerCase().includes('total geral') || line.toLowerCase().startsWith('soma')) {
         continue;
       }
+
+      // Strip full dates like DD/MM/YYYY to avoid partial matching of MM/YYYY
+      line = line.replace(/\b\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}\b/g, '');
 
       let monthNum = -1;
       let yearNum = -1;
@@ -1636,7 +1725,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
         for (const checkLine of linesToCheck) {
           const matches = checkLine.match(/(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{2})|\d+,\d{2}|\d+\.\d{2})/g);
           if (matches && matches.length > 0) {
-            const numbers = matches.map(m => parseNumericValue(m)).filter(n => n > 100);
+            const numbers = matches.map(m => parseNumericValue(m)).filter(n => !isNaN(n) && n >= 0);
             if (numbers.length > 0) {
               faturamentoTotal = Math.max(...numbers);
               break;
@@ -1644,7 +1733,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
           }
         }
 
-        if (faturamentoTotal <= 0) continue;
+        if (faturamentoTotal < 0) continue;
 
         const vendaVista = faturamentoTotal * (company.vendaVistaPercent / 100);
         const vendaPrazo = faturamentoTotal * (company.vendaPrazoPercent / 100);

@@ -15,6 +15,7 @@ import { ConversorNfceSiga } from './components/ConversorNfceSiga';
 import { Comunicados } from './components/Comunicados';
 import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
 import { ChaveSanitizer } from './components/ChaveSanitizer';
+import { OrganizadorRelatorio } from './components/OrganizadorRelatorio';
 import { FileSpreadsheet, Briefcase, Menu, Calculator, Coins, Settings, Table, FileText, ShieldCheck, Sparkles } from 'lucide-react';
 
 // Synchronously purge all records referencing MODULUS or CNPJ 37.345.284/0001-68
@@ -56,8 +57,8 @@ try {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'conversor_nfce_siga' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
-  >('debit_levantamento');
+    'organizador_relatorio' | 'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'conversor_nfce_siga' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
+  >('organizador_relatorio');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
   return (
@@ -93,6 +94,20 @@ export default function App() {
             {/* Navigation Buttons list */}
             <nav className="p-3 space-y-1 flex flex-row md:flex-col items-center justify-around md:justify-start w-full md:space-y-1.5">
               
+              {/* Button: Organizador de Relatório (New) */}
+              <button
+                onClick={() => setActiveTab('organizador_relatorio')}
+                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
+                  activeTab === 'organizador_relatorio'
+                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
+                    : 'hover:bg-[#031d30] text-slate-300'
+                }`}
+                title="Formatador e Organizador de Relatórios"
+              >
+                <FileSpreadsheet className="h-4.5 w-4.5 shrink-0 text-[#e4b35e]" />
+                <span className="hidden sm:inline md:inline">Organizador de Relatório</span>
+              </button>
+
               {/* Button 1: XML Nfe Auditor (Existing module) */}
               <button
                 onClick={() => setActiveTab('xml_auditor')}
@@ -247,7 +262,9 @@ export default function App() {
 
           </div>
 
-          {activeTab === 'xml_auditor' ? (
+          {activeTab === 'organizador_relatorio' ? (
+            <OrganizadorRelatorio />
+          ) : activeTab === 'xml_auditor' ? (
             <NfeXmlAuditor />
           ) : activeTab === 'debit_levantamento' ? (
             <DebtLevantamento />

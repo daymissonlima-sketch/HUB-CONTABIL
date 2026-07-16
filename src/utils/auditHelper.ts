@@ -38,7 +38,7 @@ export interface ErpRecord {
 
 export interface AuditItem {
   nota: number;
-  status: 'OK' | 'FALTANTE_ERP' | 'NAO_CONSTA_SEFAZ' | 'SALTO_SEQUENCIA';
+  status: 'OK' | 'FALTANTE_ERP' | 'NAO_CONSTA_SEFAZ' | 'SALTO_SEQUENCIA' | 'DIVERGENCIA_VALOR';
   sefazValue?: number;
   erpValue?: number;
   sefazDate?: string;
@@ -55,6 +55,7 @@ export interface AuditSummary {
   faltantesErp: number;
   naoConstamSefaz: number;
   saltosSequencia: number;
+  divergenciasValor: number;
   minNota: number;
   maxNota: number;
 }
@@ -196,12 +197,13 @@ export function parseSefazReport(text: string): InvoiceRow[] {
 }
 
 /**
- * Parses the accounting ERP CSV text into ErpRecord structured format.
+ * Isolates the ERP data aggregation logic (Hash Map representation).
+ * Aggregates multi-line CFOP division into a single financial entity per note number.
  */
-export function parseErpReport(text: string): ErpRecord[] {
-  if (!text) return [];
+export function aggregateERPData(text: string): Map<number, ErpRecord> {
+  if (!text) return new Map();
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-  if (lines.length === 0) return [];
+  if (lines.length === 0) return new Map();
 
   // Identify delimiter and header line
   let headerIndex = -1;
@@ -210,18 +212,18 @@ export function parseErpReport(text: string): ErpRecord[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const cells = line.split(';');
-    const hasNota = cells.some(c => c.toLowerCase().includes('nota') || c.toLowerCase().includes('documento'));
-    const hasEmissao = cells.some(c => c.toLowerCase().includes('emissão') || c.toLowerCase().includes('emissao') || c.toLowerCase().includes('data'));
-    if (hasNota && hasEmissao) {
+    const hasNota = cells.some(c => c.toLowerCase().includes('nota') || c.toLowerCase().includes('documento') || c.toLowerCase() === 'nº' || c.toLowerCase().includes('numero'));
+    const hasValor = cells.some(c => c.toLowerCase().includes('valor') || c.toLowerCase().includes('total') || c.toLowerCase().includes('contábil') || c.toLowerCase().includes('contabil') || c.toLowerCase().includes('faturamento'));
+    if (hasNota && hasValor) {
       headerIndex = i;
       delimiter = ';';
       break;
     }
 
     const cellsComma = line.split(',');
-    const hasNotaComma = cellsComma.some(c => c.toLowerCase().includes('nota') || c.toLowerCase().includes('documento'));
-    const hasEmissaoComma = cellsComma.some(c => c.toLowerCase().includes('emissão') || c.toLowerCase().includes('emissao') || c.toLowerCase().includes('data'));
-    if (hasNotaComma && hasEmissaoComma) {
+    const hasNotaComma = cellsComma.some(c => c.toLowerCase().includes('nota') || c.toLowerCase().includes('documento') || c.toLowerCase() === 'nº' || c.toLowerCase().includes('numero'));
+    const hasValorComma = cellsComma.some(c => c.toLowerCase().includes('valor') || c.toLowerCase().includes('total') || c.toLowerCase().includes('contábil') || c.toLowerCase().includes('contabil') || c.toLowerCase().includes('faturamento'));
+    if (hasNotaComma && hasValorComma) {
       headerIndex = i;
       delimiter = ',';
       break;
@@ -238,13 +240,14 @@ export function parseErpReport(text: string): ErpRecord[] {
   if (headerIndex !== -1) {
     const headerCells = lines[headerIndex].split(delimiter).map(c => c.trim().toLowerCase());
     
-    const foundNota = headerCells.findIndex(c => c === 'nota' || c === 'documento' || c.includes('nº') || c.includes('numero'));
+    const foundNota = headerCells.findIndex(c => c === 'nota' || c === 'documento' || c.includes('nº') || c.includes('numero') || c === 'num' || c === 'cod');
     if (foundNota !== -1) notaIdx = foundNota;
 
     const foundData = headerCells.findIndex(c => c.includes('data emiss') || c === 'data' || c === 'emissao' || c === 'emissão');
     if (foundData !== -1) dataIdx = foundData;
 
-    const foundValor = headerCells.findIndex(c => c.includes('valor cont') || c.includes('valor c') || c === 'valor' || c.includes('total') || c.includes('contábil') || c.includes('contabil'));
+    // Preference: Column "Valor Total" or similar total/contábil/valor column
+    const foundValor = headerCells.findIndex(c => c.includes('valor total') || c.includes('val. total') || c.includes('val total') || c.includes('valor cont') || c.includes('valor c') || c === 'valor' || c.includes('total') || c.includes('contábil') || c.includes('contabil') || c.includes('faturamento'));
     if (foundValor !== -1) valorIdx = foundValor;
 
     const foundSerie = headerCells.findIndex(c => c.includes('série') || c === 'serie' || c === 'sub-série' || c === 'sub-serie');
@@ -252,8 +255,6 @@ export function parseErpReport(text: string): ErpRecord[] {
 
     const foundCliente = headerCells.findIndex(c => c === 'cliente' || c.includes('nome') || c.includes('razão') || c.includes('razao'));
     if (foundCliente !== -1) clienteIdx = foundCliente;
-  } else {
-    headerIndex = -1; 
   }
 
   const erpRecordsMap = new Map<number, ErpRecord>();
@@ -261,10 +262,11 @@ export function parseErpReport(text: string): ErpRecord[] {
 
   for (let i = startIdx; i < lines.length; i++) {
     const line = lines[i];
-    const cells = line.split(delimiter).map(c => c.trim());
+    const cells = line.split(delimiter).map(c => c.trim().replace(/^"|"$/g, ''));
     if (cells.length < 2) continue;
 
     const notaRaw = cells[notaIdx] || '';
+    // Matching estrito pelo número da nota (sem zeros à esquerda e sem caracteres especiais)
     const notaNum = parseInt(notaRaw.replace(/\D/g, ''), 10);
     if (Number.isNaN(notaNum)) continue;
 
@@ -300,6 +302,14 @@ export function parseErpReport(text: string): ErpRecord[] {
     }
   }
 
+  return erpRecordsMap;
+}
+
+/**
+ * Parses the accounting ERP CSV text into ErpRecord structured format.
+ */
+export function parseErpReport(text: string): ErpRecord[] {
+  const erpRecordsMap = aggregateERPData(text);
   return Array.from(erpRecordsMap.values());
 }
 
@@ -332,12 +342,8 @@ export function executeDataAudit(sefazRows: InvoiceRow[], erpText: string): { it
     }
   });
 
-  // Map ERP records
-  const erpMap = new Map<number, ErpRecord>();
-  const erpRecords = parseErpReport(erpText);
-  erpRecords.forEach(rec => {
-    erpMap.set(rec.nota, rec);
-  });
+  // Map ERP records using aggregateERPData
+  const erpMap = aggregateERPData(erpText);
 
   const allNotes = [...sefazMap.keys(), ...erpMap.keys()];
   if (allNotes.length === 0) {
@@ -350,6 +356,7 @@ export function executeDataAudit(sefazRows: InvoiceRow[], erpText: string): { it
         faltantesErp: 0,
         naoConstamSefaz: 0,
         saltosSequencia: 0,
+        divergenciasValor: 0,
         minNota: 0,
         maxNota: 0
       }
@@ -369,6 +376,7 @@ export function executeDataAudit(sefazRows: InvoiceRow[], erpText: string): { it
   let faltantesErp = 0;
   let naoConstamSefaz = 0;
   let saltosSequencia = 0;
+  let divergenciasValor = 0;
 
   // For safety and fast execution on high-number ranges, cap gap scans to 100,000 notes.
   const gapRangeLimit = 100000;
@@ -382,18 +390,35 @@ export function executeDataAudit(sefazRows: InvoiceRow[], erpText: string): { it
     if (hasSefaz && hasErp) {
       const sefazObj = sefazMap.get(n)!;
       const erp = erpMap.get(n)!;
-      sincronizadas++;
-      items.push({
-        nota: n,
-        status: 'OK',
-        sefazValue: sefazObj.valor,
-        erpValue: erp.valor,
-        sefazDate: sefazObj.row.dataEmissao,
-        erpDate: erp.dataEmissao,
-        chaveDeAcesso: sefazObj.row.chaveDeAcesso,
-        cliente: erp.cliente,
-        serie: sefazObj.row.serie || erp.serie
-      });
+      const isDivergent = Math.abs(sefazObj.valor - erp.valor) > 0.01;
+      
+      if (isDivergent) {
+        divergenciasValor++;
+        items.push({
+          nota: n,
+          status: 'DIVERGENCIA_VALOR',
+          sefazValue: sefazObj.valor,
+          erpValue: erp.valor,
+          sefazDate: sefazObj.row.dataEmissao,
+          erpDate: erp.dataEmissao,
+          chaveDeAcesso: sefazObj.row.chaveDeAcesso,
+          cliente: erp.cliente,
+          serie: sefazObj.row.serie || erp.serie
+        });
+      } else {
+        sincronizadas++;
+        items.push({
+          nota: n,
+          status: 'OK',
+          sefazValue: sefazObj.valor,
+          erpValue: erp.valor,
+          sefazDate: sefazObj.row.dataEmissao,
+          erpDate: erp.dataEmissao,
+          chaveDeAcesso: sefazObj.row.chaveDeAcesso,
+          cliente: erp.cliente,
+          serie: sefazObj.row.serie || erp.serie
+        });
+      }
     } else if (hasSefaz) {
       const sefazObj = sefazMap.get(n)!;
       faltantesErp++;
@@ -434,12 +459,23 @@ export function executeDataAudit(sefazRows: InvoiceRow[], erpText: string): { it
         if (hasSefaz && hasErp) {
           const sefazObj = sefazMap.get(n)!;
           const erp = erpMap.get(n)!;
-          sincronizadas++;
-          items.push({
-            nota: n, status: 'OK', sefazValue: sefazObj.valor, erpValue: erp.valor,
-            sefazDate: sefazObj.row.dataEmissao, erpDate: erp.dataEmissao,
-            chaveDeAcesso: sefazObj.row.chaveDeAcesso, cliente: erp.cliente, serie: sefazObj.row.serie || erp.serie
-          });
+          const isDivergent = Math.abs(sefazObj.valor - erp.valor) > 0.01;
+          
+          if (isDivergent) {
+            divergenciasValor++;
+            items.push({
+              nota: n, status: 'DIVERGENCIA_VALOR', sefazValue: sefazObj.valor, erpValue: erp.valor,
+              sefazDate: sefazObj.row.dataEmissao, erpDate: erp.dataEmissao,
+              chaveDeAcesso: sefazObj.row.chaveDeAcesso, cliente: erp.cliente, serie: sefazObj.row.serie || erp.serie
+            });
+          } else {
+            sincronizadas++;
+            items.push({
+              nota: n, status: 'OK', sefazValue: sefazObj.valor, erpValue: erp.valor,
+              sefazDate: sefazObj.row.dataEmissao, erpDate: erp.dataEmissao,
+              chaveDeAcesso: sefazObj.row.chaveDeAcesso, cliente: erp.cliente, serie: sefazObj.row.serie || erp.serie
+            });
+          }
         } else if (hasSefaz) {
           const sefazObj = sefazMap.get(n)!;
           faltantesErp++;
@@ -466,6 +502,7 @@ export function executeDataAudit(sefazRows: InvoiceRow[], erpText: string): { it
     faltantesErp,
     naoConstamSefaz,
     saltosSequencia,
+    divergenciasValor,
     minNota,
     maxNota
   };
@@ -550,6 +587,7 @@ export function exportAuditExcel(
       case 'FALTANTE_ERP': return 'DC2626'; // Red
       case 'NAO_CONSTA_SEFAZ': return 'D97706'; // Amber
       case 'SALTO_SEQUENCIA': return 'EA580C'; // Orange
+      case 'DIVERGENCIA_VALOR': return '0284C7'; // Blue/Sky-blue
       default: return '1E293B';
     }
   };
@@ -705,9 +743,7 @@ export function exportAuditExcel(
   currentDivRow++;
 
   // We filter out purely synchronized items unless they have value mismatches
-  const nonSinc = items.filter(item => item.status === 'FALTANTE_ERP' || item.status === 'NAO_CONSTA_SEFAZ');
-  const valueMismatches = items.filter(item => item.status === 'OK' && Math.abs((item.sefazValue || 0) - (item.erpValue || 0)) > 0.01);
-  const totalDivergences = [...nonSinc, ...valueMismatches].sort((a, b) => a.nota - b.nota);
+  const totalDivergences = items.filter(item => item.status === 'FALTANTE_ERP' || item.status === 'NAO_CONSTA_SEFAZ' || item.status === 'DIVERGENCIA_VALOR').sort((a, b) => a.nota - b.nota);
 
   if (totalDivergences.length === 0) {
     writeDivCell(currentDivRow, 0, "Nenhuma divergência ou omissão de faturamento encontrada no lote analisado.", 's', getRowStyle(true, 'left', true, "059669"));
@@ -726,8 +762,8 @@ export function exportAuditExcel(
         statusText = '🟡 DIVERGÊNCIA SEFAZ';
         statusColor = getStatusColor('NAO_CONSTA_SEFAZ');
       } else {
-        statusText = '⚠️ DIVERGÊNCIA DE VALOR';
-        statusColor = 'B45309'; // Amber/Darker yellow
+        statusText = '🔵 DIVERGÊNCIA DE VALOR';
+        statusColor = '0284C7'; // Blue/Sky-blue
       }
 
       const sefazVal = r.sefazValue ?? 0;
@@ -845,10 +881,10 @@ export function exportAuditExcel(
   wsGap['!views'] = [{ showGridLines: false }];
   wsGap['!ref'] = `A1:${XLSX.utils.encode_cell({ r: currentGapRow - 1, c: 3 })}`;
 
-  // Append all three sheets
-  XLSX.utils.book_append_sheet(wb, wsSefaz, 'Base SEFAZ');
+  // Append all three sheets as specified
   XLSX.utils.book_append_sheet(wb, wsDiv, 'Divergências');
-  XLSX.utils.book_append_sheet(wb, wsGap, 'Saltos de Sequência');
+  XLSX.utils.book_append_sheet(wb, wsGap, 'Saltos');
+  XLSX.utils.book_append_sheet(wb, wsSefaz, 'Base SEFAZ');
 
   // Trigger download
   const formattedFileName = `Auditoria_Consolidada_${titlePrefix.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0,10)}.xlsx`;
@@ -1100,6 +1136,7 @@ export async function executeDataAuditAsync(
         faltantesErp: 0,
         naoConstamSefaz: 0,
         saltosSequencia: 0,
+        divergenciasValor: 0,
         minNota: 0,
         maxNota: 0
       }
@@ -1120,6 +1157,7 @@ export async function executeDataAuditAsync(
   let faltantesErp = 0;
   let naoConstamSefaz = 0;
   let saltosSequencia = 0;
+  let divergenciasValor = 0;
 
   // Capping gap scan to 100,000 for performance.
   const gapRangeLimit = 100000;
@@ -1138,18 +1176,35 @@ export async function executeDataAuditAsync(
       if (hasSefaz && hasErp) {
         const sefazObj = sefazMap.get(currentNote)!;
         const erp = erpMap.get(currentNote)!;
-        sincronizadas++;
-        items.push({
-          nota: currentNote,
-          status: 'OK',
-          sefazValue: sefazObj.valor,
-          erpValue: erp.valor,
-          sefazDate: sefazObj.row.dataEmissao,
-          erpDate: erp.dataEmissao,
-          chaveDeAcesso: sefazObj.row.chaveDeAcesso,
-          cliente: erp.cliente,
-          serie: sefazObj.row.serie || erp.serie
-        });
+        const isDivergent = Math.abs(sefazObj.valor - erp.valor) > 0.01;
+        
+        if (isDivergent) {
+          divergenciasValor++;
+          items.push({
+            nota: currentNote,
+            status: 'DIVERGENCIA_VALOR',
+            sefazValue: sefazObj.valor,
+            erpValue: erp.valor,
+            sefazDate: sefazObj.row.dataEmissao,
+            erpDate: erp.dataEmissao,
+            chaveDeAcesso: sefazObj.row.chaveDeAcesso,
+            cliente: erp.cliente,
+            serie: sefazObj.row.serie || erp.serie
+          });
+        } else {
+          sincronizadas++;
+          items.push({
+            nota: currentNote,
+            status: 'OK',
+            sefazValue: sefazObj.valor,
+            erpValue: erp.valor,
+            sefazDate: sefazObj.row.dataEmissao,
+            erpDate: erp.dataEmissao,
+            chaveDeAcesso: sefazObj.row.chaveDeAcesso,
+            cliente: erp.cliente,
+            serie: sefazObj.row.serie || erp.serie
+          });
+        }
       } else if (hasSefaz) {
         const sefazObj = sefazMap.get(currentNote)!;
         faltantesErp++;
@@ -1197,12 +1252,23 @@ export async function executeDataAuditAsync(
       if (hasSefaz && hasErp) {
         const sefazObj = sefazMap.get(currentNote)!;
         const erp = erpMap.get(currentNote)!;
-        sincronizadas++;
-        items.push({
-          nota: currentNote, status: 'OK', sefazValue: sefazObj.valor, erpValue: erp.valor,
-          sefazDate: sefazObj.row.dataEmissao, erpDate: erp.dataEmissao,
-          chaveDeAcesso: sefazObj.row.chaveDeAcesso, cliente: erp.cliente, serie: sefazObj.row.serie || erp.serie
-        });
+        const isDivergent = Math.abs(sefazObj.valor - erp.valor) > 0.01;
+        
+        if (isDivergent) {
+          divergenciasValor++;
+          items.push({
+            nota: currentNote, status: 'DIVERGENCIA_VALOR', sefazValue: sefazObj.valor, erpValue: erp.valor,
+            sefazDate: sefazObj.row.dataEmissao, erpDate: erp.dataEmissao,
+            chaveDeAcesso: sefazObj.row.chaveDeAcesso, cliente: erp.cliente, serie: sefazObj.row.serie || erp.serie
+          });
+        } else {
+          sincronizadas++;
+          items.push({
+            nota: currentNote, status: 'OK', sefazValue: sefazObj.valor, erpValue: erp.valor,
+            sefazDate: sefazObj.row.dataEmissao, erpDate: erp.dataEmissao,
+            chaveDeAcesso: sefazObj.row.chaveDeAcesso, cliente: erp.cliente, serie: sefazObj.row.serie || erp.serie
+          });
+        }
       } else if (hasSefaz) {
         const sefazObj = sefazMap.get(currentNote)!;
         faltantesErp++;
@@ -1228,6 +1294,7 @@ export async function executeDataAuditAsync(
     faltantesErp,
     naoConstamSefaz,
     saltosSequencia,
+    divergenciasValor,
     minNota,
     maxNota
   };

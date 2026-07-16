@@ -68,7 +68,7 @@ export function ConversorNfceSiga() {
   const [auditItems, setAuditItems] = useState<AuditItem[]>([]);
   const [auditSummary, setAuditSummary] = useState<AuditSummary | null>(null);
   const [auditSearchTerm, setAuditSearchTerm] = useState<string>('');
-  const [auditFilterStatus, setAuditFilterStatus] = useState<'all' | 'OK' | 'FALTANTE_ERP' | 'NAO_CONSTA_SEFAZ' | 'SALTO_SEQUENCIA'>('all');
+  const [auditFilterStatus, setAuditFilterStatus] = useState<'all' | 'OK' | 'FALTANTE_ERP' | 'NAO_CONSTA_SEFAZ' | 'SALTO_SEQUENCIA' | 'DIVERGENCIA_VALOR'>('all');
   const [dragOverModal, setDragOverModal] = useState<boolean>(false);
 
   // States for Progress Tracking of large files
@@ -585,7 +585,7 @@ export function ConversorNfceSiga() {
         </div>
 
         {/* Compliance Dashboard KPI Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="kpi-grid">
+        <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-4" id="kpi-grid">
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between" id="kpi-sincronizadas">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Sincronizadas (OK)</span>
@@ -616,6 +616,17 @@ export function ConversorNfceSiga() {
             </div>
             <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
               <AlertTriangle className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between" id="kpi-divergencias-valor">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-sans">Divergência de Valor</span>
+              <span className="text-xl font-black text-blue-600 font-mono mt-0.5 block">{auditSummary.divergenciasValor || 0}</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">Valores divergentes no ERP</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+              <DollarSign className="w-5 h-5" />
             </div>
           </div>
 
@@ -689,6 +700,14 @@ export function ConversorNfceSiga() {
                   Divergência SEFAZ ({auditSummary.naoConstamSefaz})
                 </button>
                 <button
+                  onClick={() => setAuditFilterStatus('DIVERGENCIA_VALOR')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer ${
+                    auditFilterStatus === 'DIVERGENCIA_VALOR' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Divergência Valor ({auditSummary.divergenciasValor || 0})
+                </button>
+                <button
                   onClick={() => setAuditFilterStatus('SALTO_SEQUENCIA')}
                   className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer ${
                     auditFilterStatus === 'SALTO_SEQUENCIA' ? 'bg-orange-600 text-white' : 'text-slate-600 hover:bg-slate-50'
@@ -746,6 +765,11 @@ export function ConversorNfceSiga() {
                               <AlertTriangle className="w-3 h-3 text-amber-600" />
                               Divergência SEFAZ
                             </span>
+                          ) : item.status === 'DIVERGENCIA_VALOR' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-blue-50 text-blue-700 font-bold text-[10px] border border-blue-200 font-sans">
+                              <AlertCircle className="w-3 h-3 text-blue-600" />
+                              Divergência de Valor
+                            </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-orange-50 text-orange-700 font-bold text-[10px] border border-orange-200 font-sans">
                               <AlertCircle className="w-3 h-3 text-orange-600" />
@@ -766,7 +790,7 @@ export function ConversorNfceSiga() {
                           {item.erpValue !== undefined ? `R$ ${item.erpValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '-'}
                         </td>
                         <td className="py-2.5 px-4 text-center">
-                          {item.status === 'OK' ? (
+                          {item.status === 'OK' || item.status === 'DIVERGENCIA_VALOR' ? (
                             hasValueDiff ? (
                               <span className="inline-block px-2 py-0.5 rounded bg-red-50 text-red-700 font-bold text-[10px] border border-red-100 font-sans">
                                 Dif: R$ {diff.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
