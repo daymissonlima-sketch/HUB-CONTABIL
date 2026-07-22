@@ -25,6 +25,11 @@ export interface InvoiceRow {
   tipoEmissaoFriendly: string;
   isValidChave: boolean;
   chaveError?: string;
+  cnpjFornecedor?: string;
+  cnpjFornecedorFormatado?: string;
+  nomeFornecedor?: string;
+  valorIcms?: number;
+  situacaoNfe?: string;
 }
 
 export interface ErpRecord {
@@ -148,6 +153,241 @@ export function parseChaveDeAcesso(chaveRaw: string): Omit<InvoiceRow, 'id' | 'd
   };
 }
 
+export function parseLineToInvoiceRow(
+  cells: string[], 
+  index: number, 
+  headerMapping?: {
+    chaveIdx: number;
+    notaIdx: number;
+    dataIdx: number;
+    cnpjIdx: number;
+    nomeIdx: number;
+    serieIdx: number;
+    ufIdx: number;
+    valorIdx: number;
+    icmsIdx: number;
+    situacaoIdx: number;
+  }
+): InvoiceRow | null {
+  if (cells.length < 2) return null;
+
+  let chaveRaw = '';
+  let dataRaw = '';
+  let valorRaw = '';
+  let cnpjFornecedor = '';
+  let nomeFornecedor = '';
+  let ufRaw = '';
+  let numeroNotaRaw = '';
+  let serieRaw = '';
+  let situacaoNfe = '';
+  let valorIcms = 0;
+
+  // trim and sanitize quotes
+  const cleanCells = cells.map(c => c.trim().replace(/^"|"$/g, ''));
+
+  // Patterns for matching
+  const isChavePat = /^\d{44}$/;
+  const isDatePat = /^\d{2}[/-]\d{2}[/-]\d{4}$/;
+  const isCnpjCpfPat = /^\d{11}$|^\d{14}$|^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$|^\d{3}\.\d{3}\.\d{3}-\d{2}$/;
+
+  // Check if we have an explicit header mapping
+  if (headerMapping && headerMapping.chaveIdx !== -1) {
+    const hm = headerMapping;
+    if (hm.chaveIdx >= 0 && hm.chaveIdx < cleanCells.length) chaveRaw = cleanCells[hm.chaveIdx];
+    if (hm.dataIdx >= 0 && hm.dataIdx < cleanCells.length) dataRaw = cleanCells[hm.dataIdx];
+    if (hm.valorIdx >= 0 && hm.valorIdx < cleanCells.length) valorRaw = cleanCells[hm.valorIdx];
+    if (hm.cnpjIdx >= 0 && hm.cnpjIdx < cleanCells.length) cnpjFornecedor = cleanCells[hm.cnpjIdx];
+    if (hm.nomeIdx >= 0 && hm.nomeIdx < cleanCells.length) nomeFornecedor = cleanCells[hm.nomeIdx];
+    if (hm.ufIdx >= 0 && hm.ufIdx < cleanCells.length) ufRaw = cleanCells[hm.ufIdx];
+    if (hm.notaIdx >= 0 && hm.notaIdx < cleanCells.length) numeroNotaRaw = cleanCells[hm.notaIdx];
+    if (hm.serieIdx >= 0 && hm.serieIdx < cleanCells.length) serieRaw = cleanCells[hm.serieIdx];
+    if (hm.situacaoIdx >= 0 && hm.situacaoIdx < cleanCells.length) situacaoNfe = cleanCells[hm.situacaoIdx];
+    if (hm.icmsIdx >= 0 && hm.icmsIdx < cleanCells.length) {
+      valorIcms = parseCurrencySafe(cleanCells[hm.icmsIdx]);
+    }
+  } else {
+    // No mapping - auto-detect!
+    // Check if the 8-column layout (screenshot) matches:
+    // Col 0: CNPJ, Col 1: Name, Col 2: UF, Col 3: Note, Col 4: Date, Col 5: Status, Col 6: Valor, Col 7: Chave
+    const isScreenshotLayout = cleanCells.length >= 8 && isChavePat.test(cleanCells[7]);
+
+    if (isScreenshotLayout) {
+      cnpjFornecedor = cleanCells[0];
+      nomeFornecedor = cleanCells[1];
+      ufRaw = cleanCells[2];
+      numeroNotaRaw = cleanCells[3];
+      dataRaw = cleanCells[4];
+      situacaoNfe = cleanCells[5];
+      valorRaw = cleanCells[6];
+      chaveRaw = cleanCells[7];
+    } else {
+      // General pattern-matching fallback:
+      // Find the 44-digit key anchor
+      let chaveCellIdx = -1;
+      for (let c = 0; c < cleanCells.length; c++) {
+        if (isChavePat.test(cleanCells[c])) {
+          chaveCellIdx = c;
+          chaveRaw = cleanCells[c];
+          break;
+        }
+      }
+
+      if (chaveCellIdx !== -1) {
+        // Find a date cell:
+        for (let c = 0; c < cleanCells.length; c++) {
+          if (c === chaveCellIdx) continue;
+          if (isDatePat.test(cleanCells[c]) || /^\d{4}-\d{2}-\d{2}/.test(cleanCells[c])) {
+            dataRaw = cleanCells[c];
+            break;
+          }
+        }
+
+        // Find status/situation cell:
+        for (let c = 0; c < cleanCells.length; c++) {
+          if (c === chaveCellIdx) continue;
+          const val = cleanCells[c].toUpperCase();
+          if (val.includes('CANCEL') || val.includes('AUTORIZ') || val.includes('DENEG') || val.includes('NORMAL')) {
+            situacaoNfe = cleanCells[c];
+            break;
+          }
+        }
+
+        // Find CNPJ/CPF cell:
+        for (let c = 0; c < cleanCells.length; c++) {
+          if (c === chaveCellIdx) continue;
+          if (isCnpjCpfPat.test(cleanCells[c])) {
+            cnpjFornecedor = cleanCells[c];
+            break;
+          }
+        }
+
+        // Find UF cell:
+        for (let c = 0; c < cleanCells.length; c++) {
+          if (c === chaveCellIdx) continue;
+          const val = cleanCells[c];
+          if (/^[A-Za-z]{2}$/.test(val) && ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO','EX'].includes(val.toUpperCase())) {
+            ufRaw = val;
+            break;
+          }
+        }
+
+        // Find Name/Razão Social cell:
+        for (let c = 0; c < cleanCells.length; c++) {
+          if (c === chaveCellIdx) continue;
+          const val = cleanCells[c];
+          if (val.length > 3 && /[A-Za-z]{4,}/.test(val)) {
+            const upperVal = val.toUpperCase();
+            if (!upperVal.includes('CANCEL') && !upperVal.includes('AUTORIZ') && !upperVal.includes('DENEG') && !upperVal.includes('NORMAL') && !['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO','EX'].includes(upperVal)) {
+              nomeFornecedor = val;
+              break;
+            }
+          }
+        }
+
+        // Find Valor cell:
+        for (let c = 0; c < cleanCells.length; c++) {
+          if (c === chaveCellIdx) continue;
+          const val = cleanCells[c];
+          if (/[0-9]/.test(val) && !isDatePat.test(val) && !isCnpjCpfPat.test(val)) {
+            if (val.includes(',') || (val.includes('.') && val.split('.')[1]?.length === 2)) {
+              valorRaw = val;
+              break;
+            }
+          }
+        }
+        
+        if (!valorRaw) {
+          for (let c = cleanCells.length - 1; c >= 0; c--) {
+            if (c === chaveCellIdx) continue;
+            const val = cleanCells[c];
+            if (/^[\d\.,\s]+$/.test(val) && val.length > 2) {
+              valorRaw = val;
+              break;
+            }
+          }
+        }
+      } else {
+        return null;
+      }
+    }
+  }
+
+  const keyDetails = parseChaveDeAcesso(chaveRaw);
+  if (!keyDetails.isValidChave) {
+    return {
+      id: `inv-${index}-${Math.random().toString(36).substring(2, 7)}`,
+      chaveDeAcesso: chaveRaw,
+      dataEmissao: validateAndCleanDate(dataRaw) || '-',
+      valorString: valorRaw || '0,00',
+      valorDecimal: parseCurrencySafe(valorRaw),
+      ufCodigo: '',
+      ufNome: ufRaw || 'Inválido',
+      anoMes: '',
+      cnpj: cnpjFornecedor || '',
+      cnpjFormatado: formatCNPJ(cnpjFornecedor) || '',
+      modelo: '',
+      serie: '',
+      numeroNota: numeroNotaRaw || '',
+      numeroNotaFormatado: numeroNotaRaw || '',
+      tipoEmissao: '',
+      tipoEmissaoFriendly: '',
+      isValidChave: false,
+      chaveError: keyDetails.chaveError,
+      cnpjFornecedor: cnpjFornecedor,
+      cnpjFornecedorFormatado: formatCNPJ(cnpjFornecedor),
+      nomeFornecedor: nomeFornecedor,
+      valorIcms: valorIcms,
+      situacaoNfe: situacaoNfe || 'NORMAL'
+    };
+  }
+
+  // Back-fill missing values from key details if they are missing
+  if (!cnpjFornecedor) {
+    cnpjFornecedor = keyDetails.cnpj;
+  }
+  if (!numeroNotaRaw) {
+    numeroNotaRaw = keyDetails.numeroNota;
+  }
+  if (!serieRaw) {
+    serieRaw = keyDetails.serie;
+  }
+  if (!ufRaw) {
+    ufRaw = keyDetails.ufNome;
+  }
+
+  // Standardize the status/situacao:
+  if (!situacaoNfe) {
+    situacaoNfe = 'AUTORIZADA';
+  } else {
+    const sUpper = situacaoNfe.toUpperCase();
+    if (sUpper.includes('CANCEL')) {
+      situacaoNfe = 'CANCELADA';
+    } else if (sUpper.includes('DENEG')) {
+      situacaoNfe = 'DENEGADA';
+    } else if (sUpper.includes('AUTORIZ')) {
+      situacaoNfe = 'AUTORIZADA';
+    } else {
+      situacaoNfe = 'AUTORIZADA'; // Fallback
+    }
+  }
+
+  return {
+    id: `inv-${index}-${Math.random().toString(36).substring(2, 7)}`,
+    dataEmissao: validateAndCleanDate(dataRaw) !== '-' ? validateAndCleanDate(dataRaw) : (keyDetails.anoMes || '-'),
+    valorString: valorRaw || '0,00',
+    valorDecimal: parseCurrencySafe(valorRaw),
+    ...keyDetails,
+    serie: serieRaw ? parseInt(serieRaw, 10).toString() : keyDetails.serie,
+    numeroNota: numeroNotaRaw,
+    numeroNotaFormatado: parseInt(numeroNotaRaw, 10).toString() || keyDetails.numeroNotaFormatado,
+    cnpjFornecedor: cnpjFornecedor,
+    cnpjFornecedorFormatado: formatCNPJ(cnpjFornecedor),
+    nomeFornecedor: nomeFornecedor || 'FORNECEDOR NÃO INFORMADO',
+    valorIcms: valorIcms,
+    situacaoNfe: situacaoNfe
+  };
+}
+
 /**
  * Robust SEFAZ CSV text parser.
  */
@@ -171,22 +411,30 @@ export function parseSefazReport(text: string): InvoiceRow[] {
     return cells;
   };
 
-  const headers = parseLine(lines[0]).map(h => h.toLowerCase());
-  const chaveIdx = Math.max(0, headers.findIndex(h => h.includes('chave') || h.includes('acesso') || h.includes('key')));
-  const dataIdx = Math.max(1, headers.findIndex(h => h.includes('data') || h.includes('emiss') || h.includes('date')));
-  const valorIdx = Math.max(2, headers.findIndex(h => h.includes('valor') || h.includes('r$') || h.includes('val') || h.includes('total')));
+  const firstLineCells = parseLine(lines[0]);
+  const headers = firstLineCells.map(h => h.toLowerCase());
+  const hasHeaders = headers.some(h => h.includes('chave') || h.includes('acesso') || h.includes('key') || h.includes('nota') || h.includes('data') || h.includes('valor'));
 
-  const parsedRows = lines.slice(1).map((line, i) => {
-    const cells = parseLine(line);
-    if (cells.length < 2) return null;
-    const chaveRaw = cells[chaveIdx] || '';
-    const valorRaw = cells[valorIdx] || '0';
-    return {
-      id: `inv-${i}-${Math.random().toString(36).substring(2, 7)}`,
-      dataEmissao: validateAndCleanDate(cells[dataIdx] || ''),
-      valorString: valorRaw, valorDecimal: parseCurrencySafe(valorRaw),
-      ...parseChaveDeAcesso(chaveRaw),
+  let headerMapping: any = undefined;
+  if (hasHeaders) {
+    headerMapping = {
+      chaveIdx: headers.findIndex(h => h.includes('chave') || h.includes('acesso') || h.includes('key') || h.includes('chv_aces')),
+      notaIdx: headers.findIndex(h => h.includes('nota') || h.includes('número') || h.includes('numero') || h.includes('nº') || h.includes('num_doc')),
+      dataIdx: headers.findIndex(h => h.includes('data') || h.includes('emissão') || h.includes('emissao') || h.includes('date') || h.includes('dtemit')),
+      cnpjIdx: headers.findIndex(h => h.includes('cnpj') || h.includes('cpf') || h.includes('doc') || h.includes('emitente') || h.includes('fornecedor')),
+      nomeIdx: headers.findIndex(h => h.includes('nome') || h.includes('razão') || h.includes('razao') || h.includes('social') || h.includes('destinatario') || h.includes('remetente') || h.includes('emitente') || h.includes('fornecedor')),
+      serieIdx: headers.findIndex(h => h.includes('série') || h.includes('serie') || h.includes('ser')),
+      ufIdx: headers.findIndex(h => h.includes('uf') || h.includes('estado') || h.includes('sigla')),
+      valorIdx: headers.findIndex(h => h.includes('valor') || h.includes('vlr') || h.includes('total') || h.includes('r$') || h.includes('val')),
+      icmsIdx: headers.findIndex(h => h.includes('icms') || h.includes('destacado') || h.includes('v_icms') || h.includes('v_icms_dest')),
+      situacaoIdx: headers.findIndex(h => h.includes('situação') || h.includes('situacao') || h.includes('status') || h.includes('sit') || h.includes('estado_nota') || h.includes('tipo_emissao') || h.includes('indicador') || h.includes('selecionados')),
     };
+  }
+
+  const startIdx = hasHeaders ? 1 : 0;
+  const parsedRows = lines.slice(startIdx).map((line, i) => {
+    const cells = parseLine(line);
+    return parseLineToInvoiceRow(cells, i, headerMapping);
   }).filter(Boolean) as InvoiceRow[];
 
   return parsedRows.sort((a, b) => {
@@ -240,7 +488,7 @@ export function aggregateERPData(text: string): Map<number, ErpRecord> {
   if (headerIndex !== -1) {
     const headerCells = lines[headerIndex].split(delimiter).map(c => c.trim().toLowerCase());
     
-    const foundNota = headerCells.findIndex(c => c === 'nota' || c === 'documento' || c.includes('nº') || c.includes('numero') || c === 'num' || c === 'cod');
+    const foundNota = headerCells.findIndex(c => c === 'nota' || c.includes('nota') || c === 'documento' || c.includes('nº') || c.includes('numero') || c === 'num' || c === 'cod');
     if (foundNota !== -1) notaIdx = foundNota;
 
     const foundData = headerCells.findIndex(c => c.includes('data emiss') || c === 'data' || c === 'emissao' || c === 'emissão');
@@ -904,50 +1152,54 @@ export async function parseSefazReportAsync(
 
   const delimiter = lines[0].includes(';') ? ';' : ',';
   
-  // Custom fast parser for headers
-  const headers = lines[0].split(delimiter).map(h => h.trim().toLowerCase().replace(/^"|"$/g, ''));
-  const chaveIdx = Math.max(0, headers.findIndex(h => h.includes('chave') || h.includes('acesso') || h.includes('key')));
-  const dataIdx = Math.max(1, headers.findIndex(h => h.includes('data') || h.includes('emiss') || h.includes('date')));
-  const valorIdx = Math.max(2, headers.findIndex(h => h.includes('valor') || h.includes('r$') || h.includes('val') || h.includes('total')));
+  const parseLine = (line: string): string[] => {
+    const cells: string[] = [];
+    let current = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') inQuotes = !inQuotes;
+      else if (char === delimiter && !inQuotes) {
+        cells.push(sanitizeFiscalCell(current.trim().replace(/^"|"$/g, ''))); current = '';
+      } else current += char;
+    }
+    cells.push(sanitizeFiscalCell(current.trim().replace(/^"|"$/g, '')));
+    return cells;
+  };
+
+  const firstLineCells = parseLine(lines[0]);
+  const headers = firstLineCells.map(h => h.toLowerCase());
+  const hasHeaders = headers.some(h => h.includes('chave') || h.includes('acesso') || h.includes('key') || h.includes('nota') || h.includes('data') || h.includes('valor'));
+
+  let headerMapping: any = undefined;
+  if (hasHeaders) {
+    headerMapping = {
+      chaveIdx: headers.findIndex(h => h.includes('chave') || h.includes('acesso') || h.includes('key') || h.includes('chv_aces')),
+      notaIdx: headers.findIndex(h => h.includes('nota') || h.includes('número') || h.includes('numero') || h.includes('nº') || h.includes('num_doc')),
+      dataIdx: headers.findIndex(h => h.includes('data') || h.includes('emissão') || h.includes('emissao') || h.includes('date') || h.includes('dtemit')),
+      cnpjIdx: headers.findIndex(h => h.includes('cnpj') || h.includes('cpf') || h.includes('doc') || h.includes('emitente') || h.includes('fornecedor')),
+      nomeIdx: headers.findIndex(h => h.includes('nome') || h.includes('razão') || h.includes('razao') || h.includes('social') || h.includes('destinatario') || h.includes('remetente') || h.includes('emitente') || h.includes('fornecedor')),
+      serieIdx: headers.findIndex(h => h.includes('série') || h.includes('serie') || h.includes('ser')),
+      ufIdx: headers.findIndex(h => h.includes('uf') || h.includes('estado') || h.includes('sigla')),
+      valorIdx: headers.findIndex(h => h.includes('valor') || h.includes('vlr') || h.includes('total') || h.includes('r$') || h.includes('val')),
+      icmsIdx: headers.findIndex(h => h.includes('icms') || h.includes('destacado') || h.includes('v_icms') || h.includes('v_icms_dest')),
+      situacaoIdx: headers.findIndex(h => h.includes('situação') || h.includes('situacao') || h.includes('status') || h.includes('sit') || h.includes('estado_nota') || h.includes('tipo_emissao') || h.includes('indicador') || h.includes('selecionados')),
+    };
+  }
 
   const parsedRows: InvoiceRow[] = [];
   const chunkSize = 2500;
-  const totalLines = lines.length - 1;
+  const totalLines = lines.length;
+  const startIdx = hasHeaders ? 1 : 0;
 
-  for (let i = 1; i < lines.length; i += chunkSize) {
+  for (let i = startIdx; i < lines.length; i += chunkSize) {
     const end = Math.min(i + chunkSize, lines.length);
     for (let j = i; j < end; j++) {
       const line = lines[j];
-      
-      // Fast inline line parsing to avoid deep stacks or slow regex
-      const cells: string[] = [];
-      let current = '', inQuotes = false;
-      for (let k = 0; k < line.length; k++) {
-        const char = line[k];
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === delimiter && !inQuotes) {
-          cells.push(current);
-          current = '';
-        } else {
-          current += char;
-        }
+      const cells = parseLine(line);
+      const parsed = parseLineToInvoiceRow(cells, j, headerMapping);
+      if (parsed) {
+        parsedRows.push(parsed);
       }
-      cells.push(current);
-
-      if (cells.length < 2) continue;
-
-      const chaveRaw = (cells[chaveIdx] || '').trim().replace(/^"|"$/g, '');
-      const valorRaw = (cells[valorIdx] || '').trim().replace(/^"|"$/g, '');
-      const dataRaw = (cells[dataIdx] || '').trim().replace(/^"|"$/g, '');
-
-      parsedRows.push({
-        id: `inv-${j}-${Math.random().toString(36).substring(2, 7)}`,
-        dataEmissao: validateAndCleanDate(dataRaw),
-        valorString: valorRaw,
-        valorDecimal: parseCurrencySafe(valorRaw),
-        ...parseChaveDeAcesso(chaveRaw),
-      });
     }
 
     onProgress(Math.min(100, Math.round((i / totalLines) * 100)));

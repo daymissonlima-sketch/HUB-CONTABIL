@@ -11,11 +11,10 @@ import { DebtLevantamento } from './components/DebtLevantamento';
 import { ParcelamentoSimulador } from './components/ParcelamentoSimulador';
 import { FaturamentoGerador } from './components/FaturamentoGerador';
 import { ConfiguracoesGerais } from './components/ConfiguracoesGerais';
-import { ConversorNfceSiga } from './components/ConversorNfceSiga';
+import { AuditoriaFiscalWorkspace } from './components/AuditoriaFiscalWorkspace';
 import { Comunicados } from './components/Comunicados';
 import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
 import { ChaveSanitizer } from './components/ChaveSanitizer';
-import { OrganizadorRelatorio } from './components/OrganizadorRelatorio';
 import { FileSpreadsheet, Briefcase, Menu, Calculator, Coins, Settings, Table, FileText, ShieldCheck, Sparkles } from 'lucide-react';
 
 // Synchronously purge all records referencing MODULUS or CNPJ 37.345.284/0001-68
@@ -57,8 +56,8 @@ try {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'organizador_relatorio' | 'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'conversor_nfce_siga' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
-  >('organizador_relatorio');
+    'auditoria_fiscal' | 'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
+  >('auditoria_fiscal');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
   return (
@@ -94,18 +93,18 @@ export default function App() {
             {/* Navigation Buttons list */}
             <nav className="p-3 space-y-1 flex flex-row md:flex-col items-center justify-around md:justify-start w-full md:space-y-1.5">
               
-              {/* Button: Organizador de Relatório (New) */}
+              {/* Button: Auditoria Fiscal (Unified Cockpit) */}
               <button
-                onClick={() => setActiveTab('organizador_relatorio')}
+                onClick={() => setActiveTab('auditoria_fiscal')}
                 className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
-                  activeTab === 'organizador_relatorio'
+                  activeTab === 'auditoria_fiscal'
                     ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
                     : 'hover:bg-[#031d30] text-slate-300'
                 }`}
-                title="Formatador e Organizador de Relatórios"
+                title="Cockpit de Auditoria Fiscal & Data Lake"
               >
-                <FileSpreadsheet className="h-4.5 w-4.5 shrink-0 text-[#e4b35e]" />
-                <span className="hidden sm:inline md:inline">Organizador de Relatório</span>
+                <Table className={`h-4.5 w-4.5 shrink-0 ${activeTab === 'auditoria_fiscal' ? 'text-[#04243b]' : 'text-[#e4b35e]'}`} />
+                <span className="hidden sm:inline md:inline">Auditoria Fiscal</span>
               </button>
 
               {/* Button 1: XML Nfe Auditor (Existing module) */}
@@ -120,20 +119,6 @@ export default function App() {
               >
                 <FileSpreadsheet className="h-4.5 w-4.5 shrink-0" />
                 <span className="hidden sm:inline md:inline">Auditor XML NF-e</span>
-              </button>
-
-              {/* Button 2: Conversor NFC-e - SIGA */}
-              <button
-                onClick={() => setActiveTab('conversor_nfce_siga')}
-                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
-                  activeTab === 'conversor_nfce_siga'
-                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
-                    : 'hover:bg-[#031d30] text-slate-300'
-                }`}
-                title="Auditoria Fiscal - SIGA (Conversor e Auditoria)"
-              >
-                <Table className="h-4.5 w-4.5 shrink-0" />
-                <span className="hidden sm:inline md:inline">Auditoria Fiscal - SIGA</span>
               </button>
 
               {/* Button: Saneador de Chaves */}
@@ -262,16 +247,14 @@ export default function App() {
 
           </div>
 
-          {activeTab === 'organizador_relatorio' ? (
-            <OrganizadorRelatorio />
+          {activeTab === 'auditoria_fiscal' ? (
+            <AuditoriaFiscalWorkspace />
           ) : activeTab === 'xml_auditor' ? (
             <NfeXmlAuditor />
           ) : activeTab === 'debit_levantamento' ? (
             <DebtLevantamento />
           ) : activeTab === 'parcelamento_simulador' ? (
             <ParcelamentoSimulador />
-          ) : activeTab === 'conversor_nfce_siga' ? (
-            <ConversorNfceSiga />
           ) : activeTab === 'chave_sanitizer' ? (
             <ChaveSanitizer />
           ) : activeTab === 'comunicados' ? (

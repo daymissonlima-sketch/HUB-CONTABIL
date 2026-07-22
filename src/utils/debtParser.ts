@@ -8,6 +8,64 @@ function parseBrFloat(valStr: string): number {
   return isNaN(parsed) ? 0 : parsed;
 }
 
+// Helper to format competence/period to "mmm/aaaa" format (e.g., jan/2026, mai/2025)
+export function formatCompetencia(rawPeriod: string): string {
+  if (!rawPeriod) return '';
+  const trimmed = rawPeriod.trim();
+  if (!trimmed) return '';
+
+  const MONTHS_MAP: Record<string, string> = {
+    '1': 'jan', '01': 'jan', 'jan': 'jan', 'janeiro': 'jan',
+    '2': 'fev', '02': 'fev', 'fev': 'fev', 'fevereiro': 'fev',
+    '3': 'mar', '03': 'mar', 'mar': 'mar', 'março': 'mar', 'marco': 'mar',
+    '4': 'abr', '04': 'abr', 'abr': 'abr', 'abril': 'abr',
+    '5': 'mai', '05': 'mai', 'mai': 'mai', 'maio': 'mai',
+    '6': 'jun', '06': 'jun', 'jun': 'jun', 'junho': 'jun',
+    '7': 'jul', '07': 'jul', 'jul': 'jul', 'julho': 'jul',
+    '8': 'ago', '08': 'ago', 'ago': 'ago', 'agosto': 'ago',
+    '9': 'set', '09': 'set', 'set': 'set', 'setembro': 'set',
+    '10': 'out', 'out': 'out', 'outubro': 'out',
+    '11': 'nov', 'nov': 'nov', 'novembro': 'nov',
+    '12': 'dez', 'dez': 'dez', 'dezembro': 'dez',
+  };
+
+  // Replace dots, dashes, spaces with clean slash separator
+  const clean = trimmed.toLowerCase().replace(/[\.-]/g, '/').replace(/\s+/g, '');
+  const parts = clean.split('/').filter(Boolean);
+
+  if (parts.length === 3) {
+    let day = parts[0];
+    let monthStr = parts[1];
+    let yearStr = parts[2];
+
+    if (day.length === 4) {
+      yearStr = parts[0];
+      monthStr = parts[1];
+    }
+
+    if (yearStr.length === 2) yearStr = `20${yearStr}`;
+    const month = MONTHS_MAP[monthStr] || monthStr;
+    return `${month}/${yearStr}`;
+  }
+
+  if (parts.length === 2) {
+    let monthStr = parts[0];
+    let yearStr = parts[1];
+
+    if (monthStr.length === 4 && yearStr.length <= 2) {
+      const temp = monthStr;
+      monthStr = yearStr;
+      yearStr = temp;
+    }
+
+    if (yearStr.length === 2) yearStr = `20${yearStr}`;
+    const month = MONTHS_MAP[monthStr] || monthStr;
+    return `${month}/${yearStr}`;
+  }
+
+  return trimmed;
+}
+
 // Helper to split a CSV line properly, handling commas/semicolons and quotes
 function parseCsvLine(line: string): string[] {
   const result: string[] = [];

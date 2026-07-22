@@ -32,6 +32,7 @@ import { DebtItem, ClientInfo, DebtCategory, Company } from '../types_debits';
 import importedCompaniesJson from '../data/imported_companies.json';
 import { 
   parseSituationFiscalText, 
+  formatCompetencia,
   SAMPLE_RECEITA_FEDERAL, 
   SAMPLE_SEFAZ, 
   SAMPLE_SEFIN 
@@ -59,6 +60,7 @@ const parseCurrencyToNumber = (formattedStr: string): number => {
 };
 
 const INITIAL_CATEGORIES: DebtCategory[] = [
+  // --- PARCELAMENTOS ---
   {
     id: 'cat-previdenciarios',
     categoryType: 'PARCELAMENTO',
@@ -69,76 +71,13 @@ const INITIAL_CATEGORIES: DebtCategory[] = [
     code: ''
   },
   {
-    id: 'cat-previdenciario-tributo',
-    categoryType: 'TRIBUTO',
-    origin: 'FEDERAL',
-    documentType: 'DARF',
-    title: 'PREVIDENCIÁRIO',
-    scope: 'ADMINISTRATIVO'
-  },
-  {
-    id: 'cat-simples-nacional',
-    categoryType: 'TRIBUTO',
-    origin: 'FEDERAL',
-    documentType: 'DAS',
-    title: 'DAS SIMPLES NACIONAL',
-    scope: 'ADMINISTRATIVO'
-  },
-  {
-    id: 'cat-mei',
+    id: 'cat-parc-prev-pgfn',
     categoryType: 'PARCELAMENTO',
     origin: 'FEDERAL',
-    documentType: 'DAS',
-    title: 'PARCELAMENTO MEI',
-    scope: 'ADMINISTRATIVO'
-  },
-  {
-    id: 'cat-pis',
-    categoryType: 'TRIBUTO',
-    origin: 'FEDERAL',
     documentType: 'DARF',
-    title: 'PIS',
-    scope: 'ADMINISTRATIVO'
-  },
-  {
-    id: 'cat-cofins',
-    categoryType: 'TRIBUTO',
-    origin: 'FEDERAL',
-    documentType: 'DARF',
-    title: 'COFINS',
-    scope: 'ADMINISTRATIVO'
-  },
-  {
-    id: 'cat-irpj',
-    categoryType: 'TRIBUTO',
-    origin: 'FEDERAL',
-    documentType: 'DARF',
-    title: 'IRPJ',
-    scope: 'ADMINISTRATIVO'
-  },
-  {
-    id: 'cat-csll',
-    categoryType: 'TRIBUTO',
-    origin: 'FEDERAL',
-    documentType: 'DARF',
-    title: 'CSLL',
-    scope: 'ADMINISTRATIVO'
-  },
-  {
-    id: 'cat-icms',
-    categoryType: 'TRIBUTO',
-    origin: 'ESTADUAL',
-    documentType: 'DAE',
-    title: 'ICMS',
-    scope: 'ADMINISTRATIVO'
-  },
-  {
-    id: 'cat-iss',
-    categoryType: 'TRIBUTO',
-    origin: 'MUNICIPAL',
-    documentType: 'DAM',
-    title: 'ISS',
-    scope: 'ADMINISTRATIVO'
+    title: 'PARCELAMENTOS PREVIDENCIÁRIOS (PGFN)',
+    scope: 'DIVIDA_ATIVA',
+    code: ''
   },
   {
     id: 'cat-simples-nacional-parc',
@@ -149,6 +88,152 @@ const INITIAL_CATEGORIES: DebtCategory[] = [
     scope: 'ADMINISTRATIVO'
   },
   {
+    id: 'cat-parc-sn-pgfn',
+    categoryType: 'PARCELAMENTO',
+    origin: 'FEDERAL',
+    documentType: 'DAS',
+    title: 'PARCELAMENTOS SIMPLES NACIONAL (PGFN)',
+    scope: 'DIVIDA_ATIVA'
+  },
+  {
+    id: 'cat-parc-demais-pgfn',
+    categoryType: 'PARCELAMENTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'PARCELAMENTO DEMAIS DÉBITOS (PGFN)',
+    scope: 'DIVIDA_ATIVA'
+  },
+  {
+    id: 'cat-mei',
+    categoryType: 'PARCELAMENTO',
+    origin: 'FEDERAL',
+    documentType: 'DAS',
+    title: 'PARCELAMENTO MEI',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-parc-icms',
+    categoryType: 'PARCELAMENTO',
+    origin: 'ESTADUAL',
+    documentType: 'DAE',
+    title: 'PARCELAMENTO ICMS',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-parc-icms-pge',
+    categoryType: 'PARCELAMENTO',
+    origin: 'ESTADUAL',
+    documentType: 'DAE',
+    title: 'PARCELAMENTO ICMS PGE',
+    scope: 'DIVIDA_ATIVA'
+  },
+
+  // --- TRIBUTOS ---
+  {
+    id: 'cat-simples-nacional',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DAS',
+    title: 'DAS SIMPLES NACIONAL',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-das-sn-pgfn',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DAS',
+    title: 'DAS SIMPLES NACIONAL (PGFN)',
+    scope: 'DIVIDA_ATIVA'
+  },
+  {
+    id: 'cat-previdenciario-tributo',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'PREVIDENCIÁRIO',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-prev-pgfn',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'PREVIDENCIÁRIO (PGFN)',
+    scope: 'DIVIDA_ATIVA'
+  },
+  {
+    id: 'cat-pis',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'PIS',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-pis-pgfn',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'PIS (PGFN)',
+    scope: 'DIVIDA_ATIVA'
+  },
+  {
+    id: 'cat-cofins',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'COFINS',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-cofins-pgfn',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'COFINS (PGFN)',
+    scope: 'DIVIDA_ATIVA'
+  },
+  {
+    id: 'cat-irpj',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'IRPJ',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-irpj-pgfn',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'IRPJ (PGFN)',
+    scope: 'DIVIDA_ATIVA'
+  },
+  {
+    id: 'cat-csll',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'CSLL',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-csll-pgfn',
+    categoryType: 'TRIBUTO',
+    origin: 'FEDERAL',
+    documentType: 'DARF',
+    title: 'CSLL (PGFN)',
+    scope: 'DIVIDA_ATIVA'
+  },
+  {
+    id: 'cat-icms',
+    categoryType: 'TRIBUTO',
+    origin: 'ESTADUAL',
+    documentType: 'DAE',
+    title: 'ICMS',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
     id: 'cat-icms-pge',
     categoryType: 'TRIBUTO',
     origin: 'ESTADUAL',
@@ -156,6 +241,24 @@ const INITIAL_CATEGORIES: DebtCategory[] = [
     title: 'ICMS DÍVIDA ATIVA (PGE)',
     scope: 'DIVIDA_ATIVA'
   },
+  {
+    id: 'cat-iss',
+    categoryType: 'TRIBUTO',
+    origin: 'MUNICIPAL',
+    documentType: 'DAM',
+    title: 'ISS',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-iss-pgm',
+    categoryType: 'TRIBUTO',
+    origin: 'MUNICIPAL',
+    documentType: 'DAM',
+    title: 'ISS (PGM)',
+    scope: 'DIVIDA_ATIVA'
+  },
+
+  // --- MULTAS ---
   {
     id: 'cat-darf-pgfn',
     categoryType: 'MULTAS',
@@ -323,7 +426,15 @@ export function DebtLevantamento() {
     const saved = localStorage.getItem('debt_categories');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed: DebtCategory[] = JSON.parse(saved);
+        const existingTitles = new Set(parsed.map(c => c.title.trim().toUpperCase()));
+        const missingFromDefaults = INITIAL_CATEGORIES.filter(c => !existingTitles.has(c.title.trim().toUpperCase()));
+        if (missingFromDefaults.length > 0) {
+          const merged = [...parsed, ...missingFromDefaults];
+          localStorage.setItem('debt_categories', JSON.stringify(merged));
+          return merged;
+        }
+        return parsed;
       } catch (e) {
         console.error(e);
       }
@@ -688,6 +799,7 @@ export function DebtLevantamento() {
       return;
     }
 
+    const formattedFormPeriod = formatCompetencia(formPeriod);
     const finalCategory = formCategoryTitle || (categories[0]?.title || 'DAS SIMPLES NACIONAL');
 
     if (editingDebtId) {
@@ -697,7 +809,7 @@ export function DebtLevantamento() {
           return {
             ...item,
             category: finalCategory,
-            period: formPeriod,
+            period: formattedFormPeriod,
             principal: principalNum,
             penalty: 0,
             interest: 0,
@@ -708,7 +820,7 @@ export function DebtLevantamento() {
         return item;
       }));
       setEditingDebtId(null);
-      showTempNotification('Débito updated with success!');
+      showTempNotification('Débito atualizado com sucesso!');
       
       // Reset Form and close Modal for editing mode
       setIsAddingDebt(false);
@@ -720,7 +832,7 @@ export function DebtLevantamento() {
       const newDebt: DebtItem = {
         id: Math.random().toString(36).substr(2, 9),
         category: finalCategory,
-        period: formPeriod,
+        period: formattedFormPeriod,
         principal: principalNum,
         penalty: 0,
         interest: 0,
@@ -1077,7 +1189,8 @@ export function DebtLevantamento() {
             
             const cat = idxCat !== -1 && cols[idxCat] ? cols[idxCat] : (selectedCategory?.title || 'DAS SIMPLES NACIONAL');
             const code = idxCode !== -1 && cols[idxCode] ? cols[idxCode] : '';
-            const period = idxPeriod !== -1 && cols[idxPeriod] ? cols[idxPeriod] : '';
+            const rawPeriod = idxPeriod !== -1 && cols[idxPeriod] ? cols[idxPeriod] : '';
+            const period = formatCompetencia(rawPeriod);
             const principal = idxPrincipal !== -1 && cols[idxPrincipal] ? parsePortugueseNumber(cols[idxPrincipal]) : 0;
             const penalty = idxPenalty !== -1 && cols[idxPenalty] ? parsePortugueseNumber(cols[idxPenalty]) : 0;
             const interest = idxInterest !== -1 && cols[idxInterest] ? parsePortugueseNumber(cols[idxInterest]) : 0;
@@ -1251,7 +1364,7 @@ export function DebtLevantamento() {
     const newRow = {
       id: `temp-manual-${Date.now()}`,
       category: selectedCategory?.title || categories[0]?.title || 'DAS SIMPLES NACIONAL',
-      period: manualPeriod,
+      period: formatCompetencia(manualPeriod),
       principal: principalNum,
       penalty: penaltyNum,
       interest: interestNum,

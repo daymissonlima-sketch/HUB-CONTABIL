@@ -590,7 +590,7 @@ export function ParcelamentoSimulador() {
       doc.text('Valor Atualizado:', margin + 6, currentY + 14);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(20, 30, 45);
-      doc.text(`R$ ${sim.totalDebt.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 14);
+      doc.text(`R$ ${(sim.totalDebt ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 14);
 
       // Line 2: Entrada
       doc.setFont('helvetica', 'normal');
@@ -598,7 +598,7 @@ export function ParcelamentoSimulador() {
       doc.text('Entrada:', margin + 6, currentY + 20.5);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(20, 30, 45);
-      doc.text(`R$ ${sim.downPayment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 20.5);
+      doc.text(`R$ ${(sim.downPayment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 20.5);
 
       // Line 3: N Parcelas
       doc.setFont('helvetica', 'normal');
@@ -606,7 +606,7 @@ export function ParcelamentoSimulador() {
       doc.text(`${sim.installmentsCount} Parcelas:`, margin + 6, currentY + 27);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(primaryColor.r, primaryColor.g, primaryColor.b);
-      doc.text(`R$ ${results.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 27);
+      doc.text(`R$ ${(results?.avgInstallment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 27);
 
       currentY += 37;
     });
@@ -640,10 +640,10 @@ export function ParcelamentoSimulador() {
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8);
       doc.setTextColor(255, 255, 255);
-      doc.text(`R$ ${consolidatedTotals.totalDebtSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 6, currentY + 20);
-      doc.text(`R$ ${consolidatedTotals.downPaymentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, pageWidth / 3 + 10, currentY + 20);
+      doc.text(`R$ ${(consolidatedTotals?.totalDebtSum ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 6, currentY + 20);
+      doc.text(`R$ ${(consolidatedTotals?.downPaymentSum ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, pageWidth / 3 + 10, currentY + 20);
       doc.setTextColor(accentColor.r, accentColor.g, accentColor.b);
-      doc.text(`R$ ${consolidatedTotals.totalAvgInstallmentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, (pageWidth / 3) * 2 + 10, currentY + 20);
+      doc.text(`R$ ${(consolidatedTotals?.totalAvgInstallmentSum ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, (pageWidth / 3) * 2 + 10, currentY + 20);
 
       currentY += 28;
     }
@@ -788,7 +788,7 @@ export function ParcelamentoSimulador() {
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-emerald-700 focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
               />
               <span className="text-[9px] text-slate-500 block">
-                Saldo a parcelar: <strong className="text-slate-700 font-mono">R$ {Math.max(0, input.totalDebt - input.downPayment).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                Saldo a parcelar: <strong className="text-slate-700 font-mono">R$ {Math.max(0, (input?.totalDebt ?? 0) - (input?.downPayment ?? 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
               </span>
             </div>
 
@@ -906,25 +906,25 @@ export function ParcelamentoSimulador() {
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Débito Atualizado</span>
                       <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                        R$ {input.totalDebt.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        R$ {(input?.totalDebt ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Entrada</span>
                       <span className="text-sm font-extrabold text-emerald-600 font-mono mt-1 block">
-                        R$ {input.downPayment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        R$ {(input?.downPayment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-[#e4b35e]/20 shadow-xs bg-[#e4b35e]/3">
                       <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block">A Parcelar</span>
                       <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                        R$ {Math.max(0, input.totalDebt - input.downPayment).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        R$ {Math.max(0, (input?.totalDebt ?? 0) - (input?.downPayment ?? 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Parcela Estimada</span>
                       <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                        R$ {simulationResults.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        R$ {(simulationResults?.avgInstallment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                   </div>
@@ -938,8 +938,8 @@ export function ParcelamentoSimulador() {
                       Esta é a projeção atual da simulação sob a modalidade <strong className="text-white font-sans">{input.parcelamentoType}</strong>:
                     </p>
                     <ul className="text-xs text-slate-300 mt-3 space-y-1.5 list-disc pl-4">
-                      <li>Saldo a amortizar: <strong className="text-white">R$ {Math.max(0, input.totalDebt - input.downPayment).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></li>
-                      <li>Quitado em <strong className="text-white">{input.installmentsCount} parcelas fixas</strong> de <strong className="text-[#e4b35e]">R$ {simulationResults.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></li>
+                      <li>Saldo a amortizar: <strong className="text-white">R$ {Math.max(0, (input?.totalDebt ?? 0) - (input?.downPayment ?? 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></li>
+                      <li>Quitado em <strong className="text-white">{input.installmentsCount} parcelas fixas</strong> de <strong className="text-[#e4b35e]">R$ {(simulationResults?.avgInstallment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></li>
                     </ul>
                   </div>
                 </div>
@@ -952,7 +952,7 @@ export function ParcelamentoSimulador() {
                 <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                   <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Débito Total Somado</span>
                   <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                    R$ {consolidatedTotals.totalDebtSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    R$ {(consolidatedTotals?.totalDebtSum ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                   <span className="text-[8px] text-slate-500 block mt-0.5">Soma de todas as dívidas</span>
                 </div>
@@ -960,7 +960,7 @@ export function ParcelamentoSimulador() {
                 <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                   <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Entrada Total Somada</span>
                   <span className="text-sm font-extrabold text-emerald-600 font-mono mt-1 block">
-                    R$ {consolidatedTotals.downPaymentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    R$ {(consolidatedTotals?.downPaymentSum ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                   <span className="text-[8px] text-slate-500 block mt-0.5">Total de sinal deduzido</span>
                 </div>
@@ -968,7 +968,7 @@ export function ParcelamentoSimulador() {
                 <div className="bg-white p-3.5 rounded-2xl border border-[#e4b35e]/20 shadow-xs bg-[#e4b35e]/3">
                   <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block">Total Líquido Financiado</span>
                   <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                    R$ {consolidatedTotals.totalFinancedSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    R$ {(consolidatedTotals?.totalFinancedSum ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                   <span className="text-[8px] text-slate-500 block mt-0.5">Saldo restante somado</span>
                 </div>
@@ -976,7 +976,7 @@ export function ParcelamentoSimulador() {
                 <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
                   <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Parcela Mensal Somada</span>
                   <span className="text-sm font-extrabold text-[#04243b] font-mono mt-1 block">
-                    R$ {consolidatedTotals.totalAvgInstallmentSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    R$ {(consolidatedTotals?.totalAvgInstallmentSum ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                   <span className="text-[8px] text-slate-500 block mt-0.5">Custo mensal consolidado</span>
                 </div>
@@ -1006,15 +1006,15 @@ export function ParcelamentoSimulador() {
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs pt-1">
                           <div>
                             <span className="text-slate-500 font-normal">Valor Atualizado: </span>
-                            <span className="font-mono font-bold text-[#04243b]">R$ {sim.totalDebt.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            <span className="font-mono font-bold text-[#04243b]">R$ {(sim.totalDebt ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
                           <div>
                             <span className="text-slate-500 font-normal">Entrada: </span>
-                            <span className="font-mono font-bold text-emerald-600">R$ {sim.downPayment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            <span className="font-mono font-bold text-emerald-600">R$ {(sim.downPayment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
                           <div>
                             <span className="text-slate-500 font-normal">{sim.installmentsCount} Parcelas: </span>
-                            <span className="font-mono font-bold text-[#04243b]">R$ {itemResults.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            <span className="font-mono font-bold text-[#04243b]">R$ {(itemResults?.avgInstallment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
                         </div>
                       </div>
