@@ -107,6 +107,9 @@ export interface FaturamentoItem {
 export interface ParcelamentoInput {
   totalDebt: number;
   downPayment: number;
+  isDownPaymentInstallment?: boolean;
+  downPaymentInstallmentsCount?: number;
+  downPaymentInstallmentValue?: number;
   installmentsCount: number;
   installmentValue?: number;
   interestRate: number; // monthly %

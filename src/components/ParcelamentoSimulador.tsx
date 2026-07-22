@@ -140,6 +140,9 @@ export function ParcelamentoSimulador() {
   const [input, setInput] = useState<ParcelamentoInput>({
     totalDebt: 0,
     downPayment: 0,
+    isDownPaymentInstallment: false,
+    downPaymentInstallmentsCount: 12,
+    downPaymentInstallmentValue: 0,
     installmentsCount: 0,
     installmentValue: 0,
     interestRate: 0,
@@ -228,72 +231,42 @@ export function ParcelamentoSimulador() {
     }
   }, [parcelamentoTypes]);
 
-  // Run calculation logic for current input
-  const simulationResults = useMemo(() => {
-    if (input.installmentsCount <= 0) {
-      return { rows: [] as InstallmentRow[], totalPaid: 0, avgInstallment: 0 };
-    }
+  // Helper to run simple calculation for a specific simulation item
+  const getSimulationResults = (sim: ParcelamentoInput) => {
+    const isParcelada = !!sim.isDownPaymentInstallment;
+    const entradaQtd = isParcelada ? (sim.downPaymentInstallmentsCount || 12) : 1;
+    const entradaVal = isParcelada 
+      ? (sim.downPaymentInstallmentValue || (sim.downPayment ? sim.downPayment / entradaQtd : 0))
+      : (sim.downPayment || 0);
+    const totalDown = isParcelada ? (entradaVal * entradaQtd) : (sim.downPayment || 0);
 
-    const rows: InstallmentRow[] = [];
-    const totalN = input.installmentsCount;
-    const principalToFinance = Math.max(0, input.totalDebt - input.downPayment);
-    const pmt = input.installmentValue && input.installmentValue > 0
-      ? input.installmentValue
-      : (totalN > 0 ? principalToFinance / totalN : 0);
-
-    const baseDate = new Date();
-    if (input.firstDueDate) {
-      const parts = input.firstDueDate.split('-');
-      if (parts.length === 3) {
-        baseDate.setFullYear(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-      }
-    }
-
-    let rowIndex = 1;
-    // Parcela/Entrada initial payment (only if downPayment > 0)
-    if (input.downPayment > 0) {
-      rows.push({
-        number: rowIndex++,
-        dueDate: baseDate.toLocaleDateString('pt-BR'),
-        previousBalance: input.totalDebt,
-        amortization: input.downPayment,
-        interest: 0,
-        penalty: 0,
-        total: input.downPayment,
-        currentBalance: principalToFinance
-      });
-    }
-
-    // N monthly installments
-    let runningBalance = principalToFinance;
-    for (let i = 1; i <= totalN; i++) {
-      const previousBalance = runningBalance;
-      runningBalance = Math.max(0, runningBalance - pmt);
-
-      const dueDate = new Date(baseDate);
-      const monthOffset = input.downPayment > 0 ? i : (i - 1);
-      dueDate.setMonth(baseDate.getMonth() + monthOffset);
-
-      rows.push({
-        number: rowIndex++,
-        dueDate: dueDate.toLocaleDateString('pt-BR'),
-        previousBalance,
-        amortization: pmt,
-        interest: 0,
-        penalty: 0,
-        total: pmt,
-        currentBalance: runningBalance
-      });
-    }
-
-    const totalPaid = input.totalDebt;
+    const principalToFinance = Math.max(0, sim.totalDebt - totalDown);
+    const pmt = sim.installmentValue && sim.installmentValue > 0
+      ? sim.installmentValue
+      : (sim.installmentsCount > 0 ? principalToFinance / sim.installmentsCount : 0);
 
     return {
-      rows,
-      totalPaid,
-      avgInstallment: pmt
+      totalPaid: totalDown + (sim.installmentsCount * pmt),
+      avgInstallment: pmt,
+      totalDown,
+      entradaQtd,
+      entradaVal,
+      isParcelada
     };
-  }, [input.totalDebt, input.downPayment, input.installmentsCount, input.installmentValue, input.firstDueDate]);
+  };
+
+  // Run calculation logic for current input
+  const simulationResults = useMemo(() => {
+    return getSimulationResults(input);
+  }, [
+    input.totalDebt, 
+    input.downPayment, 
+    input.isDownPaymentInstallment,
+    input.downPaymentInstallmentsCount,
+    input.downPaymentInstallmentValue,
+    input.installmentsCount, 
+    input.installmentValue
+  ]);
 
   // Consolidated totals for ALL simulations
   const consolidatedTotals = useMemo(() => {
@@ -305,15 +278,12 @@ export function ParcelamentoSimulador() {
 
     simulations.forEach(sim => {
       totalDebtSum += sim.totalDebt;
-      downPaymentSum += sim.downPayment;
-      const financed = Math.max(0, sim.totalDebt - sim.downPayment);
+      const res = getSimulationResults(sim);
+      downPaymentSum += res.totalDown;
+      const financed = Math.max(0, sim.totalDebt - res.totalDown);
       totalFinancedSum += financed;
       totalInstallmentsSum += sim.installmentsCount;
-      if (sim.installmentValue && sim.installmentValue > 0) {
-        totalAvgInstallmentSum += sim.installmentValue;
-      } else if (sim.installmentsCount > 0) {
-        totalAvgInstallmentSum += (financed / sim.installmentsCount);
-      }
+      totalAvgInstallmentSum += res.avgInstallment;
     });
 
     return {
@@ -330,24 +300,51 @@ export function ParcelamentoSimulador() {
       alert("Por favor, informe o valor total atualizado do débito.");
       return;
     }
+
+    let calculatedDown = input.downPayment;
+    let calculatedDownVal = input.downPaymentInstallmentValue;
+
+    if (input.isDownPaymentInstallment) {
+      if (!input.downPaymentInstallmentsCount || input.downPaymentInstallmentsCount <= 0) {
+        alert("Por favor, informe a quantidade de parcelas da entrada (ex: 12x).");
+        return;
+      }
+      if (!input.downPaymentInstallmentValue || input.downPaymentInstallmentValue <= 0) {
+        if (input.downPayment > 0 && input.downPaymentInstallmentsCount > 0) {
+          calculatedDownVal = input.downPayment / input.downPaymentInstallmentsCount;
+        } else {
+          alert("Por favor, informe o valor da parcela da entrada.");
+          return;
+        }
+      } else {
+        calculatedDown = (input.downPaymentInstallmentValue || 0) * (input.downPaymentInstallmentsCount || 12);
+      }
+    }
+
     if (input.installmentsCount <= 0) {
-      alert("Por favor, informe o número de parcelas.");
+      alert("Por favor, informe o número de parcelas da Básica.");
       return;
     }
     if (!input.installmentValue || input.installmentValue <= 0) {
-      alert("Por favor, informe o valor da parcela mensal.");
+      alert("Por favor, informe o valor da parcela mensal Básica.");
       return;
     }
 
+    const payload: ParcelamentoInput = {
+      ...input,
+      downPayment: calculatedDown,
+      downPaymentInstallmentValue: calculatedDownVal
+    };
+
     if (editingId) {
       // Editing mode
-      const updated = simulations.map(s => s.id === editingId ? { ...s, ...input } : s);
+      const updated = simulations.map(s => s.id === editingId ? { ...s, ...payload } : s);
       saveSimulations(updated);
       setEditingId(null);
     } else {
       // Creation mode
       const newSim = {
-        ...input,
+        ...payload,
         id: Math.random().toString(36).substring(2, 9)
       };
       const updated = [...simulations, newSim];
@@ -359,6 +356,9 @@ export function ParcelamentoSimulador() {
       ...prev,
       totalDebt: 0,
       downPayment: 0,
+      isDownPaymentInstallment: false,
+      downPaymentInstallmentsCount: 12,
+      downPaymentInstallmentValue: 0,
       installmentsCount: 0,
       installmentValue: 0
     }));
@@ -370,13 +370,15 @@ export function ParcelamentoSimulador() {
       e.stopPropagation();
     }
     setEditingId(sim.id);
-    const financed = Math.max(0, sim.totalDebt - sim.downPayment);
-    const fallbackVal = sim.installmentsCount > 0 ? financed / sim.installmentsCount : 0;
+    const res = getSimulationResults(sim);
     setInput({
       totalDebt: sim.totalDebt,
-      downPayment: sim.downPayment,
+      downPayment: res.totalDown,
+      isDownPaymentInstallment: !!sim.isDownPaymentInstallment,
+      downPaymentInstallmentsCount: sim.downPaymentInstallmentsCount || 12,
+      downPaymentInstallmentValue: sim.downPaymentInstallmentValue || res.entradaVal,
       installmentsCount: sim.installmentsCount,
-      installmentValue: sim.installmentValue !== undefined ? sim.installmentValue : fallbackVal,
+      installmentValue: sim.installmentValue !== undefined ? sim.installmentValue : res.avgInstallment,
       interestRate: sim.interestRate || 0,
       penaltyRate: sim.penaltyRate || 0,
       firstDueDate: sim.firstDueDate || '',
@@ -414,6 +416,9 @@ export function ParcelamentoSimulador() {
     setInput({
       totalDebt: 0,
       downPayment: 0,
+      isDownPaymentInstallment: false,
+      downPaymentInstallmentsCount: 12,
+      downPaymentInstallmentValue: 0,
       installmentsCount: 0,
       installmentValue: 0,
       interestRate: 0,
@@ -422,21 +427,6 @@ export function ParcelamentoSimulador() {
       parcelamentoType: parcelamentoTypes[0] || 'PARCELAMENTOS SIMPLES NACIONAL'
     });
     setEditingId(null);
-  };
-
-  // Helper to run simple calculation for a specific simulation item
-  const getSimulationResults = (sim: ParcelamentoInput) => {
-    const principalToFinance = Math.max(0, sim.totalDebt - sim.downPayment);
-    if (sim.installmentsCount <= 0) {
-      return { totalPaid: 0, avgInstallment: 0 };
-    }
-    const pmt = sim.installmentValue && sim.installmentValue > 0
-      ? sim.installmentValue
-      : (sim.installmentsCount > 0 ? principalToFinance / sim.installmentsCount : 0);
-    return {
-      totalPaid: sim.totalDebt,
-      avgInstallment: pmt
-    };
   };
 
   // Generate Report in PDF with corporate identity containing ALL simulations for the active company
@@ -557,9 +547,10 @@ export function ParcelamentoSimulador() {
 
     listToPrint.forEach((sim, idx) => {
       const results = getSimulationResults(sim);
+      const boxHeight = 36;
 
-      // Check for page overflow before rendering next simulation panel (height is 32)
-      if (currentY + 38 > pageHeight - 35) {
+      // Check for page overflow before rendering next simulation panel
+      if (currentY + boxHeight + 6 > pageHeight - 35) {
         doc.addPage();
         totalPages++;
         
@@ -569,13 +560,13 @@ export function ParcelamentoSimulador() {
 
       // Draw simulation box
       doc.setFillColor(grayBg.r, grayBg.g, grayBg.b);
-      doc.rect(margin, currentY, pageWidth - (margin * 2), 32, 'F');
+      doc.rect(margin, currentY, pageWidth - (margin * 2), boxHeight, 'F');
       doc.setDrawColor(borderGray.r, borderGray.g, borderGray.b);
-      doc.rect(margin, currentY, pageWidth - (margin * 2), 32, 'S');
+      doc.rect(margin, currentY, pageWidth - (margin * 2), boxHeight, 'S');
       
       // Left vertical accent
       doc.setFillColor(accentColor.r, accentColor.g, accentColor.b);
-      doc.rect(margin, currentY, 1.5, 32, 'F');
+      doc.rect(margin, currentY, 1.5, boxHeight, 'F');
 
       // Title & Index
       doc.setFont('helvetica', 'bold');
@@ -583,32 +574,45 @@ export function ParcelamentoSimulador() {
       doc.setTextColor(primaryColor.r, primaryColor.g, primaryColor.b);
       doc.text(`SIMULAÇÃO #${idx + 1}: ${sim.parcelamentoType.toUpperCase()}`, margin + 5, currentY + 6);
 
-      // Line 1: Valor Atualizado
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8.5);
+      doc.setFontSize(8);
       doc.setTextColor(80, 90, 105);
-      doc.text('Valor Atualizado:', margin + 6, currentY + 14);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(20, 30, 45);
-      doc.text(`R$ ${(sim.totalDebt ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 14);
+      doc.text(`Débito Total: R$ ${(sim.totalDebt ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, pageWidth - margin - 6, currentY + 6, { align: 'right' });
 
-      // Line 2: Entrada
+      // Inner Table Header
+      doc.setFillColor(235, 240, 245);
+      doc.rect(margin + 4, currentY + 9, pageWidth - (margin * 2) - 8, 5, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(40, 50, 65);
+      doc.text('Forma de pagamento', margin + 7, currentY + 12.5);
+      doc.text('Quantidade', titleCenterX, currentY + 12.5, { align: 'center' });
+      doc.text('Valor', pageWidth - margin - 7, currentY + 12.5, { align: 'right' });
+
+      // Row 1: Entrada
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(30, 40, 55);
+      doc.text('Entrada', margin + 7, currentY + 19);
+      const entradaQtdStr = results.isParcelada ? `${results.entradaQtd}x` : '1x (À vista)';
+      doc.text(entradaQtdStr, titleCenterX, currentY + 19, { align: 'center' });
+      doc.text(`R$ ${(results.entradaVal ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, pageWidth - margin - 7, currentY + 19, { align: 'right' });
+
+      // Row 2: Básica
+      doc.text('Básica', margin + 7, currentY + 25);
+      doc.text(`${sim.installmentsCount}x`, titleCenterX, currentY + 25, { align: 'center' });
+      doc.text(`R$ ${(results.avgInstallment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, pageWidth - margin - 7, currentY + 25, { align: 'right' });
+
+      // Divider & Total Quitado
+      doc.setDrawColor(borderGray.r, borderGray.g, borderGray.b);
+      doc.line(margin + 4, currentY + 28.5, pageWidth - margin - 4, currentY + 28.5);
       doc.setFont('helvetica', 'normal');
-      doc.setTextColor(80, 90, 105);
-      doc.text('Entrada:', margin + 6, currentY + 20.5);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(20, 30, 45);
-      doc.text(`R$ ${(sim.downPayment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 20.5);
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 116, 139);
+      const totalEntradaText = results.isParcelada ? ` (Total Entrada: R$ ${results.totalDown.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})` : '';
+      doc.text(`Projeção Total: R$ ${results.totalPaid.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${totalEntradaText}`, pageWidth - margin - 7, currentY + 33, { align: 'right' });
 
-      // Line 3: N Parcelas
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(80, 90, 105);
-      doc.text(`${sim.installmentsCount} Parcelas:`, margin + 6, currentY + 27);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(primaryColor.r, primaryColor.g, primaryColor.b);
-      doc.text(`R$ ${(results?.avgInstallment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, margin + 38, currentY + 27);
-
-      currentY += 37;
+      currentY += boxHeight + 5;
     });
 
     // Check overflow for Consolidated totals and final blocks
@@ -771,57 +775,138 @@ export function ParcelamentoSimulador() {
               <FormattedCurrencyInput
                 value={input.totalDebt}
                 onChange={(val) => setInput(prev => ({ ...prev, totalDebt: Math.max(0, val) }))}
-                placeholder="Ex: R$ 15.000,00"
+                placeholder="Ex: R$ 34.250,25"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-[#04243b] focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
               />
             </div>
 
-            {/* Down Payment */}
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                Entrada / Sinal (R$)
-              </label>
-              <FormattedCurrencyInput
-                value={input.downPayment}
-                onChange={(val) => setInput(prev => ({ ...prev, downPayment: Math.max(0, val) }))}
-                placeholder="Ex: R$ 1.500,00"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-emerald-700 focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
-              />
-              <span className="text-[9px] text-slate-500 block">
-                Saldo a parcelar: <strong className="text-slate-700 font-mono">R$ {Math.max(0, (input?.totalDebt ?? 0) - (input?.downPayment ?? 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-              </span>
+            {/* Down Payment Options */}
+            <div className="space-y-2 pt-1 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Forma de Pagamento da Entrada
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setInput(prev => ({ ...prev, isDownPaymentInstallment: false }))}
+                  className={`py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                    !input.isDownPaymentInstallment 
+                      ? 'bg-white text-[#04243b] shadow-xs' 
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  À Vista (1x)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInput(prev => ({ 
+                    ...prev, 
+                    isDownPaymentInstallment: true,
+                    downPaymentInstallmentsCount: prev.downPaymentInstallmentsCount || 12 
+                  }))}
+                  className={`py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                    input.isDownPaymentInstallment 
+                      ? 'bg-[#04243b] text-[#e4b35e] shadow-xs' 
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  Entrada Parcelada
+                </button>
+              </div>
+
+              {!input.isDownPaymentInstallment ? (
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                    Valor da Entrada À Vista (R$)
+                  </label>
+                  <FormattedCurrencyInput
+                    value={input.downPayment}
+                    onChange={(val) => setInput(prev => ({ ...prev, downPayment: Math.max(0, val) }))}
+                    placeholder="Ex: R$ 3.000,00"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-emerald-700 focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-2 bg-amber-50/50 p-2.5 rounded-xl border border-amber-200/70">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-600 uppercase tracking-wider block mb-1">
+                        Nº Parcelas Entrada
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={input.downPaymentInstallmentsCount ? input.downPaymentInstallmentsCount : ''}
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/\D/g, '');
+                          const count = raw ? parseInt(raw, 10) : 1;
+                          setInput(prev => ({
+                            ...prev,
+                            downPaymentInstallmentsCount: count,
+                            downPayment: (prev.downPaymentInstallmentValue || 0) * count
+                          }));
+                        }}
+                        placeholder="Ex: 12"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-[#04243b] focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-600 uppercase tracking-wider block mb-1">
+                        Valor Parcela Entrada
+                      </label>
+                      <FormattedCurrencyInput
+                        value={input.downPaymentInstallmentValue || 0}
+                        onChange={(val) => setInput(prev => ({
+                          ...prev,
+                          downPaymentInstallmentValue: val,
+                          downPayment: val * (prev.downPaymentInstallmentsCount || 12)
+                        }))}
+                        placeholder="Ex: R$ 260,50"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-emerald-700 focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Installments Count */}
-            <div className="space-y-1.5">
+            {/* Basic Installments */}
+            <div className="space-y-2 pt-1 border-t border-slate-100">
               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                Número de Parcelas
+                Parcelamento do Saldo (Básica)
               </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={input.installmentsCount ? input.installmentsCount : ''}
-                onChange={(e) => {
-                  const raw = e.target.value.replace(/\D/g, '');
-                  const val = raw ? parseInt(raw, 10) : 0;
-                  setInput(prev => ({ ...prev, installmentsCount: Math.min(120, val) }));
-                }}
-                placeholder="Ex: 24"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-[#04243b] focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
-              />
-            </div>
-
-            {/* Monthly Installment value (valor da parcela mensal) */}
-            <div className="space-y-1.5 pt-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                Valor da Parcela Mensal (R$)
-              </label>
-              <FormattedCurrencyInput
-                value={input.installmentValue || 0}
-                onChange={(val) => setInput(prev => ({ ...prev, installmentValue: Math.max(0, val) }))}
-                placeholder="R$ 0,00"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-[#04243b] focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
-              />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                    Nº Parcelas Básicas
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={input.installmentsCount ? input.installmentsCount : ''}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/\D/g, '');
+                      const val = raw ? parseInt(raw, 10) : 0;
+                      setInput(prev => ({ ...prev, installmentsCount: Math.min(240, val) }));
+                    }}
+                    placeholder="Ex: 133"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-[#04243b] focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
+                  />
+                </div>
+                <div>
+                  <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                    Valor Parcela Básica
+                  </label>
+                  <FormattedCurrencyInput
+                    value={input.installmentValue || 0}
+                    onChange={(val) => setInput(prev => ({ ...prev, installmentValue: Math.max(0, val) }))}
+                    placeholder="Ex: R$ 236,25"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold text-[#04243b] focus:outline-none focus:ring-1 focus:ring-[#e4b35e]"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Add / Save button */}
@@ -983,62 +1068,83 @@ export function ParcelamentoSimulador() {
               </div>
 
               {/* List of active simulations */}
-              <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
                 {simulations.map((sim, index) => {
                   const itemResults = getSimulationResults(sim);
-                  const financed = Math.max(0, sim.totalDebt - sim.downPayment);
                   return (
                     <motion.div 
                       key={sim.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="bg-white border border-slate-200 p-4 rounded-xl flex items-center justify-between gap-4 hover:border-[#e4b35e]/30 transition-all shadow-xs"
+                      className="bg-white border border-slate-200 p-4 rounded-xl space-y-3 hover:border-[#e4b35e]/40 transition-all shadow-xs"
                     >
-                      <div className="space-y-1.5 flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-4 border-b border-slate-100 pb-2">
                         <div className="flex items-center gap-2">
-                          <span className="inline-block px-1.5 py-0.5 bg-slate-100 rounded text-[9px] font-bold text-slate-500">
+                          <span className="inline-block px-2 py-0.5 bg-[#04243b] text-white rounded text-[10px] font-bold">
                             #{index + 1}
                           </span>
                           <span className="text-xs font-extrabold text-[#04243b] uppercase truncate">
                             {sim.parcelamentoType}
                           </span>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs pt-1">
-                          <div>
-                            <span className="text-slate-500 font-normal">Valor Atualizado: </span>
-                            <span className="font-mono font-bold text-[#04243b]">R$ {(sim.totalDebt ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 font-normal">Entrada: </span>
-                            <span className="font-mono font-bold text-emerald-600">R$ {(sim.downPayment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 font-normal">{sim.installmentsCount} Parcelas: </span>
-                            <span className="font-mono font-bold text-[#04243b]">R$ {(itemResults?.avgInstallment ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                          </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-xs font-mono font-bold text-[#04243b] bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
+                            Débito: R$ {(sim.totalDebt ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => handleEditSimulation(sim, e)}
+                            className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                              editingId === sim.id 
+                                ? "bg-amber-100 text-amber-700 hover:bg-amber-200 border border-amber-300" 
+                                : "bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200"
+                            }`}
+                            title="Editar simulação"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => handleRemoveSimulation(sim.id, e)}
+                            className="p-1.5 bg-red-50 hover:bg-red-100 text-red-500 rounded-lg transition-all cursor-pointer border border-red-100"
+                            title="Excluir simulação"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <button
-                          type="button"
-                          onClick={(e) => handleEditSimulation(sim, e)}
-                          className={`p-2 rounded-lg transition-all cursor-pointer ${
-                            editingId === sim.id 
-                              ? "bg-amber-100 text-amber-700 hover:bg-amber-200 border border-amber-300" 
-                              : "bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200"
-                          }`}
-                          title="Editar simulação"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => handleRemoveSimulation(sim.id, e)}
-                          className="p-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-lg transition-all cursor-pointer border border-red-100"
-                          title="Excluir simulação"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+
+                      {/* Payment Breakdown Table */}
+                      <div className="overflow-x-auto rounded-lg border border-slate-100">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 text-slate-500 border-b border-slate-200 text-[10px] uppercase tracking-wider font-bold">
+                              <th className="py-1.5 px-3 text-left">Forma de pagamento</th>
+                              <th className="py-1.5 px-3 text-center">Quantidade</th>
+                              <th className="py-1.5 px-3 text-right">Valor</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            <tr>
+                              <td className="py-1.5 px-3 font-bold text-slate-700">Entrada</td>
+                              <td className="py-1.5 px-3 text-center font-mono text-slate-600 font-semibold">
+                                {itemResults.isParcelada ? `${itemResults.entradaQtd}x` : '1x (À vista)'}
+                              </td>
+                              <td className="py-1.5 px-3 text-right font-mono text-emerald-700 font-bold">
+                                R$ {itemResults.entradaVal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="py-1.5 px-3 font-bold text-slate-700">Básica</td>
+                              <td className="py-1.5 px-3 text-center font-mono text-slate-600 font-semibold">
+                                {sim.installmentsCount}x
+                              </td>
+                              <td className="py-1.5 px-3 text-right font-mono text-[#04243b] font-bold">
+                                R$ {itemResults.avgInstallment.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
                       </div>
                     </motion.div>
                   );
