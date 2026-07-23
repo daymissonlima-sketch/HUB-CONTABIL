@@ -33,6 +33,7 @@ import importedCompaniesJson from '../data/imported_companies.json';
 import { 
   parseSituationFiscalText, 
   formatCompetencia,
+  sortDebtsByCompetencia,
   SAMPLE_RECEITA_FEDERAL, 
   SAMPLE_SEFAZ, 
   SAMPLE_SEFIN 
@@ -234,11 +235,35 @@ const INITIAL_CATEGORIES: DebtCategory[] = [
     scope: 'ADMINISTRATIVO'
   },
   {
+    id: 'cat-icms-antecipado',
+    categoryType: 'TRIBUTO',
+    origin: 'ESTADUAL',
+    documentType: 'DAE',
+    title: 'ICMS ANTECIPADO',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-fecop',
+    categoryType: 'TRIBUTO',
+    origin: 'ESTADUAL',
+    documentType: 'DAE',
+    title: 'FECOP',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
+    id: 'cat-icms-st',
+    categoryType: 'TRIBUTO',
+    origin: 'ESTADUAL',
+    documentType: 'DAE',
+    title: 'ICMS SUBSTITUIÇÃO TRIBUTÁRIA',
+    scope: 'ADMINISTRATIVO'
+  },
+  {
     id: 'cat-icms-pge',
     categoryType: 'TRIBUTO',
     origin: 'ESTADUAL',
     documentType: 'DAE',
-    title: 'ICMS DÍVIDA ATIVA (PGE)',
+    title: 'ICMS DÍVIDA ATIVA',
     scope: 'DIVIDA_ATIVA'
   },
   {
@@ -427,14 +452,33 @@ export function DebtLevantamento() {
     if (saved) {
       try {
         const parsed: DebtCategory[] = JSON.parse(saved);
-        const existingTitles = new Set(parsed.map(c => c.title.trim().toUpperCase()));
-        const missingFromDefaults = INITIAL_CATEGORIES.filter(c => !existingTitles.has(c.title.trim().toUpperCase()));
-        if (missingFromDefaults.length > 0) {
-          const merged = [...parsed, ...missingFromDefaults];
-          localStorage.setItem('debt_categories', JSON.stringify(merged));
-          return merged;
-        }
-        return parsed;
+        // Migration: rename old title if matching default id
+        const updatedParsed = parsed.map(c => {
+          if (c.id === 'cat-icms-pge' && c.title.includes('PGE')) {
+            return { ...c, title: 'ICMS DÍVIDA ATIVA' };
+          }
+          return c;
+        });
+
+        const existingIds = new Set(updatedParsed.map(c => c.id));
+        const existingTitles = new Set(updatedParsed.map(c => c.title.trim().toUpperCase()));
+        
+        const missingFromDefaults = INITIAL_CATEGORIES.filter(
+          c => !existingIds.has(c.id) && !existingTitles.has(c.title.trim().toUpperCase())
+        );
+
+        const combined = [...updatedParsed, ...missingFromDefaults];
+        
+        // Ensure strictly unique IDs
+        const uniqueMap = new Map<string, DebtCategory>();
+        combined.forEach(item => {
+          if (!uniqueMap.has(item.id)) {
+            uniqueMap.set(item.id, item);
+          }
+        });
+        const finalCategories = Array.from(uniqueMap.values());
+        localStorage.setItem('debt_categories', JSON.stringify(finalCategories));
+        return finalCategories;
       } catch (e) {
         console.error(e);
       }
@@ -1448,7 +1492,7 @@ export function DebtLevantamento() {
       .map(c => c.title)
       .sort((a, b) => getCategorySortOrder(a) - getCategorySortOrder(b));
 
-    const sortedDebts = [...debts].sort((a, b) => getCategorySortOrder(a.category) - getCategorySortOrder(b.category));
+    const sortedDebts = sortDebtsByCompetencia<DebtItem>(debts).sort((a, b) => getCategorySortOrder(a.category) - getCategorySortOrder(b.category));
 
     exportDebtsToPDF(clientInfo, sortedDebts, sortedCategoryTitles);
   };
@@ -1545,7 +1589,7 @@ export function DebtLevantamento() {
                 };
                 return scoring[organ] || 99;
               };
-              const sortedDebts = [...debts].sort((a, b) => getCategorySortOrder(a.category) - getCategorySortOrder(b.category));
+              const sortedDebts = sortDebtsByCompetencia<DebtItem>(debts).sort((a, b) => getCategorySortOrder(a.category) - getCategorySortOrder(b.category));
               exportDebtsToExcel(clientInfo, sortedDebts);
             }}
             disabled={debts.length === 0}
@@ -1843,7 +1887,7 @@ export function DebtLevantamento() {
                           {/* Categories Grid (2 columns to prevent stretching on wide screens) */}
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                             {organCategories.map(categoryTitle => {
-                              const categoryDebts = organDebts.filter(d => d.category === categoryTitle);
+                              const categoryDebts = sortDebtsByCompetencia<DebtItem>(organDebts.filter(d => d.category === categoryTitle));
                               const catInfo = getCategoryByTitle(categoryTitle);
 
                               const catPrincipal = categoryDebts.reduce((sum, item) => sum + item.principal, 0);
@@ -2743,7 +2787,7 @@ export function DebtLevantamento() {
                           return acc;
                         }, {})
                       ).map(([categoryName, rawItems]) => {
-                        const items = rawItems as typeof tempParsedDebts;
+                        const items = sortDebtsByCompetencia<typeof tempParsedDebts[number]>(rawItems as typeof tempParsedDebts);
                         const categoryTotalPrincipal = items.reduce((s, d) => s + (Number(d.principal) || 0), 0);
                         const categoryTotalPenalty = items.reduce((s, d) => s + (Number(d.penalty) || 0), 0);
                         const categoryTotalInterest = items.reduce((s, d) => s + (Number(d.interest) || 0), 0);

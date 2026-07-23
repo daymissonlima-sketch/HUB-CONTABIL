@@ -66,6 +66,97 @@ export function formatCompetencia(rawPeriod: string): string {
   return trimmed;
 }
 
+const MONTH_SORT_MAP: Record<string, number> = {
+  'jan': 1, 'janeiro': 1, '1': 1, '01': 1,
+  'fev': 2, 'fevereiro': 2, '2': 2, '02': 2,
+  'mar': 3, 'marco': 3, 'março': 3, '3': 3, '03': 3,
+  'abr': 4, 'abril': 4, '4': 4, '04': 4,
+  'mai': 5, 'maio': 5, '5': 5, '05': 5,
+  'jun': 6, 'junho': 6, '6': 6, '06': 6,
+  'jul': 7, 'julho': 7, '7': 7, '07': 7,
+  'ago': 8, 'agosto': 8, '8': 8, '08': 8,
+  'set': 9, 'setembro': 9, '9': 9, '09': 9,
+  'out': 10, 'outubro': 10, '10': 10,
+  'nov': 11, 'novembro': 11, '11': 11,
+  'dez': 12, 'dezembro': 12, '12': 12,
+  '13': 13,
+};
+
+export function parseCompetenciaToSortKey(periodStr: string | undefined | null): number {
+  if (!periodStr) return 0;
+  const raw = String(periodStr).trim();
+  if (!raw) return 0;
+
+  // Replace dots, dashes, spaces with clean slash separator
+  const clean = raw.toLowerCase().replace(/[\.-]/g, '/').replace(/\s+/g, '');
+  const parts = clean.split('/').filter(Boolean);
+
+  let year = 0;
+  let month = 0;
+  let day = 1;
+
+  if (parts.length === 3) {
+    let p0 = parts[0];
+    let p1 = parts[1];
+    let p2 = parts[2];
+
+    if (p0.length === 4) {
+      // YYYY/MM/DD
+      year = parseInt(p0, 10);
+      month = MONTH_SORT_MAP[p1] || parseInt(p1, 10) || 1;
+      day = parseInt(p2, 10) || 1;
+    } else {
+      // DD/MM/YYYY
+      day = parseInt(p0, 10) || 1;
+      month = MONTH_SORT_MAP[p1] || parseInt(p1, 10) || 1;
+      let yVal = parseInt(p2, 10);
+      if (yVal < 100) yVal = yVal < 50 ? 2000 + yVal : 1900 + yVal;
+      year = yVal;
+    }
+  } else if (parts.length === 2) {
+    let p0 = parts[0];
+    let p1 = parts[1];
+
+    if (p0.length === 4 && p1.length <= 2) {
+      // YYYY/MM
+      year = parseInt(p0, 10);
+      month = MONTH_SORT_MAP[p1] || parseInt(p1, 10) || 1;
+    } else {
+      // MM/YYYY or mmm/yyyy
+      month = MONTH_SORT_MAP[p0] || parseInt(p0, 10) || 1;
+      let yVal = parseInt(p1, 10);
+      if (!isNaN(yVal)) {
+        if (yVal < 100) yVal = yVal < 50 ? 2000 + yVal : 1900 + yVal;
+        year = yVal;
+      }
+    }
+  } else if (parts.length === 1) {
+    const num = parseInt(parts[0], 10);
+    if (!isNaN(num)) {
+      if (num > 1000) year = num;
+    }
+  }
+
+  if (isNaN(year) || year <= 0) return 0;
+  if (isNaN(month) || month < 1) month = 1;
+  if (month > 13) month = 13;
+  if (isNaN(day) || day < 1) day = 1;
+  if (day > 31) day = 31;
+
+  return year * 10000 + month * 100 + day;
+}
+
+export function sortDebtsByCompetencia<T extends { period: string }>(debts: T[]): T[] {
+  return [...debts].sort((a, b) => {
+    const keyA = parseCompetenciaToSortKey(a.period);
+    const keyB = parseCompetenciaToSortKey(b.period);
+    if (keyA !== keyB) {
+      return keyA - keyB;
+    }
+    return a.period.localeCompare(b.period);
+  });
+}
+
 // Helper to split a CSV line properly, handling commas/semicolons and quotes
 function parseCsvLine(line: string): string[] {
   const result: string[] = [];
@@ -230,7 +321,13 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
           period = `${refParts[1]}/${refParts[2]}`; // convert to MM/YYYY
         }
         
-        const category = parts[3].trim().toUpperCase(); // Descrição e.g. "ICMS SUBSTITUICAO ENTRADA INTERESTADUAL"
+        const rawDesc = parts[3].trim().toUpperCase(); // Descrição e.g. "ICMS SUBSTITUICAO ENTRADA INTERESTADUAL"
+        let category = rawDesc;
+        if (rawDesc.includes('FECOP')) category = 'FECOP';
+        else if (rawDesc.includes('ANTECIPA')) category = 'ICMS ANTECIPADO';
+        else if (rawDesc.includes('SUBSTITU') || rawDesc.includes(' ST')) category = 'ICMS SUBSTITUIÇÃO TRIBUTÁRIA';
+        else if (rawDesc.includes('DIVIDA') || rawDesc.includes('PGE')) category = 'ICMS DÍVIDA ATIVA';
+
         const principal = parseBrFloat(parts[7]); // "15,18" -> 15.18
         const isVencido = parts[4].toLowerCase().includes('sim');
         const status = isVencido ? 'DEVEDOR' : 'A VENCER';
@@ -349,6 +446,14 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
         category = 'PARCELAMENTOS PREVIDENCIÁRIOS';
       } else if (uCategory.includes('SIMPLES NACIONAL') || uCategory.includes('PGDAS')) {
         category = 'DAS SIMPLES NACIONAL';
+      } else if (uCategory.includes('FECOP')) {
+        category = 'FECOP';
+      } else if (uCategory.includes('ANTECIPA')) {
+        category = 'ICMS ANTECIPADO';
+      } else if (uCategory.includes('SUBSTITU') || uCategory.includes(' ST')) {
+        category = 'ICMS SUBSTITUIÇÃO TRIBUTÁRIA';
+      } else if (uCategory.includes('DIVIDA') || uCategory.includes('PGE')) {
+        category = 'ICMS DÍVIDA ATIVA';
       } else if (uCategory.includes('PIS')) {
         category = 'PIS';
       } else if (uCategory.includes('COFINS')) {
@@ -476,7 +581,9 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
     };
   }
 
-  return { clientInfo, debts, warnings };
+  const sortedDebts = sortDebtsByCompetencia(debts);
+
+  return { clientInfo, debts: sortedDebts, warnings };
 }
 
 // Quick samples for users to test

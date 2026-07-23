@@ -1,6 +1,7 @@
 import XLSX from 'xlsx-js-style';
 import { DebtItem, ClientInfo } from '../types_debits';
 import { NFeItemRow } from '../types';
+import { sortDebtsByCompetencia } from './debtParser';
 
 export function exportToExcel(rows: NFeItemRow[], visibleColumns: string[], reportName: string) {
   // Map rows to excel objects using only visibleColumns
@@ -229,7 +230,9 @@ export function exportDebtsToExcel(clientInfo: ClientInfo, debts: DebtItem[]) {
     let catPrincipal = 0;
     let catTotal = 0;
 
-    items.forEach(item => {
+    const sortedItems = sortDebtsByCompetencia(items);
+
+    sortedItems.forEach(item => {
       // Data cell formatting
       writeCell(currentRow, 0, item.period, 's', styleDataCellLeft);
       writeCell(currentRow, 1, item.principal, 'n', styleDataCellRight, '"R$ " #,##0.00');

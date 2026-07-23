@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { DebtItem, ClientInfo } from '../types_debits';
 import { getPdfLogoData, getAppLogoScale } from './logoHelper';
+import { sortDebtsByCompetencia } from './debtParser';
 
 // Helper to format currency in Real (BRL)
 function formatCurrency(value: number): string {
@@ -204,7 +205,9 @@ export async function exportDebtsToPDF(
   } else {
     // Iterate over each category and render its group table
     for (const category of targetCategories) {
-      const categoryDebts = debts.filter(d => d.category.toLowerCase() === category.toLowerCase());
+      const categoryDebts = sortDebtsByCompetencia(
+        debts.filter(d => d.category.toLowerCase() === category.toLowerCase())
+      );
       if (categoryDebts.length === 0) continue;
 
       // Group title
