@@ -377,9 +377,25 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       if (stored) {
         try {
           const parsed = (JSON.parse(stored) as Company[]).filter(c => !c.id.startsWith('demo-'));
-          const existingCnpjs = new Set(parsed.map(c => c.cnpj.replace(/\D/g, '')));
-          const newFromImport = importedList.filter(c => !existingCnpjs.has(c.cnpj.replace(/\D/g, '')));
-          mergedCompanies = [...parsed, ...newFromImport];
+          const importedMap = new Map(importedList.map(c => [(c.cnpj || '').replace(/\D/g, ''), c]));
+
+          const updatedParsed = parsed.map(pC => {
+            const cleanCnpj = (pC.cnpj || '').replace(/\D/g, '');
+            const imp = importedMap.get(cleanCnpj);
+            if (imp) {
+              return {
+                ...pC,
+                regimeTributario: imp.regimeTributario || pC.regimeTributario,
+                vendaVistaPercent: imp.vendaVistaPercent !== undefined ? imp.vendaVistaPercent : pC.vendaVistaPercent,
+                vendaPrazoPercent: imp.vendaPrazoPercent !== undefined ? imp.vendaPrazoPercent : pC.vendaPrazoPercent,
+              };
+            }
+            return pC;
+          });
+
+          const existingCnpjs = new Set(updatedParsed.map(c => (c.cnpj || '').replace(/\D/g, '')));
+          const newFromImport = importedList.filter(c => !existingCnpjs.has((c.cnpj || '').replace(/\D/g, '')));
+          mergedCompanies = [...updatedParsed, ...newFromImport];
         } catch (err) {
           console.error('Erro ao ler empresas do localStorage:', err);
         }

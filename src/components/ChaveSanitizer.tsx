@@ -13,7 +13,7 @@ import {
   AlertCircle, 
   CheckCircle2 
 } from 'lucide-react';
-import { cleanAccessKey, isAccessKeyValid } from '../utils/utils-sanitizer';
+import { cleanAccessKey, isAccessKeyValid } from '../utils/sanitizer';
 
 export function ChaveSanitizer() {
   const [inputValue, setInputValue] = useState('');

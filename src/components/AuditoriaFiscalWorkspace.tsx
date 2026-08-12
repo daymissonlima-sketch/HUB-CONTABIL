@@ -37,7 +37,12 @@ import {
   ClipboardType,
   ArrowUpRight,
   ArrowDownLeft,
-  Combine
+  Combine,
+  Trash2,
+  ShieldCheck,
+  Zap,
+  Layers,
+  Sliders
 } from 'lucide-react';
 import { 
   executeDataAudit, 
@@ -49,7 +54,17 @@ import {
   parseCurrencySafe,
   parseSefazReportAsync,
   parseErpReportAsync,
-  executeDataAuditAsync
+  executeDataAuditAsync,
+  SigaReportItem,
+  SigaReportMetadata,
+  parseSigaEntradas,
+  parseSigaSaidas,
+  parseSigaFullReport,
+  parseSigaChannelFile,
+  identifySigaDuplicates,
+  exportSigaAuditExcel,
+  getSigaDeduplicationKey,
+  formatCnpjCpf
 } from '../utils/auditHelper';
 import {
   PisCofinsItem,
@@ -63,6 +78,9 @@ import {
   auditPisCofinsReport
 } from '../utils/pisCofinsHelper';
 import { SAMPLE_RAW_REPORT } from '../data/sampleReport';
+import { AuditService } from '../modules/audit/AuditService';
+import { ReportType, AuditExecutionResult } from '../modules/audit/types/AuditTypes';
+import { ErpIcmsReportItem } from '../modules/audit/erpIcms/ErpIcmsProcessor';
 
 // Interface structures
 export interface ReportItem {
@@ -230,12 +248,234 @@ function aggregateDuplicates(items: ReportItem[]): ReportItem[] {
   });
 }
 
+export interface ErpIcmsSummaryItem {
+  cfop: string;
+  produto: string;
+  ncm: string;
+  unidade: string;
+  quantidade: number;
+  valorUnitario: number;
+  valorProduto: number;
+  desconto: number;
+  valorContabil: number;
+  cstIcms: string;
+  baseCalculoIcms: number;
+  aliquotaIcms: number;
+  valorIcms: number;
+  aliquotaIpi: number;
+  valorIpi: number;
+  icmsRecalculated: number;
+  icmsDivergence: number;
+  statusAudit: string;
+  itemsCount: number;
+}
+
+export function aggregateIcmsItems(items: ErpIcmsReportItem[]): ErpIcmsSummaryItem[] {
+  const map = new Map<string, ErpIcmsSummaryItem>();
+
+  items.forEach(item => {
+    const normProd = (item.produto || '').trim();
+    const normCfop = (item.cfop || '').trim();
+    const normCst = (item.cstIcms || '').trim();
+
+    const key = `${normProd}___${normCfop}___${normCst}`;
+
+    if (!map.has(key)) {
+      map.set(key, {
+        cfop: normCfop,
+        produto: normProd,
+        ncm: item.ncm || '',
+        unidade: item.unidade || 'UN',
+        quantidade: item.quantidade || 0,
+        valorUnitario: 0,
+        valorProduto: item.valorProduto || 0,
+        desconto: item.desconto || 0,
+        valorContabil: item.valorContabil || 0,
+        cstIcms: normCst,
+        baseCalculoIcms: item.baseCalculoIcms || 0,
+        aliquotaIcms: item.aliquotaIcms || 0,
+        valorIcms: item.valorIcms || 0,
+        aliquotaIpi: item.aliquotaIpi || 0,
+        valorIpi: item.valorIpi || 0,
+        icmsRecalculated: item.icmsRecalculated || 0,
+        icmsDivergence: item.icmsDivergence || 0,
+        statusAudit: item.statusAudit || 'OK',
+        itemsCount: 1
+      });
+    } else {
+      const entry = map.get(key)!;
+      entry.quantidade += (item.quantidade || 0);
+      entry.valorProduto += (item.valorProduto || 0);
+      entry.desconto += (item.desconto || 0);
+      entry.valorContabil += (item.valorContabil || 0);
+      entry.baseCalculoIcms += (item.baseCalculoIcms || 0);
+      entry.valorIcms += (item.valorIcms || 0);
+      entry.valorIpi += (item.valorIpi || 0);
+      if (item.aliquotaIpi && !entry.aliquotaIpi) entry.aliquotaIpi = item.aliquotaIpi;
+      entry.icmsRecalculated += (item.icmsRecalculated || 0);
+      entry.icmsDivergence += (item.icmsDivergence || 0);
+      entry.itemsCount += 1;
+      if (!entry.ncm && item.ncm) entry.ncm = item.ncm;
+      if (item.statusAudit && item.statusAudit !== 'OK') entry.statusAudit = item.statusAudit;
+    }
+  });
+
+  return Array.from(map.values())
+    .map(entry => {
+      const qtde = entry.quantidade;
+      const vProd = entry.valorProduto;
+      entry.valorUnitario = qtde > 0 ? Number((vProd / qtde).toFixed(4)) : 0;
+      if (entry.baseCalculoIcms > 0 && entry.valorIcms > 0) {
+        entry.aliquotaIcms = Number(((entry.valorIcms / entry.baseCalculoIcms) * 100).toFixed(2));
+      }
+      return entry;
+    })
+    .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+}
+
+function PisCofinsSummaryTableRows({ rows, isResumido }: { rows: PisCofinsConsolidatedItem[]; isResumido: boolean }) {
+  const totalCols = isResumido ? 11 : 9;
+  const labelColSpan = isResumido ? 4 : 2;
+
+  const entradasRows = rows.filter(r => r.tipo === 'entrada');
+  const saidasRows = rows.filter(r => r.tipo === 'saida');
+
+  const eValProd = entradasRows.reduce((a, r) => a + (r.valorProduto || 0), 0);
+  const eBasePis = entradasRows.reduce((a, r) => a + ((r.baseCalculoPis !== undefined ? r.baseCalculoPis : r.baseCalculo) || 0), 0);
+  const eValPis = entradasRows.reduce((a, r) => a + (r.valorPis || 0), 0);
+  const eBaseCofins = entradasRows.reduce((a, r) => a + ((r.baseCalculoCofins !== undefined ? r.baseCalculoCofins : r.baseCalculo) || 0), 0);
+  const eValCofins = entradasRows.reduce((a, r) => a + (r.valorCofins || 0), 0);
+
+  const sValProd = saidasRows.reduce((a, r) => a + (r.valorProduto || 0), 0);
+  const sBasePis = saidasRows.reduce((a, r) => a + ((r.baseCalculoPis !== undefined ? r.baseCalculoPis : r.baseCalculo) || 0), 0);
+  const sValPis = saidasRows.reduce((a, r) => a + (r.valorPis || 0), 0);
+  const sBaseCofins = saidasRows.reduce((a, r) => a + ((r.baseCalculoCofins !== undefined ? r.baseCalculoCofins : r.baseCalculo) || 0), 0);
+  const sValCofins = saidasRows.reduce((a, r) => a + (r.valorCofins || 0), 0);
+
+  return (
+    <>
+      {/* ENTRADAS SECTION */}
+      {entradasRows.length > 0 && (
+        <>
+          <tr className="bg-sky-100/80 text-sky-950 border-y-2 border-sky-300">
+            <td colSpan={totalCols} className="py-2 px-3 font-black text-xs uppercase tracking-wider font-sans bg-sky-100/90 text-sky-950">
+              <span className="inline-flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-sky-600"></span>
+                ENTRADAS / CRÉDITOS
+              </span>
+            </td>
+          </tr>
+
+          {entradasRows.map((r, idx) => (
+            <tr key={`piscof-e-row-${idx}`} className="hover:bg-sky-50/50 bg-white border-b border-slate-100">
+              {isResumido && (
+                <>
+                  <td className="py-2 px-3 text-slate-600 font-mono text-[10px] whitespace-nowrap">{r.codigoProduto || '-'}</td>
+                  <td className="py-2 px-3 text-slate-700 font-sans max-w-xs truncate text-xs" title={r.nomeProduto}>{r.nomeProduto || '-'}</td>
+                </>
+              )}
+              <td className="py-2 px-3 font-bold text-[#04243b] whitespace-nowrap">{r.cfop}</td>
+              <td className="py-2 px-3 whitespace-nowrap">
+                <span className="bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded font-sans text-[10px]">CST {r.cst}</span>
+              </td>
+              <td className="py-2 px-3 text-right text-slate-700 whitespace-nowrap">R$ {r.valorProduto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+              <td className="py-2 px-3 text-right text-slate-700 whitespace-nowrap">R$ {(r.baseCalculoPis !== undefined ? r.baseCalculoPis : r.baseCalculo).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+              <td className="py-2 px-3 text-center text-slate-500 font-sans whitespace-nowrap">{r.aliquotaPis.toFixed(2)}%</td>
+              <td className="py-2 px-3 text-right text-emerald-700 font-bold whitespace-nowrap">R$ {r.valorPis.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+              <td className="py-2 px-3 text-right text-slate-700 whitespace-nowrap">R$ {(r.baseCalculoCofins !== undefined ? r.baseCalculoCofins : r.baseCalculo).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+              <td className="py-2 px-3 text-center text-slate-500 font-sans whitespace-nowrap">{r.aliquotaCofins.toFixed(2)}%</td>
+              <td className="py-2 px-3 text-right text-amber-700 font-bold whitespace-nowrap">R$ {r.valorCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            </tr>
+          ))}
+
+          {/* TOTAL ENTRADAS */}
+          <tr className="bg-sky-100/90 font-bold border-t-2 border-b-2 border-sky-300 text-xs text-sky-950">
+            <td colSpan={labelColSpan} className="py-2.5 px-3 font-sans font-black uppercase text-sky-900 whitespace-nowrap">
+              TOTAL ENTRADAS
+            </td>
+            <td className="py-2.5 px-3 text-right whitespace-nowrap font-black">R$ {eValProd.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            <td className="py-2.5 px-3 text-right whitespace-nowrap font-black">R$ {eBasePis.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            <td className="py-2.5 px-3 text-center text-slate-400 font-sans">-</td>
+            <td className="py-2.5 px-3 text-right text-emerald-800 font-black whitespace-nowrap">R$ {eValPis.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            <td className="py-2.5 px-3 text-right whitespace-nowrap font-black">R$ {eBaseCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            <td className="py-2.5 px-3 text-center text-slate-400 font-sans">-</td>
+            <td className="py-2.5 px-3 text-right text-amber-800 font-black whitespace-nowrap">R$ {eValCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+          </tr>
+        </>
+      )}
+
+      {/* SEPARATOR IF BOTH EXIST */}
+      {entradasRows.length > 0 && saidasRows.length > 0 && (
+        <tr className="bg-slate-200/80 h-3 border-y-2 border-slate-300">
+          <td colSpan={totalCols} className="p-0"></td>
+        </tr>
+      )}
+
+      {/* SAÍDAS SECTION */}
+      {saidasRows.length > 0 && (
+        <>
+          <tr className="bg-amber-100/80 text-amber-950 border-y-2 border-amber-300">
+            <td colSpan={totalCols} className="py-2 px-3 font-black text-xs uppercase tracking-wider font-sans bg-amber-100/90 text-amber-950">
+              <span className="inline-flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-600"></span>
+                SAÍDAS / DÉBITOS
+              </span>
+            </td>
+          </tr>
+
+          {saidasRows.map((r, idx) => (
+            <tr key={`piscof-s-row-${idx}`} className="hover:bg-amber-50/50 bg-white border-b border-slate-100">
+              {isResumido && (
+                <>
+                  <td className="py-2 px-3 text-slate-600 font-mono text-[10px] whitespace-nowrap">{r.codigoProduto || '-'}</td>
+                  <td className="py-2 px-3 text-slate-700 font-sans max-w-xs truncate text-xs" title={r.nomeProduto}>{r.nomeProduto || '-'}</td>
+                </>
+              )}
+              <td className="py-2 px-3 font-bold text-[#04243b] whitespace-nowrap">{r.cfop}</td>
+              <td className="py-2 px-3 whitespace-nowrap">
+                <span className="bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded font-sans text-[10px]">CST {r.cst}</span>
+              </td>
+              <td className="py-2 px-3 text-right text-slate-700 whitespace-nowrap">R$ {r.valorProduto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+              <td className="py-2 px-3 text-right text-slate-700 whitespace-nowrap">R$ {(r.baseCalculoPis !== undefined ? r.baseCalculoPis : r.baseCalculo).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+              <td className="py-2 px-3 text-center text-slate-500 font-sans whitespace-nowrap">{r.aliquotaPis.toFixed(2)}%</td>
+              <td className="py-2 px-3 text-right text-emerald-700 font-bold whitespace-nowrap">R$ {r.valorPis.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+              <td className="py-2 px-3 text-right text-slate-700 whitespace-nowrap">R$ {(r.baseCalculoCofins !== undefined ? r.baseCalculoCofins : r.baseCalculo).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+              <td className="py-2 px-3 text-center text-slate-500 font-sans whitespace-nowrap">{r.aliquotaCofins.toFixed(2)}%</td>
+              <td className="py-2 px-3 text-right text-amber-700 font-bold whitespace-nowrap">R$ {r.valorCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            </tr>
+          ))}
+
+          {/* TOTAL SAÍDAS */}
+          <tr className="bg-amber-100/90 font-bold border-t-2 border-b-2 border-amber-300 text-xs text-amber-950">
+            <td colSpan={labelColSpan} className="py-2.5 px-3 font-sans font-black uppercase text-amber-900 whitespace-nowrap">
+              TOTAL SAÍDAS
+            </td>
+            <td className="py-2.5 px-3 text-right whitespace-nowrap font-black">R$ {sValProd.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            <td className="py-2.5 px-3 text-right whitespace-nowrap font-black">R$ {sBasePis.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            <td className="py-2.5 px-3 text-center text-slate-400 font-sans">-</td>
+            <td className="py-2.5 px-3 text-right text-emerald-800 font-black whitespace-nowrap">R$ {sValPis.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            <td className="py-2.5 px-3 text-right whitespace-nowrap font-black">R$ {sBaseCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            <td className="py-2.5 px-3 text-center text-slate-400 font-sans">-</td>
+            <td className="py-2.5 px-3 text-right text-amber-800 font-black whitespace-nowrap">R$ {sValCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+          </tr>
+        </>
+      )}
+    </>
+  );
+}
+
 export function AuditoriaFiscalWorkspace() {
   // Navigation tabs for the unified output views
-  const [activeOutputTab, setActiveOutputTab] = useState<'confronto' | 'organizador' | 'integridade' | 'conversor_siga' | 'pis_cofins'>('confronto');
+  const [activeOutputTab, setActiveOutputTab] = useState<'confronto' | 'organizador' | 'auditoria_siga' | 'integridade' | 'pis_cofins'>('pis_cofins');
+
+  // Audit SIGA specific state
+  const [auditSigaSubTab, setAuditSigaSubTab] = useState<'saidas' | 'entradas'>('saidas');
+  const [auditSigaFilter, setAuditSigaFilter] = useState<'all' | 'duplicates' | 'unique'>('duplicates');
+  const [auditSigaSearch, setAuditSigaSearch] = useState<string>('');
+  const [auditSigaPage, setAuditSigaPage] = useState<number>(1);
 
   // Sub-blocks subdivisions state
-  const [activeMainModule, setActiveMainModule] = useState<'siga' | 'icms' | 'pis_cofins'>('icms');
+  const [activeMainModule, setActiveMainModule] = useState<'siga' | 'icms' | 'pis_cofins'>('pis_cofins');
 
   // Unified Data Lake loaded files state
   const [loadedFiles, setLoadedFiles] = useState<Array<{ name: string; size: number; type: 'sefaz' | 'erp' | 'siga_tax' | 'pis_cofins'; recordsCount: number }>>([]);
@@ -246,20 +486,77 @@ export function AuditoriaFiscalWorkspace() {
   const [erpRowsText, setErpRowsText] = useState<string>('');
   const [sigaTaxText, setSigaTaxText] = useState<string>('');
 
+  // ERP ICMS Specific State (Módulo 2)
+  const [erpIcmsItems, setErpIcmsItems] = useState<ErpIcmsReportItem[]>([]);
+  const [icmsMainTab, setIcmsMainTab] = useState<'relatorio' | 'auditoria'>('relatorio');
+  const [icmsSearchTerm, setIcmsSearchTerm] = useState<string>('');
+  const [icmsStatusFilter, setIcmsStatusFilter] = useState<string>('all');
+  const [icmsActiveSubTab, setIcmsActiveSubTab] = useState<'entradas' | 'saidas'>('entradas');
+  const [icmsCurrentPage, setIcmsCurrentPage] = useState<number>(1);
+  const icmsItemsPerPage = 20;
+
+  const icmsEntradasCompleto = useMemo(() => {
+    return erpIcmsItems
+      .filter(i => 
+        i.tipoOperacao === 'ENTRADA' || 
+        (i.cfop && (i.cfop.startsWith('1') || i.cfop.startsWith('2') || i.cfop.startsWith('3')))
+      )
+      .slice()
+      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+  }, [erpIcmsItems]);
+
+  const icmsSaidasCompleto = useMemo(() => {
+    return erpIcmsItems
+      .filter(i => 
+        i.tipoOperacao === 'SAIDA' || 
+        (i.cfop && (i.cfop.startsWith('5') || i.cfop.startsWith('6') || i.cfop.startsWith('7')))
+      )
+      .slice()
+      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+  }, [erpIcmsItems]);
+
+  const activeFilteredIcmsList = useMemo(() => {
+    const term = icmsSearchTerm.toLowerCase().trim();
+    const rawList = icmsActiveSubTab === 'entradas' ? icmsEntradasCompleto : icmsSaidasCompleto;
+
+    if (!term) return rawList;
+
+    return rawList.filter(item => {
+      return (item.notaFiscal && item.notaFiscal.toLowerCase().includes(term)) ||
+        (item.produto && item.produto.toLowerCase().includes(term)) ||
+        (item.cnpjEmitente && item.cnpjEmitente.toLowerCase().includes(term)) ||
+        (item.cfop && item.cfop.toLowerCase().includes(term)) ||
+        (item.cstIcms && item.cstIcms.toLowerCase().includes(term)) ||
+        (item.ncm && item.ncm.toLowerCase().includes(term));
+    });
+  }, [icmsActiveSubTab, icmsEntradasCompleto, icmsSaidasCompleto, icmsSearchTerm]);
+
+  const totalIcmsPages = Math.ceil(activeFilteredIcmsList.length / icmsItemsPerPage) || 1;
+
+  const paginatedIcmsItems = useMemo(() => {
+    const start = (icmsCurrentPage - 1) * icmsItemsPerPage;
+    return activeFilteredIcmsList.slice(start, start + icmsItemsPerPage);
+  }, [activeFilteredIcmsList, icmsCurrentPage]);
+
   // PIS/COFINS Report Specific State
   const [pisCofinsRows, setPisCofinsRows] = useState<PisCofinsItem[]>([]);
   const [pisCofinsMetadata, setPisCofinsMetadata] = useState<PisCofinsMetadata | null>(null);
   const [pisCofinsCriteria, setPisCofinsCriteria] = useState<'cfop_cst' | 'cfop_cst_product'>('cfop_cst');
   const [activePisCofinsSubTab, setActivePisCofinsSubTab] = useState<'entradas' | 'saidas' | 'consolidado' | 'todos' | 'auditoria'>('todos');
   const [pisCofinsViewMode, setPisCofinsViewMode] = useState<'original' | 'consolidated'>('original');
+  const [pisCofinsOriginalFormat, setPisCofinsOriginalFormat] = useState<'completo' | 'resumido'>('completo');
   const [searchTermPisCofins, setSearchTermPisCofins] = useState<string>('');
   const [pisCofinsCurrentPage, setPisCofinsCurrentPage] = useState<number>(1);
   const pisCofinsItemsPerPage = 50;
 
+  // PIS/COFINS Main Screen & Severity Filter (Módulo 3: RELATÓRIOS vs AUDITORIA)
+  const [pisCofinsMainScreen, setPisCofinsMainScreen] = useState<'relatorios' | 'auditoria'>('relatorios');
+  const [pisCofinsAuditType, setPisCofinsAuditType] = useState<'todas' | 'inconsistencias' | 'alertas'>('todas');
+
   // PIS/COFINS Audit state
   const [selectedPisCofinsAuditError, setSelectedPisCofinsAuditError] = useState<PisCofinsAuditError | null>(null);
   const [pisCofinsActiveAuditFilter, setPisCofinsActiveAuditFilter] = useState<'todos' | 'divergencia_bc' | 'erro_calculo_pis' | 'erro_calculo_cofins' | 'cst_incompativel' | 'aliquota_incoerente' | 'bc_maior_produto'>('todos');
-  const [enablePisCofinsAlerts, setEnablePisCofinsAlerts] = useState<boolean>(false);
+  const [enablePisCofinsAlerts, setEnablePisCofinsAlerts] = useState<boolean>(true);
 
   const pisCofinsAuditErrors = useMemo(() => {
     if (!enablePisCofinsAlerts) return [];
@@ -288,43 +585,833 @@ export function AuditoriaFiscalWorkspace() {
   const [auditSearchTerm, setAuditSearchTerm] = useState<string>('');
   const [auditFilterStatus, setAuditFilterStatus] = useState<string>('all');
 
-  // Drag and drop states
-  const [isDragOver, setIsDragOver] = useState<boolean>(false);
-  const [isGlobalDragOver, setIsGlobalDragOver] = useState<boolean>(false);
-  const dragCounter = useRef<number>(0);
-  const processFilesRef = useRef<((files: File[]) => void) | null>(null);
+  // Auditoria Fiscal ICMS State & Logic: Confronto SEFAZ vs ICMS Sistema
+  const sefazSaidasAuditFileInputRef = useRef<HTMLInputElement>(null);
+  const sefazEntradasAuditFileInputRef = useRef<HTMLInputElement>(null);
+  const sigaSefazAuditFileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleDragEnter = (e: DragEvent | React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current++;
-    if (e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-      setIsGlobalDragOver(true);
+  const [sigaConfrontFilterStatus, setSigaConfrontFilterStatus] = useState<'all' | 'falta_sistema' | 'falta_sefaz' | 'divergencia' | 'conciliado'>('all');
+  const [sigaConfrontTipoFilter, setSigaConfrontTipoFilter] = useState<'saida' | 'entrada'>('entrada');
+  const [sigaConfrontSearch, setSigaConfrontSearch] = useState<string>('');
+  const [sigaConfrontPage, setSigaConfrontPage] = useState<number>(1);
+  const [showLoadedFilesModal, setShowLoadedFilesModal] = useState<boolean>(false);
+  const sigaConfrontItemsPerPage = 25;
+
+  const sigaSefazConfrontation = useMemo(() => {
+    // 1. Collect SEFAZ records and group by distinct Invoice
+    interface SefazGroup {
+      numeroNota: string;
+      numInt: number;
+      serie: string;
+      cleanSerie: string;
+      modelo: string;
+      chaveAcesso: string;
+      dataEmissao: string;
+      valorTotal: number;
+      fornecedorOuCliente: string;
+      tipoOperacao: 'ENTRADA' | 'SAIDA';
+      cfop: string;
+      rawRows: any[];
     }
-  };
 
-  const handleDragLeave = (e: DragEvent | React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current--;
-    if (dragCounter.current <= 0) {
-      setIsGlobalDragOver(false);
-      dragCounter.current = 0;
+    const sefazInvoiceMap = new Map<string, SefazGroup>();
+
+    const processSefazItem = (
+      numStr: string,
+      serieStr: string,
+      modeloStr: string,
+      chaveStr: string,
+      dataStr: string,
+      valorNum: number,
+      parceiroStr: string,
+      tipoOp: 'ENTRADA' | 'SAIDA',
+      cfopStr?: string,
+      rawObj?: any
+    ) => {
+      let cleanNum = (numStr || '').toString().trim().replace(/\D/g, '');
+      let cleanKey = (chaveStr || '').replace(/\D/g, '');
+
+      // If cleanNum is empty but cleanKey is 44 digits, extract NF number from positions 26..34
+      if (!cleanNum && cleanKey.length === 44) {
+        cleanNum = parseInt(cleanKey.substring(25, 34), 10).toString();
+      }
+
+      const numInt = parseInt(cleanNum, 10);
+      if (Number.isNaN(numInt) || numInt <= 0) return;
+
+      const cleanSerie = (serieStr || '1').toString().trim().replace(/^0+/, '') || '1';
+
+      // Group key for initial aggregation of items belonging to the same SEFAZ invoice
+      let groupKey = '';
+      if (cleanKey && cleanKey.length === 44) {
+        groupKey = `CHV_${cleanKey}`;
+      } else {
+        // Look for an existing group that matches numInt, cleanSerie, tipoOp and does NOT conflict on date/partner/key
+        const normDate = (dataStr || '').trim();
+        const normParc = (parceiroStr || '').trim().replace(/\D/g, '') || (parceiroStr || '').trim().toUpperCase();
+
+        for (const [existingKey, g] of sefazInvoiceMap.entries()) {
+          if (g.numInt === numInt && g.cleanSerie === cleanSerie && g.tipoOperacao === tipoOp) {
+            const gDate = (g.dataEmissao || '').trim();
+            const gParc = (g.fornecedorOuCliente || '').trim().replace(/\D/g, '') || (g.fornecedorOuCliente || '').trim().toUpperCase();
+
+            // Check if dates or partners conflict
+            const dateConflict = normDate && normDate !== '-' && gDate && gDate !== '-' && normDate !== gDate;
+            const parcConflict = normParc && gParc && gParc !== 'CLIENTE/FORNECEDOR SEFAZ' && normParc !== gParc;
+
+            if (!dateConflict && !parcConflict) {
+              groupKey = existingKey;
+              break;
+            }
+          }
+        }
+
+        if (!groupKey) {
+          const pSlug = normParc ? normParc.substring(0, 12) : 'PARC';
+          const dSlug = normDate && normDate !== '-' ? normDate : 'NODT';
+          groupKey = `NF_${numInt}_SER_${cleanSerie}_TP_${tipoOp}_DT_${dSlug}_PARC_${pSlug}`;
+        }
+      }
+
+      if (!sefazInvoiceMap.has(groupKey)) {
+        sefazInvoiceMap.set(groupKey, {
+          numeroNota: numInt.toString(),
+          numInt,
+          serie: cleanSerie,
+          cleanSerie,
+          modelo: modeloStr || '55',
+          chaveAcesso: cleanKey.length === 44 ? cleanKey : '',
+          dataEmissao: dataStr || '-',
+          valorTotal: Number((valorNum || 0).toFixed(2)),
+          fornecedorOuCliente: parceiroStr || 'CLIENTE/FORNECEDOR SEFAZ',
+          tipoOperacao: tipoOp,
+          cfop: cfopStr || '',
+          rawRows: rawObj ? [rawObj] : [],
+          sourceArray: rawObj && sefazRows.includes(rawObj) ? 'sefazRows' : 'organizador'
+        } as SefazGroup & { sourceArray?: string });
+      } else {
+        const item = sefazInvoiceMap.get(groupKey)!;
+        if (cleanKey.length === 44 && !item.chaveAcesso) {
+          item.chaveAcesso = cleanKey;
+        }
+        if (dataStr && dataStr !== '-' && (!item.dataEmissao || item.dataEmissao === '-')) {
+          item.dataEmissao = dataStr;
+        }
+        if (parceiroStr && parceiroStr !== 'CLIENTE/FORNECEDOR SEFAZ' && item.fornecedorOuCliente === 'CLIENTE/FORNECEDOR SEFAZ') {
+          item.fornecedorOuCliente = parceiroStr;
+        }
+        
+        // Prevent double counting if invoice is already present directly from SEFAZ CSV report (sefazRows)
+        const isFromOrganizador = rawObj && (organizadorEntradas.includes(rawObj) || organizadorSaidas.includes(rawObj));
+        if (isFromOrganizador && (item as any).sourceArray === 'sefazRows') {
+          // Invoice already registered from SEFAZ direct report. Keep primary SEFAZ values.
+        } else {
+          item.valorTotal = Number((item.valorTotal + (valorNum || 0)).toFixed(2));
+        }
+        if (rawObj) item.rawRows.push(rawObj);
+      }
+    };
+
+    // A. Add sefazRows
+    sefazRows.forEach(row => {
+      const tipo: 'ENTRADA' | 'SAIDA' = (row as any).tipoOperacao === 'ENTRADA' ? 'ENTRADA' : 'SAIDA';
+      processSefazItem(
+        row.numeroNota,
+        row.serie,
+        row.modelo,
+        row.chaveDeAcesso,
+        row.dataEmissao,
+        row.valorDecimal,
+        row.nomeFornecedor || row.cnpjFornecedorFormatado || row.cnpjFormatado,
+        tipo,
+        undefined,
+        row
+      );
+    });
+
+    // B. Add organizadorEntradas (SEFAZ Entradas)
+    organizadorEntradas.forEach(row => {
+      processSefazItem(
+        row.notaFiscal,
+        row.serie,
+        row.modelo,
+        row.chaveDeAcesso || '',
+        row.data,
+        row.vlrContabil,
+        row.cnpj || 'FORNECEDOR SEFAZ',
+        'ENTRADA',
+        row.cfop,
+        row
+      );
+    });
+
+    // C. Add organizadorSaidas (SEFAZ Saídas)
+    organizadorSaidas.forEach(row => {
+      processSefazItem(
+        row.notaFiscal,
+        row.serie,
+        row.modelo,
+        row.chaveDeAcesso || '',
+        row.data,
+        row.vlrContabil,
+        row.cnpj || 'CLIENTE SEFAZ',
+        'SAIDA',
+        row.cfop,
+        row
+      );
+    });
+
+    // 2. Collect and group ICMS (Sistema/ERP) records by distinct Invoice
+    interface IcmsGroup {
+      numeroNota: string;
+      numInt: number;
+      serie: string;
+      cleanSerie: string;
+      modelo: string;
+      chaveAcesso: string;
+      dataEmissao: string;
+      valorTotal: number;
+      fornecedorOuCliente: string;
+      tipoOperacao: 'ENTRADA' | 'SAIDA';
+      cfop: string;
+      itemsCount: number;
+      rawItems: ErpIcmsReportItem[];
     }
+
+    const icmsInvoiceMap = new Map<string, IcmsGroup>();
+
+    erpIcmsItems.forEach(item => {
+      let cleanNum = (item.notaFiscal || '').toString().trim().replace(/\D/g, '');
+      let cleanKey = (item.chaveAcesso || '').replace(/\D/g, '');
+
+      if (!cleanNum && cleanKey.length === 44) {
+        cleanNum = parseInt(cleanKey.substring(25, 34), 10).toString();
+      }
+
+      const numInt = parseInt(cleanNum, 10);
+      if (Number.isNaN(numInt) || numInt <= 0) return;
+
+      const cleanSerie = (item.serie || '1').toString().trim().replace(/^0+/, '') || '1';
+
+      const tipoOp: 'ENTRADA' | 'SAIDA' = (item.tipoOperacao === 'ENTRADA' || (item.cfop && ['1', '2', '3'].includes(item.cfop.charAt(0)))) 
+        ? 'ENTRADA' 
+        : 'SAIDA';
+
+      let groupKey = '';
+      if (cleanKey && cleanKey.length === 44) {
+        groupKey = `CHV_${cleanKey}`;
+      } else {
+        const normDate = (item.dataEmissao || '').trim();
+        const normParc = (item.cnpjEmitente || item.produto || '').trim().replace(/\D/g, '') || (item.cnpjEmitente || item.produto || '').trim().toUpperCase();
+
+        for (const [existingKey, g] of icmsInvoiceMap.entries()) {
+          if (g.numInt === numInt && g.cleanSerie === cleanSerie && g.tipoOperacao === tipoOp) {
+            const gDate = (g.dataEmissao || '').trim();
+            const gParc = (g.fornecedorOuCliente || '').trim().replace(/\D/g, '') || (g.fornecedorOuCliente || '').trim().toUpperCase();
+
+            const dateConflict = normDate && normDate !== '-' && gDate && gDate !== '-' && normDate !== gDate;
+            const parcConflict = normParc && gParc && gParc !== 'CLIENTE/FORNECEDOR SISTEMA' && normParc !== gParc;
+
+            if (!dateConflict && !parcConflict) {
+              groupKey = existingKey;
+              break;
+            }
+          }
+        }
+
+        if (!groupKey) {
+          const pSlug = normParc ? normParc.substring(0, 12) : 'PARC';
+          const dSlug = normDate && normDate !== '-' ? normDate : 'NODT';
+          groupKey = `NF_${numInt}_SER_${cleanSerie}_TP_${tipoOp}_DT_${dSlug}_PARC_${pSlug}`;
+        }
+      }
+
+      if (!icmsInvoiceMap.has(groupKey)) {
+        icmsInvoiceMap.set(groupKey, {
+          numeroNota: numInt.toString(),
+          numInt,
+          serie: cleanSerie,
+          cleanSerie,
+          modelo: item.modelo || '55',
+          chaveAcesso: cleanKey.length === 44 ? cleanKey : '',
+          dataEmissao: item.dataEmissao || '-',
+          valorTotal: Number((item.valorContabil || 0).toFixed(2)),
+          fornecedorOuCliente: item.cnpjEmitente || item.produto || 'CLIENTE/FORNECEDOR SISTEMA',
+          tipoOperacao: tipoOp,
+          cfop: item.cfop || '',
+          itemsCount: 1,
+          rawItems: [item]
+        });
+      } else {
+        const existing = icmsInvoiceMap.get(groupKey)!;
+        if (cleanKey.length === 44 && !existing.chaveAcesso) {
+          existing.chaveAcesso = cleanKey;
+        }
+        if (item.dataEmissao && item.dataEmissao !== '-' && (!existing.dataEmissao || existing.dataEmissao === '-')) {
+          existing.dataEmissao = item.dataEmissao;
+        }
+        existing.valorTotal = Number((existing.valorTotal + (item.valorContabil || 0)).toFixed(2));
+        existing.itemsCount += 1;
+        existing.rawItems.push(item);
+      }
+    });
+
+    const sefazList = Array.from(sefazInvoiceMap.values());
+    const icmsList = Array.from(icmsInvoiceMap.values());
+
+    // 3. Multi-Pass Matching Engine with Strict Key Anti-Collision
+    const matchedSefazIndices = new Set<number>();
+    const matchedIcmsIndices = new Set<number>();
+    const matchedPairs = new Map<number, number>(); // sefazIdx -> icmsIdx
+
+    const keysConflict = (key1: string, key2: string): boolean => {
+      return Boolean(key1 && key1.length === 44 && key2 && key2.length === 44 && key1 !== key2);
+    };
+
+    // Pass 1: Match by 44-digit Chave de Acesso (100% Exact Match)
+    sefazList.forEach((sItem, sIdx) => {
+      if (sItem.chaveAcesso && sItem.chaveAcesso.length === 44) {
+        const iIdx = icmsList.findIndex((iItem, idx) => 
+          !matchedIcmsIndices.has(idx) && 
+          iItem.chaveAcesso === sItem.chaveAcesso
+        );
+        if (iIdx !== -1) {
+          matchedSefazIndices.add(sIdx);
+          matchedIcmsIndices.add(iIdx);
+          matchedPairs.set(sIdx, iIdx);
+        }
+      }
+    });
+
+    // Pass 2: Match by (numInt + cleanSerie + tipoOperacao + matching value within R$ 0.05) with NO key conflict
+    sefazList.forEach((sItem, sIdx) => {
+      if (!matchedSefazIndices.has(sIdx)) {
+        const candidates = icmsList
+          .map((iItem, idx) => ({ iItem, idx }))
+          .filter(({ iItem, idx }) => 
+            !matchedIcmsIndices.has(idx) && 
+            iItem.numInt === sItem.numInt &&
+            iItem.cleanSerie === sItem.cleanSerie &&
+            iItem.tipoOperacao === sItem.tipoOperacao &&
+            !keysConflict(sItem.chaveAcesso, iItem.chaveAcesso) &&
+            Math.abs(sItem.valorTotal - iItem.valorTotal) <= 0.05
+          );
+
+        if (candidates.length > 0) {
+          const best = candidates.find(c => 
+            (sItem.dataEmissao !== '-' && c.iItem.dataEmissao === sItem.dataEmissao) ||
+            (sItem.fornecedorOuCliente !== 'CLIENTE/FORNECEDOR SEFAZ' && c.iItem.fornecedorOuCliente === sItem.fornecedorOuCliente)
+          ) || candidates[0];
+
+          matchedSefazIndices.add(sIdx);
+          matchedIcmsIndices.add(best.idx);
+          matchedPairs.set(sIdx, best.idx);
+        }
+      }
+    });
+
+    // Pass 3: Match by (numInt + cleanSerie + tipoOperacao) with NO key conflict (closest value)
+    sefazList.forEach((sItem, sIdx) => {
+      if (!matchedSefazIndices.has(sIdx)) {
+        const candidates = icmsList
+          .map((iItem, idx) => ({ iItem, idx }))
+          .filter(({ iItem, idx }) => 
+            !matchedIcmsIndices.has(idx) && 
+            iItem.numInt === sItem.numInt &&
+            iItem.cleanSerie === sItem.cleanSerie &&
+            iItem.tipoOperacao === sItem.tipoOperacao &&
+            !keysConflict(sItem.chaveAcesso, iItem.chaveAcesso)
+          );
+
+        if (candidates.length > 0) {
+          candidates.sort((a, b) => 
+            Math.abs(a.iItem.valorTotal - sItem.valorTotal) - Math.abs(b.iItem.valorTotal - sItem.valorTotal)
+          );
+          const best = candidates[0];
+
+          matchedSefazIndices.add(sIdx);
+          matchedIcmsIndices.add(best.idx);
+          matchedPairs.set(sIdx, best.idx);
+        }
+      }
+    });
+
+    // Pass 4: Fallback Match by (numInt + tipoOperacao) with NO key conflict (closest value)
+    sefazList.forEach((sItem, sIdx) => {
+      if (!matchedSefazIndices.has(sIdx)) {
+        const candidates = icmsList
+          .map((iItem, idx) => ({ iItem, idx }))
+          .filter(({ iItem, idx }) => 
+            !matchedIcmsIndices.has(idx) && 
+            iItem.numInt === sItem.numInt &&
+            iItem.tipoOperacao === sItem.tipoOperacao &&
+            !keysConflict(sItem.chaveAcesso, iItem.chaveAcesso)
+          );
+
+        if (candidates.length > 0) {
+          candidates.sort((a, b) => 
+            Math.abs(a.iItem.valorTotal - sItem.valorTotal) - Math.abs(b.iItem.valorTotal - sItem.valorTotal)
+          );
+          const best = candidates[0];
+
+          matchedSefazIndices.add(sIdx);
+          matchedIcmsIndices.add(best.idx);
+          matchedPairs.set(sIdx, best.idx);
+        }
+      }
+    });
+
+    // 4. Construct Final Confrontation List
+    const confrontationList: Array<{
+      id: string;
+      key: string;
+      numeroNota: string;
+      serie: string;
+      modelo: string;
+      chaveAcesso: string;
+      dataEmissao: string;
+      fornecedorOuCliente: string;
+      tipoOperacao: 'ENTRADA' | 'SAIDA';
+      cfop: string;
+      constaNaSefaz: boolean;
+      constaNoSistema: boolean;
+      valorSefaz: number;
+      valorSistema: number;
+      valorDivergencia: number;
+      status: 'FALTA_SISTEMA' | 'FALTA_SEFAZ' | 'DIVERGENCIA_VALOR' | 'CONCILIADO';
+      statusLabel: string;
+      acaoRecomendada: string;
+    }> = [];
+
+    let totalSefazValor = 0;
+    let totalSefazNotas = 0;
+    let totalIcmsValor = 0;
+    let totalIcmsNotas = 0;
+
+    let qtdFaltaSistema = 0;
+    let valorFaltaSistema = 0;
+
+    let qtdFaltaSefaz = 0;
+    let valorFaltaSefaz = 0;
+
+    let qtdDivergencias = 0;
+    let valorDivergenciaTotal = 0;
+
+    let qtdConciliadas = 0;
+    let valorConciliado = 0;
+
+    // Process all matched pairs & unmatched SEFAZ invoices
+    sefazList.forEach((sItem, sIdx) => {
+      totalSefazNotas++;
+      totalSefazValor += sItem.valorTotal;
+
+      if (matchedSefazIndices.has(sIdx)) {
+        const iIdx = matchedPairs.get(sIdx)!;
+        const iItem = icmsList[iIdx];
+
+        totalIcmsNotas++;
+        totalIcmsValor += iItem.valorTotal;
+
+        const numNota = sItem.numeroNota;
+        const serie = sItem.serie || iItem.serie || '1';
+        const modelo = sItem.modelo || iItem.modelo || '55';
+        const chaveAcesso = sItem.chaveAcesso || iItem.chaveAcesso || '';
+        const dataEmissao = sItem.dataEmissao !== '-' ? sItem.dataEmissao : iItem.dataEmissao;
+        const fornecedorOuCliente = sItem.fornecedorOuCliente !== 'CLIENTE/FORNECEDOR SEFAZ' ? sItem.fornecedorOuCliente : iItem.fornecedorOuCliente;
+        const tipoOperacao = sItem.tipoOperacao;
+        const cfop = iItem.cfop || sItem.cfop || '-';
+
+        const valorSefaz = sItem.valorTotal;
+        const valorSistema = iItem.valorTotal;
+        const diff = Number((valorSefaz - valorSistema).toFixed(2));
+
+        let status: 'FALTA_SISTEMA' | 'FALTA_SEFAZ' | 'DIVERGENCIA_VALOR' | 'CONCILIADO' = 'CONCILIADO';
+        let statusLabel = 'Conciliada / Batida';
+        let acaoRecomendada = 'Nota confirmada em ambos os relatórios com mesmo valor.';
+
+        if (Math.abs(diff) > 0.05) {
+          status = 'DIVERGENCIA_VALOR';
+          statusLabel = `Divergência de R$ ${Math.abs(diff).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+          acaoRecomendada = `Diferença de valor entre SEFAZ (R$ ${valorSefaz.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) e Sistema (R$ ${valorSistema.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}). Reavaliar itens.`;
+          qtdDivergencias++;
+          valorDivergenciaTotal += Math.abs(diff);
+        } else {
+          status = 'CONCILIADO';
+          statusLabel = 'Conciliada / Batida';
+          acaoRecomendada = 'Nota fiscal 100% conciliada e em conformidade.';
+          qtdConciliadas++;
+          valorConciliado += valorSefaz;
+        }
+
+        confrontationList.push({
+          id: `conf-matched-${sIdx}-${iIdx}`,
+          key: `NF_${numNota}_SER_${serie}`,
+          numeroNota: numNota,
+          serie,
+          modelo,
+          chaveAcesso,
+          dataEmissao,
+          fornecedorOuCliente,
+          tipoOperacao,
+          cfop,
+          constaNaSefaz: true,
+          constaNoSistema: true,
+          valorSefaz,
+          valorSistema,
+          valorDivergencia: Math.abs(diff),
+          status,
+          statusLabel,
+          acaoRecomendada
+        });
+      } else {
+        // Unmatched SEFAZ (Falta no Sistema)
+        const valorSefaz = sItem.valorTotal;
+        qtdFaltaSistema++;
+        valorFaltaSistema += valorSefaz;
+
+        confrontationList.push({
+          id: `conf-sefaz-only-${sIdx}`,
+          key: `NF_${sItem.numeroNota}_SER_${sItem.serie}`,
+          numeroNota: sItem.numeroNota,
+          serie: sItem.serie,
+          modelo: sItem.modelo,
+          chaveAcesso: sItem.chaveAcesso,
+          dataEmissao: sItem.dataEmissao,
+          fornecedorOuCliente: sItem.fornecedorOuCliente,
+          tipoOperacao: sItem.tipoOperacao,
+          cfop: sItem.cfop || '-',
+          constaNaSefaz: true,
+          constaNoSistema: false,
+          valorSefaz,
+          valorSistema: 0,
+          valorDivergencia: valorSefaz,
+          status: 'FALTA_SISTEMA',
+          statusLabel: 'Falta no Sistema (ERP)',
+          acaoRecomendada: 'Nota consta no relatório da SEFAZ, mas ausente no relatório do sistema. Importar / escriturar no ERP.'
+        });
+      }
+    });
+
+    // Unmatched ICMS (Falta na SEFAZ)
+    icmsList.forEach((iItem, iIdx) => {
+      if (!matchedIcmsIndices.has(iIdx)) {
+        totalIcmsNotas++;
+        totalIcmsValor += iItem.valorTotal;
+
+        const valorSistema = iItem.valorTotal;
+        qtdFaltaSefaz++;
+        valorFaltaSefaz += valorSistema;
+
+        confrontationList.push({
+          id: `conf-icms-only-${iIdx}`,
+          key: `NF_${iItem.numeroNota}_SER_${iItem.serie}`,
+          numeroNota: iItem.numeroNota,
+          serie: iItem.serie,
+          modelo: iItem.modelo,
+          chaveAcesso: iItem.chaveAcesso,
+          dataEmissao: iItem.dataEmissao,
+          fornecedorOuCliente: iItem.fornecedorOuCliente,
+          tipoOperacao: iItem.tipoOperacao,
+          cfop: iItem.cfop || '-',
+          constaNaSefaz: false,
+          constaNoSistema: true,
+          valorSefaz: 0,
+          valorSistema,
+          valorDivergencia: valorSistema,
+          status: 'FALTA_SEFAZ',
+          statusLabel: 'Falta na SEFAZ',
+          acaoRecomendada: 'Nota lançada no sistema, mas ausente na SEFAZ. Verificar se a nota foi denegada, cancelada ou não transmitida.'
+        });
+      }
+    });
+
+    confrontationList.sort((a, b) => {
+      const numA = parseInt(a.numeroNota, 10) || 0;
+      const numB = parseInt(b.numeroNota, 10) || 0;
+      return numA - numB;
+    });
+
+    const totalInconsistencias = qtdFaltaSistema + qtdFaltaSefaz + qtdDivergencias;
+    const totalUniverso = confrontationList.length;
+    const percentualConformidade = totalUniverso > 0 
+      ? Number(((qtdConciliadas / totalUniverso) * 100).toFixed(2))
+      : 100;
+
+    return {
+      items: confrontationList,
+      totalUniverso,
+      totalSefazNotas,
+      totalSefazValor,
+      totalIcmsNotas,
+      totalIcmsValor,
+      qtdFaltaSistema,
+      valorFaltaSistema,
+      qtdFaltaSefaz,
+      valorFaltaSefaz,
+      qtdDivergencias,
+      valorDivergenciaTotal,
+      qtdConciliadas,
+      valorConciliado,
+      totalInconsistencias,
+      percentualConformidade
+    };
+  }, [sefazRows, erpIcmsItems, organizadorEntradas, organizadorSaidas]);
+
+  const sigaConfrontStatusCounts = useMemo(() => {
+    const items = sigaSefazConfrontation.items.filter(item => {
+      if (sigaConfrontTipoFilter === 'entrada') return item.tipoOperacao === 'ENTRADA';
+      if (sigaConfrontTipoFilter === 'saida') return item.tipoOperacao === 'SAIDA';
+      return true;
+    });
+
+    return {
+      faltaSistema: items.filter(i => i.status === 'FALTA_SISTEMA').length,
+      faltaSefaz: items.filter(i => i.status === 'FALTA_SEFAZ').length,
+      divergencia: items.filter(i => i.status === 'DIVERGENCIA_VALOR').length,
+      conciliado: items.filter(i => i.status === 'CONCILIADO').length,
+      total: items.length
+    };
+  }, [sigaSefazConfrontation.items, sigaConfrontTipoFilter]);
+
+  const filteredSigaConfrontItems = useMemo(() => {
+    return sigaSefazConfrontation.items.filter(item => {
+      // 1. Status Filter
+      if (sigaConfrontFilterStatus === 'falta_sistema' && item.status !== 'FALTA_SISTEMA') return false;
+      if (sigaConfrontFilterStatus === 'falta_sefaz' && item.status !== 'FALTA_SEFAZ') return false;
+      if (sigaConfrontFilterStatus === 'divergencia' && item.status !== 'DIVERGENCIA_VALOR') return false;
+      if (sigaConfrontFilterStatus === 'conciliado' && item.status !== 'CONCILIADO') return false;
+
+      // 2. Tipo Operação Filter
+      if (sigaConfrontTipoFilter === 'saida' && item.tipoOperacao !== 'SAIDA') return false;
+      if (sigaConfrontTipoFilter === 'entrada' && item.tipoOperacao !== 'ENTRADA') return false;
+
+      // 3. Search Term
+      if (!sigaConfrontSearch.trim()) return true;
+
+      const term = sigaConfrontSearch.toLowerCase().trim();
+      return (
+        item.numeroNota.toLowerCase().includes(term) ||
+        item.serie.toLowerCase().includes(term) ||
+        item.chaveAcesso.toLowerCase().includes(term) ||
+        item.fornecedorOuCliente.toLowerCase().includes(term) ||
+        item.cfop.toLowerCase().includes(term) ||
+        item.valorSefaz.toString().includes(term) ||
+        item.valorSistema.toString().includes(term)
+      );
+    });
+  }, [sigaSefazConfrontation.items, sigaConfrontFilterStatus, sigaConfrontTipoFilter, sigaConfrontSearch]);
+
+  const totalSigaConfrontPages = Math.ceil(filteredSigaConfrontItems.length / sigaConfrontItemsPerPage) || 1;
+
+  const paginatedSigaConfrontItems = useMemo(() => {
+    const start = (sigaConfrontPage - 1) * sigaConfrontItemsPerPage;
+    return filteredSigaConfrontItems.slice(start, start + sigaConfrontItemsPerPage);
+  }, [filteredSigaConfrontItems, sigaConfrontPage]);
+
+  const handleExportSigaConfrontationExcel = () => {
+    if (!sigaSefazConfrontation || sigaSefazConfrontation.items.length === 0) return;
+
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Resumo do Confronto
+    const summaryRows = [
+      ['SISTEMA DE AUDITORIA FISCAL DA SEFAZ'],
+      ['RELATÓRIO DE CONFRONTO FISCAL - RELATÓRIO SIGA / SEFAZ vs RELATÓRIO DE ICMS (SISTEMA)'],
+      [`Data de Emissão: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}`],
+      [''],
+      ['Indicador de Auditoria', 'Quantidade de Notas', 'Valor Total (R$)', 'Percentual (%)'],
+      ['Total de Notas no Relatório SEFAZ', sigaSefazConfrontation.totalSefazNotas, sigaSefazConfrontation.totalSefazValor, '-'],
+      ['Total de Notas no Relatório de ICMS (Sistema)', sigaSefazConfrontation.totalIcmsNotas, sigaSefazConfrontation.totalIcmsValor, '-'],
+      ['Faltam no Sistema (Constam na SEFAZ)', sigaSefazConfrontation.qtdFaltaSistema, sigaSefazConfrontation.valorFaltaSistema, `${((sigaSefazConfrontation.qtdFaltaSistema / (sigaSefazConfrontation.totalUniverso || 1)) * 100).toFixed(2)}%`],
+      ['Faltam na SEFAZ (Constam no Sistema)', sigaSefazConfrontation.qtdFaltaSefaz, sigaSefazConfrontation.valorFaltaSefaz, `${((sigaSefazConfrontation.qtdFaltaSefaz / (sigaSefazConfrontation.totalUniverso || 1)) * 100).toFixed(2)}%`],
+      ['Divergências de Valor', sigaSefazConfrontation.qtdDivergencias, sigaSefazConfrontation.valorDivergenciaTotal, `${((sigaSefazConfrontation.qtdDivergencias / (sigaSefazConfrontation.totalUniverso || 1)) * 100).toFixed(2)}%`],
+      ['Notas Conciliadas / Batidas', sigaSefazConfrontation.qtdConciliadas, sigaSefazConfrontation.valorConciliado, `${sigaSefazConfrontation.percentualConformidade}%`]
+    ];
+
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+    wsSummary['!cols'] = [{ wch: 45 }, { wch: 20 }, { wch: 22 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumo do Confronto');
+
+    // Sheet 2: Inconsistências (Faltantes & Divergências)
+    const detailHeaders = ['Status / Inconsistência', 'Nota Fiscal', 'Série', 'Modelo', 'Data Emissão', 'Cliente / Fornecedor', 'CFOP', 'Valor SEFAZ (R$)', 'Valor Sistema (R$)', 'Diferença (R$)', 'Chave de Acesso', 'Ação Recomendada'];
+    const inconsistencyItems = sigaSefazConfrontation.items.filter(i => i.status !== 'CONCILIADO');
+
+    const inconsistencyRows = [
+      ['SISTEMA DE AUDITORIA FISCAL DA SEFAZ'],
+      ['DETALHAMENTO DE INCONSISTÊNCIAS ENTRE SEFAZ E SISTEMA (ERP)'],
+      [''],
+      detailHeaders,
+      ...inconsistencyItems.map(item => [
+        item.statusLabel,
+        item.numeroNota,
+        item.serie,
+        item.modelo,
+        item.dataEmissao,
+        item.fornecedorOuCliente,
+        item.cfop,
+        item.valorSefaz,
+        item.valorSistema,
+        item.valorDivergencia,
+        item.chaveAcesso || '-',
+        item.acaoRecomendada
+      ])
+    ];
+
+    const wsInconsistencies = XLSX.utils.aoa_to_sheet(inconsistencyRows);
+    wsInconsistencies['!cols'] = [
+      { wch: 28 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 30 }, { wch: 10 }, { wch: 18 }, { wch: 18 }, { wch: 16 }, { wch: 48 }, { wch: 50 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsInconsistencies, 'Inconsistências');
+
+    // Sheet 3: Todas as Notas
+    const allRows = [
+      ['SISTEMA DE AUDITORIA FISCAL DA SEFAZ'],
+      ['LISTAGEM COMPLETA DO CONFRONTO SEFAZ vs SISTEMA'],
+      [''],
+      detailHeaders,
+      ...sigaSefazConfrontation.items.map(item => [
+        item.statusLabel,
+        item.numeroNota,
+        item.serie,
+        item.modelo,
+        item.dataEmissao,
+        item.fornecedorOuCliente,
+        item.cfop,
+        item.valorSefaz,
+        item.valorSistema,
+        item.valorDivergencia,
+        item.chaveAcesso || '-',
+        item.acaoRecomendada
+      ])
+    ];
+
+    const wsAll = XLSX.utils.aoa_to_sheet(allRows);
+    wsAll['!cols'] = [
+      { wch: 28 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 30 }, { wch: 10 }, { wch: 18 }, { wch: 18 }, { wch: 16 }, { wch: 48 }, { wch: 50 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsAll, 'Todas as Notas');
+
+    XLSX.writeFile(wb, `Confronto_SEFAZ_vs_Sistema_ICMS_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
-  const handleDragOver = (e: DragEvent | React.DragEvent) => {
+  // Channel Drop States & Refs
+  const [isDragOverCanalA, setIsDragOverCanalA] = useState<boolean>(false);
+  const [isDragOverCanalB, setIsDragOverCanalB] = useState<boolean>(false);
+  const [isDragOverDataLake, setIsDragOverDataLake] = useState<boolean>(false);
+  const fileInputCanalARef = useRef<HTMLInputElement>(null);
+  const fileInputCanalBRef = useRef<HTMLInputElement>(null);
+  const dataLakeFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Prevent browser default drop action on window level so drag & drop works cleanly
+  useEffect(() => {
+    const preventDefaults = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener('dragover', preventDefaults);
+    window.addEventListener('drop', preventDefaults);
+    return () => {
+      window.removeEventListener('dragover', preventDefaults);
+      window.removeEventListener('drop', preventDefaults);
+    };
+  }, []);
+
+  const handleDataLakeDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    setIsDragOverDataLake(true);
   };
 
-  const handleDrop = (e: DragEvent | React.DragEvent) => {
+  const handleDataLakeDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsGlobalDragOver(false);
-    dragCounter.current = 0;
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    setIsDragOverDataLake(true);
+  };
+
+  const handleDataLakeDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverDataLake(false);
+  };
+
+  const handleDataLakeDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverDataLake(false);
     if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processFilesRef.current?.(Array.from(e.dataTransfer.files));
+      handleProcessMultipleFiles(Array.from(e.dataTransfer.files));
+    }
+  };
+
+  const handleCanalADragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    setIsDragOverCanalA(true);
+  };
+
+  const handleCanalADragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    setIsDragOverCanalA(true);
+  };
+
+  const handleCanalADragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverCanalA(false);
+  };
+
+  const handleCanalADrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverCanalA(false);
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleImportSigaChannelFile(e.dataTransfer.files[0], 'ENTRADA');
+    }
+  };
+
+  const handleCanalBDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    setIsDragOverCanalB(true);
+  };
+
+  const handleCanalBDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    setIsDragOverCanalB(true);
+  };
+
+  const handleCanalBDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverCanalB(false);
+  };
+
+  const handleCanalBDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverCanalB(false);
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleImportSigaChannelFile(e.dataTransfer.files[0], 'SAIDA');
     }
   };
 
@@ -352,29 +1439,26 @@ export function AuditoriaFiscalWorkspace() {
 
   const availableTabs = useMemo(() => {
     if (!loadedFiles || loadedFiles.length === 0) {
-      return ['confronto', 'organizador', 'integridade', 'conversor_siga', 'pis_cofins'] as const;
+      return ['confronto', 'organizador', 'auditoria_siga', 'integridade', 'pis_cofins'] as const;
     }
     const hasSefaz = loadedFiles.some(f => f.type === 'sefaz');
     const hasErp = loadedFiles.some(f => f.type === 'erp' || f.type === 'siga_tax');
-    const hasSiga = loadedFiles.some(f => f.type === 'siga_tax');
+    const hasSiga = loadedFiles.some(f => f.type === 'siga_tax') || organizadorEntradas.length > 0 || organizadorSaidas.length > 0;
     const hasPisCofins = loadedFiles.some(f => f.type === 'pis_cofins');
 
-    const tabs: Array<'confronto' | 'organizador' | 'integridade' | 'conversor_siga' | 'pis_cofins'> = [];
-    if (hasSefaz && hasErp) {
-      tabs.push('confronto');
+    const tabs: Array<'confronto' | 'organizador' | 'auditoria_siga' | 'integridade' | 'pis_cofins'> = ['confronto'];
+    if (hasSefaz || hasErp || hasSiga) {
       tabs.push('integridade');
     }
-    if (hasSiga) {
+    if (hasSiga || hasSefaz) {
       tabs.push('organizador');
-    }
-    if (hasSefaz) {
-      tabs.push('conversor_siga');
+      tabs.push('auditoria_siga');
     }
     if (hasPisCofins || (!hasSefaz && !hasErp && !hasSiga)) {
       tabs.push('pis_cofins');
     }
     return tabs;
-  }, [loadedFiles]);
+  }, [loadedFiles, organizadorEntradas, organizadorSaidas]);
 
   useEffect(() => {
     if (!availableTabs.includes(activeOutputTab)) {
@@ -383,29 +1467,6 @@ export function AuditoriaFiscalWorkspace() {
       }
     }
   }, [availableTabs, activeOutputTab]);
-
-  useEffect(() => {
-    processFilesRef.current = handleProcessMultipleFiles;
-  });
-
-  useEffect(() => {
-    const onDragEnter = (e: DragEvent) => handleDragEnter(e);
-    const onDragLeave = (e: DragEvent) => handleDragLeave(e);
-    const onDragOver = (e: DragEvent) => handleDragOver(e);
-    const onDrop = (e: DragEvent) => handleDrop(e);
-
-    window.addEventListener('dragenter', onDragEnter);
-    window.addEventListener('dragleave', onDragLeave);
-    window.addEventListener('dragover', onDragOver);
-    window.addEventListener('drop', onDrop);
-
-    return () => {
-      window.removeEventListener('dragenter', onDragEnter);
-      window.removeEventListener('dragleave', onDragLeave);
-      window.removeEventListener('dragover', onDragOver);
-      window.removeEventListener('drop', onDrop);
-    };
-  }, []);
 
   // Background Async Processing State
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -422,6 +1483,8 @@ export function AuditoriaFiscalWorkspace() {
     setProcessingStage('Analisando arquivos e indexando chaves no Data Lake...');
 
     // Process files sequentially or in parallel
+    let lastProcessedModule: 'pis_cofins' | 'siga' | 'icms' | null = null;
+
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const text = await new Promise<string>((resolve) => {
@@ -435,9 +1498,11 @@ export function AuditoriaFiscalWorkspace() {
 
       if (!text.trim()) continue;
 
-      // Automatic Detection Logic:
-      // Case 1: PIS/COFINS Report
-      if (
+      // Automatic Detection via Strategy Factory Pattern
+      const detectedReportType = AuditService.detectReportType(text, file.name);
+
+      // Case 1: PIS/COFINS Report (Módulo 3)
+      if (detectedReportType === 'ERP_PIS_COFINS' ||
         text.toLowerCase().includes('demonstração dos créditos do pis') ||
         text.toLowerCase().includes('crédito vinculado à receita') ||
         text.toLowerCase().includes('entradas sem direito a créditos') ||
@@ -449,12 +1514,14 @@ export function AuditoriaFiscalWorkspace() {
         text.toLowerCase().includes('sped pis/cofins') ||
         text.toLowerCase().includes('notas fiscais de entradas - sped') ||
         text.toLowerCase().includes('notas fiscais de saídas - sped') ||
-        text.toLowerCase().includes('notas fiscais de saidas - sped') ||
-        text.toLowerCase().includes('dados guia estoque notas de entrada') ||
-        text.toLowerCase().includes('dados guia estoque notas de saída') ||
-        text.toLowerCase().includes('dados guia estoque notas de saida')
+        text.toLowerCase().includes('notas fiscais de saidas - sped')
       ) {
-        setProcessingStage(`Identificado: Demonstrativo PIS/COFINS (${file.name})`);
+        lastProcessedModule = 'pis_cofins';
+        setProcessingStage(`Módulo 3 (ERP PIS/COFINS): Processando (${file.name})...`);
+        
+        // Execute Módulo 3 via AuditService Strategy
+        await AuditService.processReport({ content: text, filename: file.name, forceType: 'ERP_PIS_COFINS' });
+
         const { items: parsedItems, metadata: parsedMetadata } = await parsePisCofinsReportAsync(text, (pct) => {
           setProcessingProgress(Math.min(95, 5 + pctBase + Math.round(pct * 0.1)));
         });
@@ -475,18 +1542,30 @@ export function AuditoriaFiscalWorkspace() {
         setPisCofinsMetadata(parsedMetadata);
         updateDataLakeFilesList(file.name, file.size, 'pis_cofins', parsedItems.length);
       }
-      // Case 2: Organizador de Relatório (Siga Tax / Movimentação / ERP)
+      // Case 2: ERP ICMS (Módulo 2) or SIGA (Módulo 1)
+      else if (detectedReportType === 'ERP_ICMS') {
+        lastProcessedModule = 'icms';
+        setProcessingStage(`Módulo 2 (ERP ICMS): Processando (${file.name})...`);
+        const icmsResult = await AuditService.processReport({ content: text, filename: file.name, forceType: 'ERP_ICMS' });
+        if (icmsResult && icmsResult.items && icmsResult.items.length > 0) {
+          setErpIcmsItems(prev => [...prev, ...(icmsResult.items as ErpIcmsReportItem[])]);
+        }
+        setErpRowsText(text);
+        updateDataLakeFilesList(file.name, file.size, 'erp', icmsResult.items?.length || text.split('\n').length - 1);
+      }
       else if (
         text.toLowerCase().includes('notas fiscais de entrada') || 
         text.toLowerCase().includes('notas fiscais de saída') ||
         text.toLowerCase().includes('notas fiscais de saida') ||
         (text.includes(';') && text.toLowerCase().includes('nota fiscal') && text.toLowerCase().includes('cfop') && text.toLowerCase().includes('cst'))
       ) {
-        setProcessingStage(`Identificado: Relatório Siga Impostos / ERP (${file.name})`);
+        lastProcessedModule = 'siga';
+        setProcessingStage(`Módulo 1 (SIGA): Processando (${file.name})...`);
+        await AuditService.processReport({ content: text, filename: file.name, forceType: 'SIGA' });
         setSigaTaxText(text);
         setErpRowsText(text);
         parseSigaTaxReport(text);
-        updateDataLakeFilesList(file.name, file.size, 'siga_tax', 1); // count will be detailed upon parsing
+        updateDataLakeFilesList(file.name, file.size, 'siga_tax', 1);
       }
       // Case 3: SEFAZ Access Keys
       else if (
@@ -495,6 +1574,7 @@ export function AuditoriaFiscalWorkspace() {
         text.toLowerCase().includes('indicadores selecionados') ||
         /\b\d{44}\b/.test(text)
       ) {
+        lastProcessedModule = 'icms';
         setProcessingStage(`Identificado: Notas de Venda SEFAZ (${file.name})`);
         setRawSefazText(text);
         const parsedSefaz = await parseSefazReportAsync(text, (pct) => {
@@ -505,6 +1585,7 @@ export function AuditoriaFiscalWorkspace() {
       }
       // Case 4: ERP Records
       else {
+        lastProcessedModule = 'icms';
         setProcessingStage(`Identificado: Lançamentos ERP Contábil (${file.name})`);
         setErpRowsText(text);
         updateDataLakeFilesList(file.name, file.size, 'erp', text.split('\n').length - 1);
@@ -513,7 +1594,25 @@ export function AuditoriaFiscalWorkspace() {
 
     setProcessingProgress(90);
     setProcessingStage('Finalizando normalização e cruzando registros...');
+
+    if (lastProcessedModule === 'pis_cofins' || (!lastProcessedModule && activeMainModule === 'pis_cofins')) {
+      setActiveMainModule('pis_cofins');
+      setActiveOutputTab('pis_cofins');
+    } else if (lastProcessedModule === 'siga') {
+      setActiveMainModule('siga');
+      setActiveOutputTab('organizador');
+    } else {
+      setActiveMainModule('icms');
+      setActiveOutputTab('confronto');
+      setIcmsMainTab('auditoria');
+    }
+
     setIsProcessing(false);
+
+    setTimeout(() => {
+      const element = document.getElementById('workspace-output-cockpit');
+      element?.scrollIntoView({ behavior: 'smooth' });
+    }, 150);
   };
 
   const updateDataLakeFilesList = (name: string, size: number, type: 'sefaz' | 'erp' | 'siga_tax' | 'pis_cofins', count: number) => {
@@ -523,106 +1622,86 @@ export function AuditoriaFiscalWorkspace() {
     });
   };
 
-  // Siga/Organizador specific text parser
+  // Siga/Organizador specific text parser using segregated reader functions
   const parseSigaTaxReport = (text: string) => {
-    const lines = text.split(/\r?\n/);
-    const parsedEntradas: ReportItem[] = [];
-    const parsedSaidas: ReportItem[] = [];
-    let currentSection: 'entrada' | 'saida' | null = null;
-    let empresa = '';
-    let periodo = '';
-    let dataGeracao = '';
+    const { entradas, saidas, metadata } = parseSigaFullReport(text);
 
-    for (let line of lines) {
-      line = line.trim();
-      if (!line) continue;
-
-      if (line.toLowerCase().includes('notas fiscais de entrada')) {
-        currentSection = 'entrada';
-        continue;
-      } else if (line.toLowerCase().includes('notas fiscais de saída') || line.toLowerCase().includes('notas fiscais de saida')) {
-        currentSection = 'saida';
-        continue;
-      }
-
-      if (line.includes('DISTRIBUIDORA') || line.includes('PRODUTOS ALIMENTICIO') || line.includes('LTDA')) {
-        const parts = line.split(';');
-        if (parts[0] && !empresa) {
-          empresa = parts[0].trim();
-        }
-      }
-      if (line.includes('De:') && line.includes('até:')) {
-        const parts = line.split(';');
-        const pText = parts[0] || '';
-        if (pText) {
-          periodo = pText.replace(/\s+/g, ' ').trim();
-        }
-        const datePart = parts.find(p => p.toLowerCase().includes('data:'));
-        if (datePart) {
-          dataGeracao = datePart.replace(/data:/i, '').trim();
-        }
-      }
-
-      if (line.startsWith('Nota Fiscal;;') || line.includes('Total de Notas Fiscais') || line.startsWith(';;;;;')) {
-        continue;
-      }
-
-      const parts = line.split(';');
-      if (parts.length >= 15 && parts[0] && /^\d+$/.test(parts[0].trim())) {
-        const item: ReportItem = {
-          notaFiscal: parts[0].trim(),
-          data: parts[2] ? parts[2].trim() : '',
-          cnpj: parts[4] ? formatDocument(parts[4].trim().replace(/\s+-\s*$/, '')) : '',
-          cfop: parts[6] ? parts[6].trim() : '',
-          codigoProduto: '',
-          nomeProduto: '',
-          ncm: parts[13] ? parts[13].trim() : '',
-          un: parts[15] ? parts[15].trim() : '',
-          qtde: parsePtBrFloat(parts[17]),
-          rUnit: parsePtBrFloat(parts[19]),
-          rProduto: parsePtBrFloat(parts[21]),
-          desconto: parsePtBrFloat(parts[22]),
-          vlrContabil: parsePtBrFloat(parts[24]),
-          cst: parts[25] ? parts[25].trim() : '',
-          rBaseIcms: parsePtBrFloat(parts[27]),
-          pIcms: parsePtBrFloat(parts[29]),
-          rIcms: parsePtBrFloat(parts[31]),
-          pIpi: parsePtBrFloat(parts[35]),
-          rIpi: parsePtBrFloat(parts[37]),
-        };
-
-        const rawProduct = parts[8] || '';
-        const hyphenIndex = rawProduct.indexOf(' - ');
-        if (hyphenIndex !== -1) {
-          item.codigoProduto = rawProduct.substring(0, hyphenIndex).trim();
-          item.nomeProduto = rawProduct.substring(hyphenIndex + 3).trim();
-        } else {
-          item.nomeProduto = rawProduct.trim();
-        }
-
-        if (currentSection === 'entrada') {
-          parsedEntradas.push(item);
-        } else if (currentSection === 'saida') {
-          parsedSaidas.push(item);
-        }
-      }
-    }
-
-    setOrganizadorEntradas(parsedEntradas);
-    setOrganizadorSaidas(parsedSaidas);
-    setOrganizadorMetadata({
-      empresa: empresa || 'SL DISTRIBUIDORA DE PRODUTOS ALIMENTICIO',
-      periodo: periodo || 'Período não identificado',
-      dataGeracao: dataGeracao || new Date().toLocaleDateString('pt-BR'),
-    });
+    setOrganizadorEntradas(entradas);
+    setOrganizadorSaidas(saidas);
+    setOrganizadorMetadata(metadata);
 
     setLoadedFiles(prev => {
       const idx = prev.findIndex(f => f.type === 'siga_tax');
       if (idx !== -1) {
-        prev[idx].recordsCount = parsedEntradas.length + parsedSaidas.length;
+        prev[idx].recordsCount = entradas.length + saidas.length;
       }
       return [...prev];
     });
+  };
+
+  // Channel Import Handlers (Canal A = Emitidos / Saídas, Canal B = Recebidos / Entradas)
+  const handleImportSigaChannelFile = async (file: File, channel: 'SAIDA' | 'ENTRADA') => {
+    if (!file) return;
+    setIsProcessing(true);
+    setProcessingProgress(20);
+    setProcessingStage(
+      channel === 'SAIDA' 
+        ? `Importando Documentos Emitidos (Saídas): ${file.name}...` 
+        : `Importando Documentos Recebidos (Entradas): ${file.name}...`
+    );
+
+    let text = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string || '');
+      reader.readAsText(file, 'utf-8');
+    });
+
+    setProcessingProgress(60);
+
+    let parsed = parseSigaChannelFile(text, channel);
+
+    // Fallback: Re-read with ISO-8859-1 encoding if UTF-8 yields no items
+    if (!parsed.isValid || parsed.items.length === 0) {
+      text = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target?.result as string || '');
+        reader.readAsText(file, 'ISO-8859-1');
+      });
+      parsed = parseSigaChannelFile(text, channel);
+    }
+
+    const { items, metadata, isValid } = parsed;
+
+    if (!isValid || items.length === 0) {
+      setIsProcessing(false);
+      alert(`⚠️ Arquivo "${file.name}" não pôde ser processado.\n\nFormato incompatível com o padrão de relatórios SIGA/SEFAZ. Certifique-se de carregar um arquivo texto/CSV delimitado contendo notas fiscais e valores.`);
+      return;
+    }
+
+    if (channel === 'SAIDA') {
+      setOrganizadorSaidas(prev => [...prev, ...items]);
+    } else {
+      setOrganizadorEntradas(prev => [...prev, ...items]);
+    }
+
+    setOrganizadorMetadata(prev => ({
+      empresa: metadata.empresa || prev?.empresa || 'EMPRESA IDENTIFICADA NO RELATÓRIO',
+      periodo: metadata.periodo || prev?.periodo || 'Período Auditado',
+      dataGeracao: metadata.dataGeracao || prev?.dataGeracao || new Date().toLocaleDateString('pt-BR')
+    }));
+
+    updateDataLakeFilesList(file.name, file.size, 'siga_tax', items.length);
+
+    setActiveMainModule('siga');
+    setActiveOutputTab('organizador');
+
+    setProcessingProgress(100);
+    setIsProcessing(false);
+
+    setTimeout(() => {
+      const element = document.getElementById('workspace-output-cockpit');
+      element?.scrollIntoView({ behavior: 'smooth' });
+    }, 150);
   };
 
   // Run Bilateral Strategic Reconciliation
@@ -922,6 +2001,54 @@ export function AuditoriaFiscalWorkspace() {
 
       const { items, summary } = executeDataAudit(mockSefaz, erpTextRaw);
 
+      // Generate sample erpIcmsItems for Módulo 2 ICMS
+      const sampleIcmsList: ErpIcmsReportItem[] = mockSefaz.map((s, idx) => {
+        const isDivergent = idx === 12;
+        const vlrContabil = s.valorDecimal;
+        const baseCalc = vlrContabil;
+        const aliq = 18;
+        const vlrIcmsDeclared = isDivergent ? baseCalc * (aliq / 100) - 50.00 : baseCalc * (aliq / 100);
+        const vlrIcmsRecalc = baseCalc * (aliq / 100);
+
+        return {
+          id: `sample-icms-${idx}`,
+          tipoOperacao: 'SAIDA',
+          notaFiscal: s.numeroNota,
+          serie: s.serie || '1',
+          modelo: s.modelo || '55',
+          dataEmissao: s.dataEmissao,
+          cnpjEmitente: s.cnpjFormatado || '17.503.644/0002-86',
+          razaoSocialEmitente: 'SL DISTRIBUIDORA DE PRODUTOS ALIMENTICIO',
+          uf: 'SP',
+          cfop: '5.102',
+          produto: `PRODUTO ALIMENTÍCIO EXEMPLO ITEM ${idx + 1}`,
+          ncm: '21069090',
+          unidade: 'UN',
+          quantidade: 10 + idx,
+          valorUnitario: vlrContabil / (10 + idx),
+          valorProduto: vlrContabil,
+          desconto: 0,
+          valorContabil: vlrContabil,
+          cstIcms: '000',
+          baseCalculoIcms: baseCalc,
+          aliquotaIcms: aliq,
+          valorIcms: vlrIcmsDeclared,
+          aliquotaIpi: 0,
+          valorIpi: 0,
+          valorIsentoIcms: 0,
+          valorOutrosIcms: 0,
+          chaveDeAcesso: s.chaveDeAcesso,
+          isValidChave: s.isValidChave,
+          icmsRecalculated: vlrIcmsRecalc,
+          icmsDivergence: Math.abs(vlrIcmsDeclared - vlrIcmsRecalc),
+          hasDivergence: isDivergent,
+          statusAudit: isDivergent ? 'DIVERGENCIA_CALCULO' : 'OK',
+          deduplicationKey: `MOCK_ICMS_NF_${s.numeroNota}`,
+          isDuplicate: false
+        };
+      });
+      setErpIcmsItems(sampleIcmsList);
+
       setAuditItems(items);
       setAuditSummary(summary);
 
@@ -943,6 +2070,7 @@ export function AuditoriaFiscalWorkspace() {
     setAuditSummary(null);
     setPisCofinsRows([]);
     setPisCofinsMetadata(null);
+    setErpIcmsItems([]);
   };
 
   // --------------------------------------------------------
@@ -972,18 +2100,24 @@ export function AuditoriaFiscalWorkspace() {
   const filteredOrgItems = useMemo(() => {
     const filtered = currentTabItems.filter(item => {
       const matchSearch = !orgSearchTerm || 
-        item.notaFiscal.includes(orgSearchTerm) ||
-        item.nomeProduto.toLowerCase().includes(orgSearchTerm.toLowerCase()) ||
-        item.codigoProduto.includes(orgSearchTerm) ||
-        item.ncm.includes(orgSearchTerm) ||
-        item.cnpj.includes(orgSearchTerm);
+        (item.notaFiscal && item.notaFiscal.toLowerCase().includes(orgSearchTerm.toLowerCase())) ||
+        (item.nomeProduto && item.nomeProduto.toLowerCase().includes(orgSearchTerm.toLowerCase())) ||
+        (item.razaoSocial && item.razaoSocial.toLowerCase().includes(orgSearchTerm.toLowerCase())) ||
+        (item.cnpj && item.cnpj.toLowerCase().includes(orgSearchTerm.toLowerCase())) ||
+        (item.chaveDeAcesso && item.chaveDeAcesso.toLowerCase().includes(orgSearchTerm.toLowerCase())) ||
+        (item.uf && item.uf.toLowerCase().includes(orgSearchTerm.toLowerCase())) ||
+        (item.situacaoNfe && item.situacaoNfe.toLowerCase().includes(orgSearchTerm.toLowerCase()));
 
       const matchCfop = orgCfopFilter === 'all' || item.cfop === orgCfopFilter;
       const matchCst = orgCstFilter === 'all' || item.cst === orgCstFilter;
 
       return matchSearch && matchCfop && matchCst;
     });
-    return [...filtered].sort((a, b) => a.nomeProduto.localeCompare(b.nomeProduto, 'pt-BR'));
+    return [...filtered].sort((a, b) => {
+      const numA = parseInt((a.notaFiscal || '').replace(/\D/g, ''), 10) || 0;
+      const numB = parseInt((b.notaFiscal || '').replace(/\D/g, ''), 10) || 0;
+      return numA - numB;
+    });
   }, [currentTabItems, orgSearchTerm, orgCfopFilter, orgCstFilter]);
 
   const totalOrgPages = Math.ceil(filteredOrgItems.length / itemsPerPage);
@@ -1004,13 +2138,14 @@ export function AuditoriaFiscalWorkspace() {
       const products = new Set<string>();
 
       items.forEach(item => {
-        vContabil += item.vlrContabil;
-        vProduto += item.rProduto;
-        icms += item.rIcms;
-        ipi += item.rIpi;
-        desconto += item.desconto;
-        qtde += item.qtde;
-        products.add(item.codigoProduto);
+        const val = Number(item.vlrContabil || item.rProduto || item.rBaseIcms || (item as any).valor || 0);
+        vContabil += val;
+        vProduto += Number(item.rProduto || val);
+        icms += Number(item.rIcms || 0);
+        ipi += Number(item.rIpi || 0);
+        desconto += Number(item.desconto || 0);
+        qtde += Number(item.qtde || 1);
+        if (item.codigoProduto) products.add(item.codigoProduto);
       });
 
       return {
@@ -1166,6 +2301,7 @@ export function AuditoriaFiscalWorkspace() {
   }, [sefazRows]);
 
   // PIS/COFINS useMemo filtering & stats hooks
+  // 1. Full original rows (filtered by subtab & search term)
   const filteredPisCofinsRows = useMemo(() => {
     let list = pisCofinsRows;
     
@@ -1196,11 +2332,9 @@ export function AuditoriaFiscalWorkspace() {
     });
   }, [pisCofinsRows, activePisCofinsSubTab, searchTermPisCofins]);
 
-  const consolidatedPisCofinsRows = useMemo(() => {
-    let baseRows = pisCofinsRows;
-    
-    // Aggregate/Consolidate
-    let consolidated = consolidatePisCofinsRows(baseRows, pisCofinsCriteria);
+  // 2. Product-consolidated rows (Resumido por Produto + CFOP + CST) for Screen "1. Relatório Original"
+  const resumidoPisCofinsRows = useMemo(() => {
+    let consolidated = consolidatePisCofinsRows(pisCofinsRows, 'cfop_cst_product');
     
     if (activePisCofinsSubTab === 'entradas') {
       consolidated = consolidated.filter(item => item.tipo === 'entrada');
@@ -1219,22 +2353,45 @@ export function AuditoriaFiscalWorkspace() {
     }
     
     return consolidated;
-  }, [pisCofinsRows, pisCofinsCriteria, activePisCofinsSubTab, searchTermPisCofins]);
+  }, [pisCofinsRows, activePisCofinsSubTab, searchTermPisCofins]);
 
-  const paginatedFilteredPisCofinsRows = useMemo(() => {
-    const start = (pisCofinsCurrentPage - 1) * pisCofinsItemsPerPage;
-    return filteredPisCofinsRows.slice(start, start + pisCofinsItemsPerPage);
-  }, [filteredPisCofinsRows, pisCofinsCurrentPage]);
+  // 3. CFOP/CST-consolidated rows (Resumo por CFOP + CST) for Screen "2. Resumo"
+  const resumoCfopCstPisCofinsRows = useMemo(() => {
+    let consolidated = consolidatePisCofinsRows(pisCofinsRows, 'cfop_cst');
+    
+    if (activePisCofinsSubTab === 'entradas') {
+      consolidated = consolidated.filter(item => item.tipo === 'entrada');
+    } else if (activePisCofinsSubTab === 'saidas') {
+      consolidated = consolidated.filter(item => item.tipo === 'saida');
+    }
 
-  const paginatedConsolidatedPisCofinsRows = useMemo(() => {
+    const term = searchTermPisCofins.toLowerCase().trim();
+    if (term) {
+      return consolidated.filter(item => 
+        item.cfop.toLowerCase().includes(term) ||
+        item.cst.toLowerCase().includes(term)
+      );
+    }
+    
+    return consolidated;
+  }, [pisCofinsRows, activePisCofinsSubTab, searchTermPisCofins]);
+
+  // Active display rows based on view mode and format selection
+  const activePisCofinsDisplayRows = useMemo(() => {
+    if (pisCofinsViewMode === 'original') {
+      return pisCofinsOriginalFormat === 'resumido' ? resumidoPisCofinsRows : filteredPisCofinsRows;
+    }
+    return resumoCfopCstPisCofinsRows;
+  }, [pisCofinsViewMode, pisCofinsOriginalFormat, resumidoPisCofinsRows, filteredPisCofinsRows, resumoCfopCstPisCofinsRows]);
+
+  const paginatedActivePisCofinsDisplayRows = useMemo(() => {
     const start = (pisCofinsCurrentPage - 1) * pisCofinsItemsPerPage;
-    return consolidatedPisCofinsRows.slice(start, start + pisCofinsItemsPerPage);
-  }, [consolidatedPisCofinsRows, pisCofinsCurrentPage]);
+    return activePisCofinsDisplayRows.slice(start, start + pisCofinsItemsPerPage);
+  }, [activePisCofinsDisplayRows, pisCofinsCurrentPage]);
 
   const totalPisCofinsPages = useMemo(() => {
-    const rows = pisCofinsViewMode === 'consolidated' ? consolidatedPisCofinsRows : filteredPisCofinsRows;
-    return Math.ceil(rows.length / pisCofinsItemsPerPage);
-  }, [filteredPisCofinsRows, consolidatedPisCofinsRows, pisCofinsViewMode]);
+    return Math.ceil(activePisCofinsDisplayRows.length / pisCofinsItemsPerPage);
+  }, [activePisCofinsDisplayRows]);
 
   const pisCofinsStats = useMemo(() => {
     let totalEntradas = 0;
@@ -1339,13 +2496,64 @@ export function AuditoriaFiscalWorkspace() {
     exportAuditExcel(sefazRows, auditItems, auditSummary, 'Auditoria_DataLake_Moreira_Lima');
   };
 
-  // Highly customized Siga Tax Sheet export
+  // Highly customized Siga Tax Sheet export containing the 10 requested fields
   const handleExportSigaTaxExcel = () => {
     if (organizadorEntradas.length === 0 && organizadorSaidas.length === 0) return;
+    exportSigaAuditExcel({
+      entradas: organizadorEntradas,
+      saidas: organizadorSaidas,
+      metadata: organizadorMetadata
+    });
+  };
+
+  const generateIcmsItemsFromSefaz = (rows: InvoiceRow[]): ErpIcmsReportItem[] => {
+    return rows.map((s, idx) => ({
+      id: `sefaz-gen-${idx}`,
+      tipoOperacao: 'SAIDA',
+      notaFiscal: s.numeroNota,
+      serie: s.serie || '1',
+      modelo: s.modelo || '55',
+      dataEmissao: s.dataEmissao,
+      cnpjEmitente: s.cnpjFormatado || s.cnpjFornecedorFormatado || '',
+      razaoSocialEmitente: s.nomeFornecedor || 'EMITENTE SEFAZ',
+      uf: s.ufNome || 'SP',
+      cfop: '5.102',
+      produto: `NOTA FISCAL DE VENDA Nº ${s.numeroNota}`,
+      ncm: '00000000',
+      unidade: 'UN',
+      quantidade: 1,
+      valorUnitario: s.valorDecimal,
+      valorProduto: s.valorDecimal,
+      desconto: 0,
+      valorContabil: s.valorDecimal,
+      cstIcms: '000',
+      baseCalculoIcms: s.valorDecimal,
+      aliquotaIcms: 18,
+      valorIcms: s.valorIcms || s.valorDecimal * 0.18,
+      aliquotaIpi: 0,
+      valorIpi: 0,
+      valorIsentoIcms: 0,
+      valorOutrosIcms: 0,
+      chaveDeAcesso: s.chaveDeAcesso,
+      isValidChave: s.isValidChave,
+      icmsRecalculated: s.valorDecimal * 0.18,
+      icmsDivergence: 0,
+      hasDivergence: false,
+      statusAudit: 'OK',
+      deduplicationKey: `SEFAZ_GEN_${s.numeroNota}`,
+      isDuplicate: false
+    }));
+  };
+
+  const exportFormattedIcmsExcel = (itemsToExport: ErpIcmsReportItem[]) => {
+    const list = itemsToExport && itemsToExport.length > 0 
+      ? itemsToExport 
+      : generateIcmsItemsFromSefaz(sefazRows);
+
+    if (!list || list.length === 0) return;
 
     const wb = XLSX.utils.book_new();
 
-    // Style elements matching our brand identity (Navy Blue / Gold)
     const styleHeaderTitle = {
       fill: { fgColor: { rgb: "04243B" } },
       font: { name: "Arial", sz: 14, bold: true, color: { rgb: "E4B35E" } },
@@ -1357,11 +2565,11 @@ export function AuditoriaFiscalWorkspace() {
       alignment: { horizontal: "center", vertical: "center" }
     };
 
-    const getHeaderStyle = (align: 'left' | 'center' | 'right' = 'center') => ({
+    const styleTableHeader = {
       fill: { fgColor: { rgb: "04243B" } },
       font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } },
-      alignment: { horizontal: align, vertical: "center" }
-    });
+      alignment: { horizontal: "center", vertical: "center" }
+    };
 
     const getRowStyle = (isEven: boolean, align: 'left' | 'center' | 'right' = 'left') => ({
       fill: { fgColor: { rgb: isEven ? "FFFFFF" : "F8FAFC" } },
@@ -1372,104 +2580,313 @@ export function AuditoriaFiscalWorkspace() {
       }
     });
 
-    // Detailed column configuration to guarantee perfect horizontal alignment (avoiding descentralização)
-    const rawColConfig: { header: string; key: keyof ReportItem; align: 'left' | 'center' | 'right'; width: number; isNumeric?: boolean; format?: string }[] = [
-      { header: 'NF-e', key: 'notaFiscal', align: 'center', width: 12 },
-      { header: 'Data Emissão', key: 'data', align: 'center', width: 14 },
-      { header: 'CNPJ/CPF', key: 'cnpj', align: 'center', width: 18 },
-      { header: 'CFOP', key: 'cfop', align: 'center', width: 10 },
-      { header: 'Código', key: 'codigoProduto', align: 'center', width: 10 },
-      { header: 'Produto', key: 'nomeProduto', align: 'left', width: 35 },
-      { header: 'NCM', key: 'ncm', align: 'center', width: 12 },
-      { header: 'UN', key: 'un', align: 'center', width: 8 },
-      { header: 'Qtde', key: 'qtde', align: 'right', width: 10, isNumeric: true },
-      { header: 'Unitário', key: 'rUnit', align: 'right', width: 12, isNumeric: true, format: '"R$ " #,##0.00' },
-      { header: 'R$ Produto', key: 'rProduto', align: 'right', width: 12, isNumeric: true, format: '"R$ " #,##0.00' },
-      { header: 'Desconto', key: 'desconto', align: 'right', width: 12, isNumeric: true, format: '"R$ " #,##0.00' },
-      { header: 'Vlr Contábil', key: 'vlrContabil', align: 'right', width: 14, isNumeric: true, format: '"R$ " #,##0.00' },
-      { header: 'CST', key: 'cst', align: 'center', width: 8 },
-      { header: 'R$ Base ICMS', key: 'rBaseIcms', align: 'right', width: 14, isNumeric: true, format: '"R$ " #,##0.00' },
-      { header: '% ICMS', key: 'pIcms', align: 'right', width: 10, isNumeric: true, format: '0.00"%"' },
-      { header: 'R$ ICMS', key: 'rIcms', align: 'right', width: 12, isNumeric: true, format: '"R$ " #,##0.00' },
-      { header: '% IPI', key: 'pIpi', align: 'right', width: 10, isNumeric: true, format: '0.00"%"' },
-      { header: 'R$ IPI', key: 'rIpi', align: 'right', width: 12, isNumeric: true, format: '"R$ " #,##0.00' }
-    ];
-
-    const colConfig = groupDuplicates
-      ? rawColConfig.filter(cfg => cfg.key !== 'notaFiscal' && cfg.key !== 'data' && cfg.key !== 'cnpj')
-      : rawColConfig;
-
-    // Sub-sheet generator for Entrada / Saida
-    const makeSheet = (sheetName: string, items: ReportItem[]) => {
+    const createCompletoSheet = (sheetTitle: string, items: ErpIcmsReportItem[]) => {
       const ws: any = {};
-      const numCols = colConfig.length;
-
       ws['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: numCols - 1 } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: numCols - 1 } }
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 18 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 18 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 18 } }
       ];
 
-      // Titles
       ws['A1'] = { v: BRAND_CONFIG.COMPANY_NAME, s: styleHeaderTitle };
-      ws['A2'] = { v: `SÍNTESE DA MOVIMENTAÇÃO DE ${sheetName.toUpperCase()} - ${organizadorMetadata?.periodo || ''}`, s: styleHeaderSub };
+      ws['A2'] = { v: `RELATÓRIO DE MOVIMENTAÇÃO DE ICMS POR PRODUTO - ${sheetTitle.toUpperCase()}`, s: styleHeaderSub };
+      ws['A3'] = { v: `EXPORTADO EM: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}`, s: styleHeaderSub };
 
-      // Headers writing
-      colConfig.forEach((cfg, colIdx) => {
-        const cellRef = XLSX.utils.encode_cell({ r: 3, c: colIdx });
-        ws[cellRef] = { v: cfg.header, s: getHeaderStyle(cfg.align) };
+      const headers = [
+        'Tipo Op.',
+        'Nota Fiscal',
+        'Data Emissão',
+        'CNPJ / CPF',
+        'CFOP',
+        'Descrição do Produto / Item',
+        'NCM',
+        'UN',
+        'Quantidade',
+        'R$ Unitário',
+        'R$ Produto',
+        'Desconto R$',
+        'Valor Contábil R$',
+        'CST ICMS',
+        'R$ Base ICMS',
+        '% ICMS',
+        'R$ ICMS Declarado',
+        '% IPI',
+        'R$ IPI'
+      ];
+
+      headers.forEach((h, colIdx) => {
+        const cellRef = XLSX.utils.encode_cell({ r: 4, c: colIdx });
+        ws[cellRef] = { v: h, s: styleTableHeader };
       });
 
-      // Sort items alphabetically by Product Name in Portuguese language
-      const ptBrCollator = new Intl.Collator('pt-BR', { numeric: true, sensitivity: 'base' });
-      const sortedItems = [...items].sort((a, b) => {
-        const nameA = a.nomeProduto || '';
-        const nameB = b.nomeProduto || '';
-        return ptBrCollator.compare(nameA, nameB);
+      items.forEach((item, rowIdx) => {
+        const r = 5 + rowIdx;
+        const isEven = rowIdx % 2 === 0;
+
+        ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: item.tipoOperacao || 'SAIDA', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: item.notaFiscal, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 2 })] = { v: item.dataEmissao, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: formatCnpjCpf(item.cnpjEmitente), s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: item.cfop, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.produto, s: getRowStyle(isEven, 'left') };
+        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.ncm, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 7 })] = { v: item.unidade, s: getRowStyle(isEven, 'center') };
+        
+        ws[XLSX.utils.encode_cell({ r, c: 8 })] = { v: item.quantidade || 0, t: 'n', z: '#,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 9 })] = { v: item.valorUnitario || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 10 })] = { v: item.valorProduto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 11 })] = { v: item.desconto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 12 })] = { v: item.valorContabil || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 13 })] = { v: item.cstIcms || '', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 14 })] = { v: item.baseCalculoIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 15 })] = { v: (item.aliquotaIcms || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 16 })] = { v: item.valorIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 17 })] = { v: (item.aliquotaIpi || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 18 })] = { v: item.valorIpi || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
       });
 
-      // Rows writing
-      sortedItems.forEach((item, rowIdx) => {
-        const r = 4 + rowIdx;
+      const maxRow = 5 + items.length;
+      ws['!ref'] = `A1:S${maxRow}`;
 
-        colConfig.forEach((cfg, colIdx) => {
-          const style = getRowStyle(rowIdx % 2 === 0, cfg.align);
-          const val = item[cfg.key];
-          const cellRef = XLSX.utils.encode_cell({ r, c: colIdx });
+      ws['!cols'] = [
+        { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 10 }, { wch: 45 },
+        { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 14 },
+        { wch: 18 }, { wch: 10 }, { wch: 16 }, { wch: 10 }, { wch: 18 }, { wch: 10 },
+        { wch: 18 }
+      ];
 
-          if (cfg.isNumeric) {
-            const numVal = typeof val === 'number' ? val : parseFloat(val as string) || 0;
-            ws[cellRef] = { 
-              v: numVal, 
-              t: 'n', 
-              s: style,
-              ...(cfg.format ? { z: cfg.format } : {})
-            };
-          } else {
-            ws[cellRef] = { 
-              v: val === undefined || val === null ? '' : String(val), 
-              s: style 
-            };
-          }
-        });
-      });
-
-      const maxRow = 4 + sortedItems.length;
-      ws['!ref'] = `A1:${XLSX.utils.encode_col(numCols - 1)}${maxRow}`;
-      ws['!cols'] = colConfig.map(cfg => ({ wch: cfg.width }));
-
-      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      return ws;
     };
 
-    if (organizadorEntradas.length > 0) {
-      const entries = groupDuplicates ? aggregateDuplicates(organizadorEntradas) : organizadorEntradas;
-      makeSheet('Entradas', entries);
-    }
-    if (organizadorSaidas.length > 0) {
-      const exits = groupDuplicates ? aggregateDuplicates(organizadorSaidas) : organizadorSaidas;
-      makeSheet('Saídas', exits);
-    }
+    const createResumoSheet = (sheetTitle: string, items: ErpIcmsReportItem[]) => {
+      const aggregated = aggregateIcmsItems(items);
+      const ws: any = {};
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 14 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 14 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 14 } }
+      ];
 
-    XLSX.writeFile(wb, `Faturamento_Impostos_Consolidado_${Date.now()}.xlsx`);
+      ws['A1'] = { v: BRAND_CONFIG.COMPANY_NAME, s: styleHeaderTitle };
+      ws['A2'] = { v: `RESUMO DE ICMS POR PRODUTO, CFOP E CST - ${sheetTitle.toUpperCase()}`, s: styleHeaderSub };
+      ws['A3'] = { v: `EXPORTADO EM: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}`, s: styleHeaderSub };
+
+      const headers = [
+        'CFOP',
+        'Descrição do Produto / Item',
+        'NCM',
+        'UN',
+        'Quantidade',
+        'R$ Unitário',
+        'R$ Produto',
+        'Desconto R$',
+        'Valor Contábil R$',
+        'CST ICMS',
+        'R$ Base ICMS',
+        '% ICMS',
+        'R$ ICMS Declarado',
+        '% IPI',
+        'R$ IPI'
+      ];
+
+      headers.forEach((h, colIdx) => {
+        const cellRef = XLSX.utils.encode_cell({ r: 4, c: colIdx });
+        ws[cellRef] = { v: h, s: styleTableHeader };
+      });
+
+      aggregated.forEach((item, rowIdx) => {
+        const r = 5 + rowIdx;
+        const isEven = rowIdx % 2 === 0;
+
+        ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: item.cfop, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: item.produto, s: getRowStyle(isEven, 'left') };
+        ws[XLSX.utils.encode_cell({ r, c: 2 })] = { v: item.ncm, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: item.unidade, s: getRowStyle(isEven, 'center') };
+        
+        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: item.quantidade || 0, t: 'n', z: '#,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.valorUnitario || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.valorProduto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 7 })] = { v: item.desconto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 8 })] = { v: item.valorContabil || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 9 })] = { v: item.cstIcms || '', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 10 })] = { v: item.baseCalculoIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 11 })] = { v: (item.aliquotaIcms || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 12 })] = { v: item.valorIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 13 })] = { v: (item.aliquotaIpi || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 14 })] = { v: item.valorIpi || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+      });
+
+      const maxRow = 5 + aggregated.length;
+      ws['!ref'] = `A1:O${maxRow}`;
+      ws['!cols'] = [
+        { wch: 10 }, { wch: 48 }, { wch: 12 }, { wch: 8 }, { wch: 14 },
+        { wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 10 },
+        { wch: 18 }, { wch: 10 }, { wch: 18 }, { wch: 10 }, { wch: 18 }
+      ];
+
+      return ws;
+    };
+
+    const entradas = list
+      .filter(i => 
+        i.tipoOperacao === 'ENTRADA' || 
+        (i.cfop && (i.cfop.startsWith('1') || i.cfop.startsWith('2') || i.cfop.startsWith('3')))
+      )
+      .slice()
+      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+
+    const saidas = list
+      .filter(i => 
+        i.tipoOperacao === 'SAIDA' || 
+        (i.cfop && (i.cfop.startsWith('5') || i.cfop.startsWith('6') || i.cfop.startsWith('7')))
+      )
+      .slice()
+      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+
+    // 1. Entradas completo
+    XLSX.utils.book_append_sheet(wb, createCompletoSheet('Entradas Completo', entradas), 'Entradas completo');
+    // 2. Entradas resumo
+    XLSX.utils.book_append_sheet(wb, createResumoSheet('Entradas Resumo', entradas), 'Entradas resumo');
+    // 3. Saídas completo
+    XLSX.utils.book_append_sheet(wb, createCompletoSheet('Saídas Completo', saidas), 'Saídas completo');
+    // 4. Saídas resumo
+    XLSX.utils.book_append_sheet(wb, createResumoSheet('Saídas Resumo', saidas), 'Saídas resumo');
+
+    XLSX.writeFile(wb, `Relatorio_ICMS_4_Abas_${Date.now()}.xlsx`);
+  };
+
+  const exportIcmsAuditExcel = (list: ErpIcmsReportItem[]) => {
+    if (!list || list.length === 0) return;
+
+    const wb = XLSX.utils.book_new();
+
+    const styleHeaderTitle = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 14, bold: true, color: { rgb: "E4B35E" } },
+      alignment: { horizontal: "center", vertical: "center" }
+    };
+    const styleHeaderSub = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } },
+      alignment: { horizontal: "center", vertical: "center" }
+    };
+
+    const styleTableHeader = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } },
+      alignment: { horizontal: "center", vertical: "center" }
+    };
+
+    const getRowStyle = (isEven: boolean, align: 'left' | 'center' | 'right' = 'left', isError = false) => ({
+      fill: { fgColor: { rgb: isError ? "FEE2E2" : (isEven ? "FFFFFF" : "F8FAFC") } },
+      font: { name: "Arial", sz: 9, color: { rgb: isError ? "991B1B" : "1E293B" }, bold: isError },
+      alignment: { horizontal: align, vertical: "center" },
+      border: {
+        bottom: { style: "thin", color: { rgb: "E2E8F0" } }
+      }
+    });
+
+    const createAuditSheet = (title: string, items: ErpIcmsReportItem[]) => {
+      const ws: any = {};
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 11 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 11 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 11 } }
+      ];
+
+      ws['A1'] = { v: BRAND_CONFIG.COMPANY_NAME, s: styleHeaderTitle };
+      ws['A2'] = { v: `AUDITORIA FISCAL ICMS - ${title.toUpperCase()}`, s: styleHeaderSub };
+      ws['A3'] = { v: `Data do Diagnóstico: ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR')}`, s: styleHeaderSub };
+
+      const headers = [
+        'NF',
+        'Data',
+        'CNPJ / CPF Emitente',
+        'CFOP',
+        'Descrição do Produto / Item',
+        'R$ Contábil',
+        'CST',
+        'R$ Base ICMS',
+        '% ICMS',
+        'R$ ICMS Declarado',
+        'Status Auditoria',
+        'Diagnóstico / Inconsistência'
+      ];
+
+      headers.forEach((h, colIdx) => {
+        const cellRef = XLSX.utils.encode_cell({ r: 4, c: colIdx });
+        ws[cellRef] = { v: h, s: styleTableHeader };
+      });
+
+      items.forEach((item, rowIdx) => {
+        const r = 5 + rowIdx;
+        const isEven = rowIdx % 2 === 0;
+
+        const expectedIcms = (item.baseCalculoIcms * (item.aliquotaIcms || 0)) / 100;
+        const diff = Math.abs(item.valorIcms - expectedIcms);
+        let status = 'CONFORME';
+        let diag = 'Sem inconsistências detectadas';
+        let isError = false;
+
+        if (diff > 0.05) {
+          status = 'DIVERGÊNCIA ICMS';
+          diag = `ICMS Declarado (R$ ${item.valorIcms.toFixed(2)}) difere do Calculado (R$ ${expectedIcms.toFixed(2)})`;
+          isError = true;
+        } else if (item.baseCalculoIcms === 0 && item.valorIcms > 0) {
+          status = 'BASE ZERADA COM ICMS';
+          diag = 'Base de cálculo é R$ 0,00 porém há valor de ICMS destacado';
+          isError = true;
+        } else if (item.baseCalculoIcms > item.valorContabil && item.valorContabil > 0) {
+          status = 'BASE MAIOR QUE CONTÁBIL';
+          diag = 'Base de cálculo do ICMS é maior que o valor contábil do item';
+          isError = true;
+        }
+
+        ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: item.notaFiscal, s: getRowStyle(isEven, 'center', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: item.dataEmissao, s: getRowStyle(isEven, 'center', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 2 })] = { v: formatCnpjCpf(item.cnpjEmitente), s: getRowStyle(isEven, 'center', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: item.cfop, s: getRowStyle(isEven, 'center', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: item.produto, s: getRowStyle(isEven, 'left', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.valorContabil, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.cstIcms, s: getRowStyle(isEven, 'center', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 7 })] = { v: item.baseCalculoIcms, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 8 })] = { v: (item.aliquotaIcms || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'right', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 9 })] = { v: item.valorIcms, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 10 })] = { v: status, s: getRowStyle(isEven, 'center', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 11 })] = { v: diag, s: getRowStyle(isEven, 'left', isError) };
+      });
+
+      const maxRow = 5 + items.length;
+      ws['!ref'] = `A1:L${maxRow}`;
+      ws['!cols'] = [
+        { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 10 }, { wch: 45 },
+        { wch: 16 }, { wch: 10 }, { wch: 16 }, { wch: 10 }, { wch: 16 },
+        { wch: 22 }, { wch: 55 }
+      ];
+
+      return ws;
+    };
+
+    const entradas = list
+      .filter(i => 
+        i.tipoOperacao === 'ENTRADA' || 
+        (i.cfop && (i.cfop.startsWith('1') || i.cfop.startsWith('2') || i.cfop.startsWith('3')))
+      )
+      .slice()
+      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+
+    const saidas = list
+      .filter(i => 
+        i.tipoOperacao === 'SAIDA' || 
+        (i.cfop && (i.cfop.startsWith('5') || i.cfop.startsWith('6') || i.cfop.startsWith('7')))
+      )
+      .slice()
+      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+
+    XLSX.utils.book_append_sheet(wb, createAuditSheet('Auditoria Entradas', entradas), 'Auditoria Entradas');
+    XLSX.utils.book_append_sheet(wb, createAuditSheet('Auditoria Saídas', saidas), 'Auditoria Saídas');
+
+    XLSX.writeFile(wb, `Auditoria_ICMS_${Date.now()}.xlsx`);
   };
 
   const handleExportConversorExcel = () => {
@@ -1616,24 +3033,9 @@ export function AuditoriaFiscalWorkspace() {
 
   return (
     <div 
-      className="space-y-6 relative min-h-[500px]" 
+      className="space-y-3 relative min-h-[500px]" 
       id="auditoria-fiscal-workspace"
     >
-      {/* Global Drag-and-Drop Overlay */}
-      {isGlobalDragOver && (
-        <div 
-          className="absolute inset-0 z-50 bg-[#04243b]/95 border-4 border-dashed border-[#e4b35e] rounded-3xl flex flex-col items-center justify-center space-y-4 transition-all duration-300"
-        >
-          <div className="p-6 bg-[#e4b35e]/10 text-[#e4b35e] rounded-full animate-bounce pointer-events-none">
-            <Upload className="w-12 h-12" />
-          </div>
-          <h3 className="text-xl font-extrabold text-white pointer-events-none">Solte seus arquivos em qualquer lugar</h3>
-          <p className="text-sm text-slate-300 max-w-md text-center px-4 leading-relaxed pointer-events-none">
-            Solte seus relatórios SEFAZ, ERP Contábil, Siga Impostos ou demonstrativo de PIS/COFINS. O parser auto-identificará e importará os dados para o Data Lake de Auditoria.
-          </p>
-        </div>
-      )}
-
       {/* 1. TOP TITLE BANNER */}
       <div className="bg-[#04243b] rounded-3xl p-6 text-white relative overflow-hidden shadow-md border border-[#e4b35e]/15 animate-fadeIn">
         <div className="absolute right-0 top-0 translate-x-12 -translate-y-12 w-64 h-64 bg-gradient-to-br from-[#e4b35e]/10 to-transparent rounded-full blur-2xl" />
@@ -1657,46 +3059,40 @@ export function AuditoriaFiscalWorkspace() {
       </div>
 
       {/* 2. SUBDIVISIONS SUB-BLOCKS GRID ON INITIAL VIEW */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Module 1: SIGA */}
         <button
           onClick={() => {
             setActiveMainModule('siga');
             setActiveOutputTab('organizador');
           }}
-          className={`p-5 rounded-3xl border text-left transition-all relative overflow-hidden flex flex-col justify-between h-40 cursor-pointer ${
+          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between gap-3 cursor-pointer ${
             activeMainModule === 'siga'
               ? 'bg-gradient-to-br from-[#04243b] to-[#083454] border-[#e4b35e] text-white shadow-md ring-2 ring-[#e4b35e]/30'
               : 'bg-white border-slate-200 text-[#04243b] hover:border-slate-300 hover:bg-slate-50/50 shadow-2xs'
           }`}
         >
-          <div className="absolute right-0 bottom-0 translate-x-4 translate-y-4 opacity-5 pointer-events-none">
-            <FileSpreadsheet className="w-32 h-32 text-white" />
+          <div className="absolute right-0 bottom-0 translate-x-3 translate-y-3 opacity-5 pointer-events-none">
+            <FileSpreadsheet className="w-24 h-24 text-white" />
           </div>
           
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <span className={`text-[10px] uppercase font-black px-2.5 py-1 rounded-full ${
+              <span className={`text-[10px] uppercase font-black px-2.5 py-0.5 rounded-full ${
                 activeMainModule === 'siga' ? 'bg-[#e4b35e]/10 text-[#e4b35e]' : 'bg-slate-100 text-slate-500'
               }`}>
                 Módulo 1
               </span>
-              <FileSpreadsheet className={`w-5 h-5 ${activeMainModule === 'siga' ? 'text-[#e4b35e]' : 'text-slate-400'}`} />
+              <FileSpreadsheet className={`w-4.5 h-4.5 ${activeMainModule === 'siga' ? 'text-[#e4b35e]' : 'text-slate-400'}`} />
             </div>
             <h3 className="font-extrabold text-sm tracking-tight leading-snug">
               Módulo 1: Auditor de relatórios SIGA
             </h3>
-            <p className={`text-[11px] leading-relaxed font-sans ${activeMainModule === 'siga' ? 'text-slate-300' : 'text-slate-500'}`}>
-              Organizador de impostos por CFOP/CST e listagem inteligente de chaves do SIGA.
-            </p>
           </div>
 
           <div className="border-t border-dashed border-slate-200/20 pt-2 w-full flex items-center justify-between text-[10px] font-bold">
             <span className={activeMainModule === 'siga' ? 'text-[#e4b35e]' : 'text-slate-500'}>
               {organizadorEntradas.length > 0 || organizadorSaidas.length > 0 ? '✓ Ativo & Analisado' : '⚡ Toque para carregar'}
-            </span>
-            <span className={`font-mono ${activeMainModule === 'siga' ? 'text-white' : 'text-slate-700'}`}>
-              {organizadorEntradas.length + organizadorSaidas.length} registros
             </span>
           </div>
         </button>
@@ -1707,39 +3103,33 @@ export function AuditoriaFiscalWorkspace() {
             setActiveMainModule('icms');
             setActiveOutputTab('confronto');
           }}
-          className={`p-5 rounded-3xl border text-left transition-all relative overflow-hidden flex flex-col justify-between h-40 cursor-pointer ${
+          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between gap-3 cursor-pointer ${
             activeMainModule === 'icms'
               ? 'bg-gradient-to-br from-[#04243b] to-[#083454] border-[#e4b35e] text-white shadow-md ring-2 ring-[#e4b35e]/30'
               : 'bg-white border-slate-200 text-[#04243b] hover:border-slate-300 hover:bg-slate-50/50 shadow-2xs'
           }`}
         >
-          <div className="absolute right-0 bottom-0 translate-x-4 translate-y-4 opacity-5 pointer-events-none">
-            <Table className="w-32 h-32 text-white" />
+          <div className="absolute right-0 bottom-0 translate-x-3 translate-y-3 opacity-5 pointer-events-none">
+            <Table className="w-24 h-24 text-white" />
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <span className={`text-[10px] uppercase font-black px-2.5 py-1 rounded-full ${
+              <span className={`text-[10px] uppercase font-black px-2.5 py-0.5 rounded-full ${
                 activeMainModule === 'icms' ? 'bg-[#e4b35e]/10 text-[#e4b35e]' : 'bg-slate-100 text-slate-500'
               }`}>
                 Módulo 2
               </span>
-              <Table className={`w-5 h-5 ${activeMainModule === 'icms' ? 'text-[#e4b35e]' : 'text-slate-400'}`} />
+              <Table className={`w-4.5 h-4.5 ${activeMainModule === 'icms' ? 'text-[#e4b35e]' : 'text-slate-400'}`} />
             </div>
             <h3 className="font-extrabold text-sm tracking-tight leading-snug">
               Módulo 2: Auditor de relatórios ICMS
             </h3>
-            <p className={`text-[11px] leading-relaxed font-sans ${activeMainModule === 'icms' ? 'text-slate-300' : 'text-slate-500'}`}>
-              Confronto bidirecional SEFAZ x ERP contábil com furos de sequencial e cancelados.
-            </p>
           </div>
 
           <div className="border-t border-dashed border-slate-200/20 pt-2 w-full flex items-center justify-between text-[10px] font-bold">
             <span className={activeMainModule === 'icms' ? 'text-[#e4b35e]' : 'text-slate-500'}>
               {auditSummary ? '✓ Confronto executado' : '⚡ Toque para carregar'}
-            </span>
-            <span className={`font-mono ${activeMainModule === 'icms' ? 'text-white' : 'text-slate-700'}`}>
-              {auditSummary?.saltosSequencia ?? 0} furos seq.
             </span>
           </div>
         </button>
@@ -1750,614 +3140,938 @@ export function AuditoriaFiscalWorkspace() {
             setActiveMainModule('pis_cofins');
             setActiveOutputTab('pis_cofins');
           }}
-          className={`p-5 rounded-3xl border text-left transition-all relative overflow-hidden flex flex-col justify-between h-40 cursor-pointer ${
+          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between gap-3 cursor-pointer ${
             activeMainModule === 'pis_cofins'
               ? 'bg-gradient-to-br from-[#04243b] to-[#083454] border-[#e4b35e] text-white shadow-md ring-2 ring-[#e4b35e]/30'
               : 'bg-white border-slate-200 text-[#04243b] hover:border-slate-300 hover:bg-slate-50/50 shadow-2xs'
           }`}
         >
-          <div className="absolute right-0 bottom-0 translate-x-4 translate-y-4 opacity-5 pointer-events-none">
-            <Coins className="w-32 h-32 text-white" />
+          <div className="absolute right-0 bottom-0 translate-x-3 translate-y-3 opacity-5 pointer-events-none">
+            <Coins className="w-24 h-24 text-white" />
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <span className={`text-[10px] uppercase font-black px-2.5 py-1 rounded-full ${
+              <span className={`text-[10px] uppercase font-black px-2.5 py-0.5 rounded-full ${
                 activeMainModule === 'pis_cofins' ? 'bg-[#e4b35e]/10 text-[#e4b35e]' : 'bg-slate-100 text-slate-500'
               }`}>
                 Módulo 3
               </span>
-              <Coins className={`w-5 h-5 ${activeMainModule === 'pis_cofins' ? 'text-[#e4b35e]' : 'text-slate-400'}`} />
+              <Coins className={`w-4.5 h-4.5 ${activeMainModule === 'pis_cofins' ? 'text-[#e4b35e]' : 'text-slate-400'}`} />
             </div>
             <h3 className="font-extrabold text-sm tracking-tight leading-snug">
               Módulo 3: Auditor de relatórios PIS & COFINS
             </h3>
-            <p className={`text-[11px] leading-relaxed font-sans ${activeMainModule === 'pis_cofins' ? 'text-slate-300' : 'text-slate-500'}`}>
-              Mapeador de créditos e apuração de inconsistências no cálculo de PIS/COFINS por item.
-            </p>
           </div>
 
           <div className="border-t border-dashed border-slate-200/20 pt-2 w-full flex items-center justify-between text-[10px] font-bold">
             <span className={activeMainModule === 'pis_cofins' ? 'text-[#e4b35e]' : 'text-slate-500'}>
               {pisCofinsRows.length > 0 ? '✓ Auditoria ativa' : '⚡ Toque para carregar'}
             </span>
-            <span className={`font-mono ${activeMainModule === 'pis_cofins' ? 'text-white' : 'text-slate-700'}`}>
-              {pisCofinsAuditErrors.length} inconsistências
-            </span>
           </div>
         </button>
       </div>
 
-      {/* 3. THE DATA LAKE INGESTION SECTION (TAILORED PER MAIN MODULE) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fadeIn">
-        
-        {/* Left Column: Data Lake status & files filtered by current module */}
-        <div className="lg:col-span-7 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex flex-col space-y-4 transition-all duration-300">
-          <div className="flex items-center justify-between border-b border-slate-150 pb-3">
-            <div className="flex items-center gap-2">
-              <Building2 className="w-5 h-5 text-[#e4b35e]" />
-              <h2 className="text-sm font-black text-[#04243b] uppercase tracking-tight font-sans">
-                {activeMainModule === 'siga' && 'Arquivos SIGA no Data Lake'}
-                {activeMainModule === 'icms' && 'Arquivos ICMS no Data Lake'}
-                {activeMainModule === 'pis_cofins' && 'Arquivos PIS/COFINS no Data Lake'}
-              </h2>
-            </div>
-          </div>
-
-          <div className="flex-grow">
-            {(() => {
-              const filesToShow = loadedFiles.filter(f => {
-                if (activeMainModule === 'siga') return f.type === 'siga_tax' || f.type === 'sefaz';
-                if (activeMainModule === 'icms') return f.type === 'sefaz' || f.type === 'erp';
-                if (activeMainModule === 'pis_cofins') return f.type === 'pis_cofins';
-                return true;
-              });
-
-              if (filesToShow.length === 0) {
-                return (
-                  <div className="flex flex-col items-center justify-center py-8 px-4 border border-dashed border-slate-200 rounded-2xl bg-slate-50/50 text-center transition-all">
-                    <div className="w-10 h-10 rounded-xl bg-[#04243b]/5 text-[#04243b] flex items-center justify-center mb-3.5">
-                      <FileUp className="w-5 h-5 text-[#04243b]" />
+      {/* 3. THE INGESTION & COCKPIT SECTION (TAILORED PER MAIN MODULE) */}
+      {activeMainModule === 'siga' ? (
+        /* ======================================================== */
+        /* MÓDULO 01: CANAIS DE IMPORTAÇÃO (ORIGEM COMO FILTRO)     */
+        /* ======================================================== */
+        <div className="space-y-6 animate-fadeIn">
+          {/* 2 Canal Import Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            
+            {/* DOCUMENTOS RECEBIDOS (ENTRADAS) */}
+            <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-2xs space-y-4 flex flex-col justify-between hover:border-emerald-400 transition-all">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-emerald-900 text-white rounded-xl shadow-xs">
+                      <ArrowDownLeft className="w-5 h-5 text-emerald-300" />
                     </div>
-                    {activeMainModule === 'siga' && (
-                      <>
-                        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">Nenhum relatório SIGA importado</h4>
-                        <p className="text-[11px] text-slate-400 mt-1 max-w-sm leading-relaxed">
-                          Arraste e solte o arquivo Siga Impostos (txt) na área superior ou utilize os dados de exemplo.
-                        </p>
-                      </>
-                    )}
-                    {activeMainModule === 'icms' && (
-                      <>
-                        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">Aguardando relatórios para confronto</h4>
-                        <p className="text-[11px] text-slate-400 mt-1 max-w-sm leading-relaxed">
-                          Carregue a planilha SEFAZ (csv) e o extrato ERP (csv) para realizar o confronto de notas.
-                        </p>
-                      </>
-                    )}
-                    {activeMainModule === 'pis_cofins' && (
-                      <>
-                        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">Sem dados de PIS/COFINS</h4>
-                        <p className="text-[11px] text-slate-400 mt-1 max-w-sm leading-relaxed">
-                          Importe o relatório de apuração de PIS/COFINS (csv/txt) para gerar os demonstrativos.
-                        </p>
-                      </>
-                    )}
-                  </div>
-                );
-              }
-
-              return (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {filesToShow.map((file, idx) => (
-                    <div key={`file-dl-${idx}`} className="flex items-center justify-between p-3 rounded-xl border border-slate-100 bg-slate-50 hover:bg-slate-100/50 transition-colors">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className={`p-2 rounded-lg text-white font-extrabold shrink-0 ${
-                          file.type === 'sefaz' ? 'bg-[#04243b]' : file.type === 'erp' ? 'bg-[#e4b35e]' : file.type === 'siga_tax' ? 'bg-emerald-600' : 'bg-indigo-600'
-                        }`}>
-                          <FileText className="w-4 h-4 text-white" />
-                        </div>
-                        <div className="min-w-0">
-                          <span className="font-bold text-slate-700 text-xs block truncate" title={file.name}>
-                            {file.name}
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-mono block">
-                            {(file.size / 1024).toFixed(1)} KB | {file.recordsCount} {file.type === 'siga_tax' ? 'itens' : file.type === 'pis_cofins' ? 'registros' : 'linhas'}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {file.type === 'sefaz' && sefazDuplicates.length > 0 && (
-                          <span className="text-[9px] font-black bg-red-100 text-red-700 px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse" title="Duplicidades detectadas no relatório">
-                            <AlertTriangle className="w-2.5 h-2.5 text-red-600" />
-                            DUPLICADO
-                          </span>
-                        )}
-                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                          file.type === 'sefaz' ? 'bg-[#04243b]/10 text-[#04243b]' : file.type === 'erp' ? 'bg-[#e4b35e]/10 text-[#04243b]' : file.type === 'siga_tax' ? 'bg-emerald-50 text-emerald-700' : 'bg-indigo-50 text-indigo-700'
-                        }`}>
-                          {file.type === 'sefaz' ? 'SEFAZ' : file.type === 'erp' ? 'ERP' : file.type === 'siga_tax' ? 'SIGA' : 'PIS/COF'}
-                        </span>
-                        <button
-                          onClick={() => handleDeleteFile(file.name, file.type)}
-                          className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded transition-colors cursor-pointer"
-                          title="Remover arquivo do Data Lake"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              );
-            })()}
-          </div>
-        </div>
-
-        {/* Right Column: Custom Strategic Cockpits per active Module */}
-        {activeMainModule === 'siga' && (
-          <div className="lg:col-span-5 bg-white p-6 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between space-y-5">
-            <div className="space-y-4">
-              <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3.5">
-                <div className="p-2 rounded-xl bg-[#e4b35e]/10 text-[#04243b]">
-                  <FileSpreadsheet className="w-4 h-4 text-[#04243b]" />
-                </div>
-                <div>
-                  <h2 className="text-xs font-black text-[#04243b] uppercase tracking-wider font-sans">
-                    Painel do Auditor SIGA
-                  </h2>
-                  <span className="text-[10px] text-slate-400 font-medium block">
-                    Análise e consolidação de Entradas & Saídas
-                  </span>
-                </div>
-              </div>
-              
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Consolidação dos relatórios de Entradas e Saídas do SIGA com cálculo automático de ICMS, PIS e COFINS.
-              </p>
-
-              {/* Status information */}
-              <div className="space-y-2.5">
-                <div className="p-3.5 rounded-2xl border border-slate-150/80 bg-slate-50/60 flex items-center justify-between transition-all">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`p-2 rounded-xl text-white shrink-0 ${
-                      organizadorEntradas.length > 0 || organizadorSaidas.length > 0 ? 'bg-emerald-600' : 'bg-slate-200 text-slate-400'
-                    }`}>
-                      <FileText className="w-4 h-4 text-white" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-xs font-bold text-slate-800 block">Relatório SIGA Impostos</span>
-                      {organizadorEntradas.length > 0 || organizadorSaidas.length > 0 ? (
-                        <span className="text-[11px] text-emerald-700 font-bold block truncate">
-                          {organizadorMetadata?.empresa || 'Empresa Identificada'}
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-slate-400 font-medium block">Pendente de importação</span>
-                      )}
+                    <div>
+                      <h3 className="text-sm font-black text-[#04243b] uppercase tracking-tight">Documentos Recebidos (Entradas)</h3>
                     </div>
                   </div>
-                  {(organizadorEntradas.length > 0 || organizadorSaidas.length > 0) ? (
-                    <span className="bg-emerald-100/70 text-emerald-800 font-bold text-[10px] px-2.5 py-1 rounded-full border border-emerald-200/60">
-                      {organizadorEntradas.length + organizadorSaidas.length} itens
-                    </span>
-                  ) : (
-                    <span className="bg-slate-100 text-slate-500 font-semibold text-[10px] px-2.5 py-1 rounded-full border border-slate-200/60">
-                      Aguardando
-                    </span>
-                  )}
                 </div>
 
-                {/* Sefaz count for conversion */}
-                <div className="p-3.5 rounded-2xl border border-slate-150/80 bg-slate-50/60 flex items-center justify-between transition-all">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`p-2 rounded-xl text-white shrink-0 ${
-                      sefazFile ? 'bg-[#04243b]' : 'bg-slate-200 text-slate-400'
-                    }`}>
-                      <FileText className="w-4 h-4 text-white" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-xs font-bold text-slate-800 block">Notas SEFAZ (Chaves)</span>
-                      {sefazFile ? (
-                        <span className="text-[11px] text-emerald-700 font-bold block truncate">
-                          {sefazFile.name}
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-slate-400 font-medium block">Opcional para auditoria de chaves</span>
-                      )}
-                    </div>
-                  </div>
-                  {sefazFile ? (
-                    <span className="bg-[#04243b]/10 text-[#04243b] font-bold text-[10px] px-2.5 py-1 rounded-full border border-[#04243b]/20">
-                      {sefazFile.recordsCount} notas
-                    </span>
-                  ) : (
-                    <span className="bg-slate-100 text-slate-400 font-medium text-[10px] px-2.5 py-1 rounded-full border border-slate-200/60">
-                      Opcional
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-3 pt-2">
-              {organizadorEntradas.length > 0 || organizadorSaidas.length > 0 ? (
-                <button
-                  onClick={() => {
-                    setActiveOutputTab('organizador');
-                    const element = document.getElementById('workspace-output-cockpit');
-                    element?.scrollIntoView({ behavior: 'smooth' });
-                  }}
-                  className="w-full py-3.5 rounded-xl bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-black text-xs tracking-wider uppercase transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                <div
+                  onClick={() => fileInputCanalARef.current?.click()}
+                  onDragOver={handleCanalADragOver}
+                  onDragEnter={handleCanalADragEnter}
+                  onDragLeave={handleCanalADragLeave}
+                  onDrop={handleCanalADrop}
+                  className={`block border-2 border-dashed ${
+                    isDragOverCanalA
+                      ? 'border-emerald-600 bg-emerald-100/90 scale-[1.01] shadow-xs'
+                      : 'border-emerald-200 hover:border-emerald-500 bg-emerald-50/20 hover:bg-emerald-50/60'
+                  } p-5 rounded-xl text-center cursor-pointer transition-all select-none`}
                 >
-                  <FileSpreadsheet className="w-4 h-4 text-[#e4b35e]" />
-                  Visualizar Relatório Organizador & Impostos
-                </button>
-              ) : (
-                <div className="space-y-3">
-                  <button
-                    disabled
-                    className="w-full py-3.5 rounded-xl bg-slate-100 text-slate-400 font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 cursor-not-allowed border border-slate-200/60"
-                  >
-                    <FileSpreadsheet className="w-4 h-4 opacity-50" />
-                    Aguardando Relatório SIGA
-                  </button>
-                  <div className="text-center pt-1">
+                  <input
+                    ref={fileInputCanalARef}
+                    type="file"
+                    accept=".txt,.csv,.tsv"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleImportSigaChannelFile(file, 'ENTRADA');
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                  <div className="pointer-events-none">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-900 text-white flex items-center justify-center mx-auto mb-2 shadow-xs">
+                      <Upload className="w-4.5 h-4.5 text-emerald-300" />
+                    </div>
+                    <span className="text-xs font-black text-[#04243b] uppercase block">Importar Arquivo de Recebidos (Entradas)</span>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Clique ou arraste o relatório TXT/CSV (SIGA/SEFAZ)</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Status */}
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                <span className="font-bold text-slate-600">Total de Entradas Ingestadas:</span>
+                {organizadorEntradas.length > 0 ? (
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-black text-emerald-950 bg-emerald-50 px-3 py-1 rounded-xl border border-emerald-200">
+                      {organizadorEntradas.length} NFs (R$ {organizadorEntradas.reduce((acc, i) => acc + (i.vlrContabil || i.rProduto || i.rBaseIcms || (i as any).valor || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })})
+                    </span>
                     <button
-                      onClick={handleLoadSampleDatabase}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-[#04243b] transition-all cursor-pointer font-sans"
+                      onClick={() => setOrganizadorEntradas([])}
+                      className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg transition-colors cursor-pointer"
+                      title="Limpar Entradas"
                     >
-                      <span>⚡ Carregar relatórios de exemplo integrados</span>
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {activeMainModule === 'icms' && (
-          <div className="lg:col-span-5 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex flex-col justify-between space-y-4">
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 border-b border-slate-150 pb-3">
-                <RefreshCw className="w-5 h-5 text-[#e4b35e]" />
-                <h2 className="text-sm font-black text-[#04243b] uppercase tracking-tight font-sans">
-                  Painel de Confronto Direto
-                </h2>
-              </div>
-              
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Compare de forma bidirecional e automatizada o relatório de chaves da SEFAZ com os lançamentos de notas no sistema ERP. Identifique furos de numeração e erros de valor.
-              </p>
-
-              <div className="space-y-3">
-                {/* Relatório SEFAZ Required Row */}
-                <div className="p-3 rounded-2xl border border-slate-100 bg-slate-50 flex items-center justify-between">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className={`p-1.5 rounded-lg text-white font-extrabold shrink-0 ${
-                      sefazFile ? 'bg-[#04243b]' : 'bg-slate-200'
-                    }`}>
-                      <FileText className="w-3.5 h-3.5 text-white" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-xs font-bold text-slate-700 block font-sans">Relatório SEFAZ (Chaves)</span>
-                      {sefazFile ? (
-                        <span className="text-[10px] text-emerald-600 font-extrabold block truncate font-sans" title={sefazFile.name}>
-                          ✓ {sefazFile.name}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-red-500 font-bold block font-sans">✗ Aguardando relatório SEFAZ</span>
-                      )}
-                    </div>
-                  </div>
-                  {sefazFile && (
-                    <span className="bg-[#04243b]/10 text-[#04243b] font-mono text-[9px] font-bold px-2 py-0.5 rounded-full">
-                      {sefazFile.recordsCount} notas
-                    </span>
-                  )}
-                </div>
-
-                {/* Relatório ERP Required Row */}
-                <div className="p-3 rounded-2xl border border-slate-100 bg-slate-50 flex items-center justify-between">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className={`p-1.5 rounded-lg text-white font-extrabold shrink-0 ${
-                      erpFile ? 'bg-[#e4b35e]' : 'bg-slate-200'
-                    }`}>
-                      <FileText className="w-3.5 h-3.5 text-white" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-xs font-bold text-slate-700 block font-sans">Registros ERP (Sistema)</span>
-                      {erpFile ? (
-                        <span className="text-[10px] text-emerald-600 font-extrabold block truncate font-sans" title={erpFile.name}>
-                          ✓ {erpFile.name}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-red-500 font-bold block font-sans">✗ Aguardando relatório do ERP</span>
-                      )}
-                    </div>
-                  </div>
-                  {erpFile && (
-                    <span className="bg-[#e4b35e]/10 text-[#04243b] font-mono text-[9px] font-bold px-2 py-0.5 rounded-full">
-                      {erpFile.recordsCount} registros
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-3 pt-2">
-              {sefazFile && erpFile ? (
-                <button
-                  onClick={handleTriggerStrategicConciliation}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-[#04243b] to-[#0d3b5c] hover:from-[#031d30] hover:to-[#092d47] text-[#e4b35e] font-black text-xs tracking-wider uppercase transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all"
-                >
-                  <RefreshCw className="w-4 h-4 text-[#e4b35e]" />
-                  Confrontar Relatórios (SEFAZ x ERP)
-                </button>
-              ) : (
-                <div className="space-y-3">
-                  <button
-                    disabled
-                    className="w-full py-3 rounded-xl bg-slate-100 text-slate-400 font-extrabold text-xs tracking-wider uppercase flex items-center justify-center gap-2 cursor-not-allowed font-sans"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    Confrontar (Aguardando Relatórios)
-                  </button>
-                  <div className="text-center">
-                    <span className="text-[10px] text-slate-450 block mb-1 font-sans">Sem arquivos reais no momento para testar?</span>
-                    <button
-                      onClick={handleLoadSampleDatabase}
-                      className="inline-flex items-center gap-1 text-xs font-extrabold text-[#04243b] hover:text-[#e4b35e] transition-colors cursor-pointer font-sans"
-                    >
-                      ⚡ Carregar relatórios de exemplo integrados
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {activeMainModule === 'pis_cofins' && (
-          <div className="lg:col-span-5 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex flex-col justify-between space-y-4">
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 border-b border-slate-150 pb-3">
-                <Coins className="w-5 h-5 text-[#e4b35e]" />
-                <h2 className="text-sm font-black text-[#04243b] uppercase tracking-tight font-sans">
-                  Auditoria de PIS & COFINS
-                </h2>
-              </div>
-              
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Identifique divergências de base de cálculo do PIS/COFINS, alíquotas incorretas, e inconsistências de CST por produto no SPED Contribuições.
-              </p>
-
-              {/* Status information */}
-              <div className="space-y-3">
-                <div className="p-3 rounded-2xl border border-slate-100 bg-slate-50 flex items-center justify-between">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className={`p-1.5 rounded-lg text-white font-extrabold shrink-0 ${
-                      pisCofinsRows.length > 0 ? 'bg-indigo-600' : 'bg-slate-200'
-                    }`}>
-                      <FileText className="w-3.5 h-3.5 text-white" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-xs font-bold text-slate-700 block font-sans">Relatório PIS/COFINS</span>
-                      {pisCofinsRows.length > 0 ? (
-                        <span className="text-[10px] text-indigo-600 font-extrabold block truncate font-sans">
-                          ✓ {pisCofinsMetadata?.empresa || 'Empresa Identificada'}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-red-500 font-bold block font-sans">✗ Aguardando demonstrativo</span>
-                      )}
-                    </div>
-                  </div>
-                  {pisCofinsRows.length > 0 && (
-                    <span className="bg-indigo-50 text-indigo-700 font-mono text-[9px] font-bold px-2 py-0.5 rounded-full">
-                      {pisCofinsRows.length} registros
-                    </span>
-                  )}
-                </div>
-
-                {/* Audit Errors status */}
-                {pisCofinsRows.length > 0 && (
-                  <div className={`p-3 rounded-2xl border flex items-center justify-between ${
-                    pisCofinsAuditErrors.length > 0 ? 'border-red-100 bg-red-50/50 text-red-900' : 'border-emerald-100 bg-emerald-50/50 text-emerald-900'
-                  }`}>
-                    <div className="flex items-center gap-2">
-                      <AlertCircle className={`w-4 h-4 ${pisCofinsAuditErrors.length > 0 ? 'text-red-600 animate-pulse' : 'text-emerald-600'}`} />
-                      <span className="text-xs font-bold">
-                        {pisCofinsAuditErrors.length > 0 
-                          ? `${pisCofinsAuditErrors.length} divergências encontradas!`
-                          : 'Nenhuma divergência de cálculo!'
-                        }
-                      </span>
-                    </div>
-                    <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full ${
-                      pisCofinsAuditErrors.length > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'
-                    }`}>
-                      {pisCofinsAuditErrors.length > 0 ? 'ALERTA' : 'OK'}
-                    </span>
-                  </div>
+                ) : (
+                  <span className="text-slate-400 italic text-[11px]">Nenhum arquivo importado</span>
                 )}
               </div>
             </div>
 
-            <div className="space-y-3 pt-2">
-              {pisCofinsRows.length > 0 ? (
-                <button
-                  onClick={() => {
-                    setActiveOutputTab('pis_cofins');
-                    setActivePisCofinsSubTab('auditoria');
-                    const element = document.getElementById('workspace-output-cockpit');
-                    element?.scrollIntoView({ behavior: 'smooth' });
-                  }}
-                  className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs tracking-wider uppercase transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <ShieldAlert className="w-4 h-4 text-white" />
-                  Visualizar Erros de PIS/COFINS
-                </button>
-              ) : (
-                <div className="space-y-3">
-                  <button
-                    disabled
-                    className="w-full py-3 rounded-xl bg-slate-100 text-slate-400 font-extrabold text-xs tracking-wider uppercase flex items-center justify-center gap-2 cursor-not-allowed font-sans"
-                  >
-                    <Coins className="w-4 h-4" />
-                    Analisar PIS/COFINS (Aguardando Relatório)
-                  </button>
-                  <div className="text-center">
-                    <span className="text-[10px] text-slate-450 block mb-1 font-sans">Sem arquivos no momento?</span>
-                    <button
-                      onClick={handleLoadSampleDatabase}
-                      className="inline-flex items-center gap-1 text-xs font-extrabold text-[#04243b] hover:text-[#e4b35e] transition-colors cursor-pointer font-sans"
-                    >
-                      ⚡ Carregar relatórios de exemplo integrados
-                    </button>
+            {/* DOCUMENTOS EMITIDOS (SAÍDAS) */}
+            <div className="bg-white rounded-2xl p-5 border border-blue-200/80 shadow-2xs space-y-4 flex flex-col justify-between hover:border-blue-400 transition-all">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-blue-900 text-white rounded-xl shadow-xs">
+                      <ArrowUpRight className="w-5 h-5 text-[#e4b35e]" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-[#04243b] uppercase tracking-tight">Documentos Emitidos (Saídas)</h3>
+                    </div>
                   </div>
                 </div>
+
+                <div
+                  onClick={() => fileInputCanalBRef.current?.click()}
+                  onDragOver={handleCanalBDragOver}
+                  onDragEnter={handleCanalBDragEnter}
+                  onDragLeave={handleCanalBDragLeave}
+                  onDrop={handleCanalBDrop}
+                  className={`block border-2 border-dashed ${
+                    isDragOverCanalB
+                      ? 'border-blue-600 bg-blue-100/90 scale-[1.01] shadow-xs'
+                      : 'border-blue-200 hover:border-blue-500 bg-blue-50/20 hover:bg-blue-50/60'
+                  } p-5 rounded-xl text-center cursor-pointer transition-all select-none`}
+                >
+                  <input
+                    ref={fileInputCanalBRef}
+                    type="file"
+                    accept=".txt,.csv,.tsv"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleImportSigaChannelFile(file, 'SAIDA');
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                  <div className="pointer-events-none">
+                    <div className="w-9 h-9 rounded-xl bg-blue-900 text-white flex items-center justify-center mx-auto mb-2 shadow-xs">
+                      <Upload className="w-4.5 h-4.5 text-[#e4b35e]" />
+                    </div>
+                    <span className="text-xs font-black text-[#04243b] uppercase block">Importar Arquivo de Emitidos (Saídas)</span>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Clique ou arraste o relatório TXT/CSV (SIGA/SEFAZ)</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Status */}
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                <span className="font-bold text-slate-600">Total de Saídas Ingestadas:</span>
+                {organizadorSaidas.length > 0 ? (
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-black text-blue-950 bg-blue-50 px-3 py-1 rounded-xl border border-blue-200">
+                      {organizadorSaidas.length} NFs (R$ {organizadorSaidas.reduce((acc, i) => acc + (i.vlrContabil || i.rProduto || i.rBaseIcms || (i as any).valor || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })})
+                    </span>
+                    <button
+                      onClick={() => setOrganizadorSaidas([])}
+                      className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg transition-colors cursor-pointer"
+                      title="Limpar Saídas"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-slate-400 italic text-[11px]">Nenhum arquivo importado</span>
+                )}
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+      ) : (
+        /* Data Lake Panel for ICMS and PIS/COFINS modules */
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 animate-fadeIn">
+          {/* Data Lake status & files panel */}
+          <div 
+            onDragOver={handleDataLakeDragOver}
+            onDragEnter={handleDataLakeDragEnter}
+            onDragLeave={handleDataLakeDragLeave}
+            onDrop={handleDataLakeDrop}
+            className={`bg-white p-3.5 px-4 rounded-2xl border transition-all duration-300 flex flex-col space-y-2.5 shadow-2xs relative lg:col-span-12 ${
+              isDragOverDataLake
+                ? 'border-2 border-dashed border-[#e4b35e] bg-amber-50/40 ring-4 ring-[#e4b35e]/20 scale-[1.005]'
+                : 'border-slate-200'
+            }`}
+          >
+            <input
+              ref={dataLakeFileInputRef}
+              type="file"
+              multiple
+              accept=".csv,.txt,.xlsx,.xls,.ret"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  handleProcessMultipleFiles(Array.from(e.target.files));
+                  e.target.value = '';
+                }
+              }}
+            />
+
+            {activeMainModule === 'pis_cofins' ? (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-slate-150 pb-2">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <Coins className="w-4 h-4 text-[#e4b35e]" />
+                    <h2 className="text-xs font-black text-[#04243b] uppercase tracking-tight font-sans">
+                      Gestão de Dados & Relatórios PIS/COFINS
+                    </h2>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-sans">
+                    Gerencie os demonstrativos de apuração e acesse a central de auditoria de inconsistências.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => dataLakeFileInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-xl bg-[#04243b] hover:bg-[#083454] text-[#e4b35e] text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Importar Arquivo</span>
+                  </button>
+
+                  {pisCofinsRows.length === 0 && (
+                    <button
+                      onClick={handleLoadSampleDatabase}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#04243b] font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      ⚡ Carregar Exemplo
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="flex-grow">
+              {(() => {
+                const filesToShow = loadedFiles.filter(f => {
+                  if (activeMainModule === 'icms') return f.type === 'sefaz' || f.type === 'erp';
+                  if (activeMainModule === 'pis_cofins') return f.type === 'pis_cofins';
+                  return true;
+                });
+
+                if (filesToShow.length === 0) {
+                  return (
+                    <div 
+                      onClick={() => dataLakeFileInputRef.current?.click()}
+                      className={`flex flex-col items-center justify-center py-7 px-4 border-2 border-dashed rounded-2xl text-center transition-all cursor-pointer select-none ${
+                        isDragOverDataLake
+                          ? 'border-[#e4b35e] bg-amber-50/80 scale-[1.01] shadow-md'
+                          : 'border-slate-200 hover:border-[#04243b] bg-slate-50/50 hover:bg-slate-100/50'
+                      }`}
+                    >
+                      <div className="w-10 h-10 rounded-2xl bg-[#04243b] text-[#e4b35e] flex items-center justify-center mb-2.5 shadow-xs">
+                        <Upload className="w-5 h-5" />
+                      </div>
+                      {activeMainModule === 'icms' && (
+                        <>
+                          <h4 className="text-xs font-black text-[#04243b] uppercase tracking-wide font-sans">
+                            Clique ou arraste os relatórios SEFAZ e ERP aqui
+                          </h4>
+                          <p className="text-[11px] text-slate-500 mt-1 max-w-sm leading-relaxed font-sans">
+                            Carregue a planilha SEFAZ (CSV/TXT) e o extrato do ERP (CSV/TXT) para realizar o confronto de notas.
+                          </p>
+                        </>
+                      )}
+                      {activeMainModule === 'pis_cofins' && (
+                        <>
+                          <h4 className="text-xs font-black text-[#04243b] uppercase tracking-wide font-sans">
+                            Clique ou arraste os relatórios de PIS/COFINS aqui
+                          </h4>
+                          <p className="text-[11px] text-slate-500 mt-1 max-w-sm leading-relaxed font-sans">
+                            Importe o relatório de apuração de PIS/COFINS (CSV/TXT) para gerar os demonstrativos.
+                          </p>
+                        </>
+                      )}
+                      <span className="text-[10px] text-slate-400 mt-2 font-mono">Formatos aceitos: .csv, .txt, .xlsx, .xls</span>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-2">
+                      {filesToShow.map((file, idx) => (
+                        <div key={`file-dl-${idx}`} className="flex items-center justify-between p-1.5 px-2.5 rounded-lg border border-slate-200 bg-slate-50/90 hover:bg-slate-100/80 transition-colors">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className={`p-1.5 rounded-md text-white font-extrabold shrink-0 ${
+                              file.type === 'sefaz' ? 'bg-[#04243b]' : file.type === 'erp' ? 'bg-[#e4b35e]' : 'bg-indigo-600'
+                            }`}>
+                              <FileText className="w-3.5 h-3.5 text-white" />
+                            </div>
+                            <div className="min-w-0">
+                              <span className="font-bold text-slate-700 text-[11px] block truncate" title={file.name}>
+                                {file.name}
+                              </span>
+                              {file.type === 'pis_cofins' && pisCofinsMetadata?.empresa && (
+                                <span className="text-[9px] text-indigo-700 font-bold block truncate">
+                                  {pisCofinsMetadata.empresa} ({pisCofinsRows.length} reg)
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {file.type === 'sefaz' && sefazDuplicates.length > 0 && (
+                              <span className="text-[9px] font-black bg-red-100 text-red-700 px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse" title="Duplicidades detectadas no relatório">
+                                <AlertTriangle className="w-2.5 h-2.5 text-red-600" />
+                                DUPLICADO
+                              </span>
+                            )}
+                            <button
+                              onClick={() => handleDeleteFile(file.name, file.type)}
+                              className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded transition-colors cursor-pointer"
+                              title="Remover arquivo"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. MULTI-MODULE OUTPUT AREA & TABS SELECTOR */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden" id="workspace-output-cockpit">
+        
+        {/* Quick Module-specific export actions header (if active) */}
+        {(activeOutputTab === 'confronto' && auditSummary) ||
+         (activeOutputTab === 'organizador' && (organizadorEntradas.length > 0 || organizadorSaidas.length > 0)) ||
+         (activeOutputTab === 'auditoria_siga' && (organizadorEntradas.length > 0 || organizadorSaidas.length > 0)) ||
+         (activeOutputTab === 'conversor_siga' && sefazRows.length > 0) ? (
+          <div className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex flex-wrap items-center justify-end gap-3">
+            <div className="flex gap-2">
+              {activeOutputTab === 'confronto' && auditSummary && (
+                <button
+                  onClick={handleExportAuditExcelUnified}
+                  className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-lg shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-white" />
+                  Exportar Confronto Excel
+                </button>
+              )}
+
+              {activeOutputTab === 'organizador' && (organizadorEntradas.length > 0 || organizadorSaidas.length > 0) && (
+                <button
+                  onClick={handleExportSigaTaxExcel}
+                  className="px-3.5 py-1.5 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-extrabold text-[11px] tracking-wide uppercase rounded-lg shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer border border-[#e4b35e]/30"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#e4b35e]" />
+                  Exportar Impostos Excel
+                </button>
+              )}
+
+              {activeOutputTab === 'auditoria_siga' && (organizadorEntradas.length > 0 || organizadorSaidas.length > 0) && (
+                <button
+                  onClick={() => exportSigaAuditExcel({ entradas: organizadorEntradas, saidas: organizadorSaidas, metadata: organizadorMetadata })}
+                  className="px-3.5 py-1.5 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-extrabold text-[11px] tracking-wide uppercase rounded-lg shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer border border-[#e4b35e]/30"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#e4b35e]" />
+                  Exportar Excel Sanitizado
+                </button>
+              )}
+
+              {activeOutputTab === 'conversor_siga' && sefazRows.length > 0 && (
+                <button
+                  onClick={handleExportConversorExcel}
+                  className="px-3.5 py-1.5 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-extrabold text-[11px] tracking-wide uppercase rounded-xl shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer border border-[#e4b35e]/30"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#e4b35e]" />
+                  Exportar Notas Excel
+                </button>
               )}
             </div>
           </div>
-        )}
-
-      </div>
-
-      {/* 4. MULTI-MODULE OUTPUT AREA & TABS SELECTOR */}
-      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden" id="workspace-output-cockpit">
-        
-        {/* Module Header Tabs Selector - Dynamically filters tabs based on imported file capabilities */}
-        <div className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap gap-2">
-            
-            {/* Tab 1: Confronto */}
-            {activeMainModule === 'icms' && availableTabs.includes('confronto') && (
-              <button
-                onClick={() => setActiveOutputTab('confronto')}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
-                  activeOutputTab === 'confronto'
-                    ? 'bg-[#04243b] text-[#e4b35e] shadow-sm'
-                    : 'text-slate-500 hover:text-[#04243b] hover:bg-slate-100'
-                }`}
-              >
-                <Table className="w-4.5 h-4.5" />
-                Confronto Bidirecional
-              </button>
-            )}
-
-            {/* Tab 2: Organizador */}
-            {activeMainModule === 'siga' && availableTabs.includes('organizador') && (
-              <button
-                onClick={() => setActiveOutputTab('organizador')}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
-                  activeOutputTab === 'organizador'
-                    ? 'bg-[#04243b] text-[#e4b35e] shadow-sm'
-                    : 'text-slate-500 hover:text-[#04243b] hover:bg-slate-100'
-                }`}
-              >
-                <FileSpreadsheet className="w-4.5 h-4.5" />
-                Organizador de Impostos
-              </button>
-            )}
-
-            {/* Tab 3: Integridade */}
-            {activeMainModule === 'icms' && availableTabs.includes('integridade') && (
-              <button
-                onClick={() => setActiveOutputTab('integridade')}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
-                  activeOutputTab === 'integridade'
-                    ? 'bg-[#04243b] text-[#e4b35e] shadow-sm'
-                    : 'text-slate-500 hover:text-[#04243b] hover:bg-slate-100'
-                }`}
-              >
-                <ShieldAlert className="w-4.5 h-4.5" />
-                Integridade & Sequência
-              </button>
-            )}
-
-            {/* Tab 4: Conversor NF-e/NFC-e key list */}
-            {activeMainModule === 'siga' && availableTabs.includes('conversor_siga') && (
-              <button
-                onClick={() => setActiveOutputTab('conversor_siga')}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
-                  activeOutputTab === 'conversor_siga'
-                    ? 'bg-[#04243b] text-[#e4b35e] shadow-sm'
-                    : 'text-slate-500 hover:text-[#04243b] hover:bg-slate-100'
-                }`}
-              >
-                <CheckCircle2 className="w-4.5 h-4.5" />
-                Conversor NF-e / NFC-e SIGA
-              </button>
-            )}
-
-            {/* Tab 5: PIS/COFINS Mapper */}
-            {activeMainModule === 'pis_cofins' && availableTabs.includes('pis_cofins') && (
-              <button
-                onClick={() => setActiveOutputTab('pis_cofins')}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
-                  activeOutputTab === 'pis_cofins'
-                    ? 'bg-[#04243b] text-[#e4b35e] shadow-sm'
-                    : 'text-slate-500 hover:text-[#04243b] hover:bg-slate-100'
-                }`}
-              >
-                <Coins className="w-4.5 h-4.5" />
-                Mapeador PIS / COFINS
-              </button>
-            )}
-
-          </div>
-
-          {/* Quick Module-specific export actions */}
-          <div className="flex gap-2">
-            {activeOutputTab === 'confronto' && auditSummary && (
-              <button
-                onClick={handleExportAuditExcelUnified}
-                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl shadow-xs hover:shadow-md transition-all flex items-center gap-2 cursor-pointer"
-              >
-                <Download className="w-4 h-4 text-white" />
-                Exportar Confronto Excel
-              </button>
-            )}
-
-            {activeOutputTab === 'organizador' && (organizadorEntradas.length > 0 || organizadorSaidas.length > 0) && (
-              <button
-                onClick={handleExportSigaTaxExcel}
-                className="px-4 py-2 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-extrabold text-[11px] tracking-wide uppercase rounded-xl shadow-xs hover:shadow-md transition-all flex items-center gap-2 cursor-pointer border border-[#e4b35e]/30"
-              >
-                <Download className="w-4 h-4 text-[#e4b35e]" />
-                Exportar Impostos Excel
-              </button>
-            )}
-
-            {activeOutputTab === 'conversor_siga' && sefazRows.length > 0 && (
-              <button
-                onClick={handleExportConversorExcel}
-                className="px-4 py-2 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-extrabold text-[11px] tracking-wide uppercase rounded-xl shadow-xs hover:shadow-md transition-all flex items-center gap-2 cursor-pointer border border-[#e4b35e]/30"
-              >
-                <Download className="w-4 h-4 text-[#e4b35e]" />
-                Exportar Notas Excel
-              </button>
-            )}
-
-            {activeOutputTab === 'pis_cofins' && pisCofinsRows.length > 0 && (
-              <button
-                onClick={handleExportPisCofinsExcel}
-                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl shadow-xs hover:shadow-md transition-all flex items-center gap-2 cursor-pointer"
-              >
-                <Download className="w-4 h-4 text-white" />
-                Exportar PIS/COFINS Excel
-              </button>
-            )}
-          </div>
-        </div>
+        ) : null}
 
         {/* Sub-Interface active views */}
-        <div className="p-6">
+        <div className="p-2 sm:p-3">
           
           {/* ======================================================== */}
           {/* MODULE 1: CONFRONTO BIDIRECIONAL SEFAZ vs ERP */}
           {/* ======================================================== */}
           {activeOutputTab === 'confronto' && (
             <div className="space-y-6">
+
+              {/* Module 2 ICMS Navigation & Content Header */}
+              <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 bg-slate-100 p-2 rounded-2xl border border-slate-200">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setIcmsMainTab('relatorio')}
+                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                      icmsMainTab === 'relatorio'
+                        ? 'bg-[#04243b] text-[#e4b35e] shadow-md'
+                        : 'bg-white/60 text-slate-600 hover:bg-white hover:text-[#04243b]'
+                    }`}
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-[#e4b35e]" />
+                    <span>1. Relatório</span>
+                  </button>
+                  <button
+                    onClick={() => setIcmsMainTab('auditoria')}
+                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                      icmsMainTab === 'auditoria'
+                        ? 'bg-[#04243b] text-[#e4b35e] shadow-md'
+                        : 'bg-white/60 text-slate-600 hover:bg-white hover:text-[#04243b]'
+                    }`}
+                  >
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <span>2. Auditoria (Confronto SIGA / SEFAZ)</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0 justify-end">
+                  {icmsMainTab === 'relatorio' ? (
+                    <button
+                      onClick={() => exportFormattedIcmsExcel(erpIcmsItems)}
+                      className="px-5 py-2.5 bg-[#e4b35e] hover:bg-[#d8a34a] text-[#04243b] font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-md hover:shadow-lg flex items-center gap-2 cursor-pointer"
+                      title="Exportar Relatório Formatado Excel"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>Exportar Relatório Excel</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleExportSigaConfrontationExcel}
+                      disabled={sigaSefazConfrontation.items.length === 0}
+                      className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-md hover:shadow-lg flex items-center gap-2 cursor-pointer border border-emerald-500/30"
+                      title="Exportar Confronto SIGA / SEFAZ vs Sistema"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>Exportar Inconsistências (Excel)</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* VIEW 1: RELATÓRIO */}
+              {erpIcmsItems.length > 0 && icmsMainTab === 'relatorio' && (
+                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs space-y-4 p-4">
+                  {/* Sub-tabs selector for ICMS (Entradas / Saídas) */}
+                  <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center gap-3 border-b border-slate-150 pb-3">
+                    <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl">
+                      <button
+                        onClick={() => {
+                          setIcmsActiveSubTab('entradas');
+                          setIcmsCurrentPage(1);
+                        }}
+                        className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                          icmsActiveSubTab === 'entradas'
+                            ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
+                            : 'text-slate-600 hover:text-[#04243b] hover:bg-slate-200/60'
+                        }`}
+                      >
+                        <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-500" />
+                        <span>Entradas</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
+                          icmsActiveSubTab === 'entradas' ? 'bg-[#e4b35e] text-[#04243b]' : 'bg-slate-200 text-slate-700'
+                        }`}>
+                          {icmsEntradasCompleto.length}
+                        </span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setIcmsActiveSubTab('saidas');
+                          setIcmsCurrentPage(1);
+                        }}
+                        className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                          icmsActiveSubTab === 'saidas'
+                            ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
+                            : 'text-slate-600 hover:text-[#04243b] hover:bg-slate-200/60'
+                        }`}
+                      >
+                        <ArrowUpRight className="w-3.5 h-3.5 text-blue-500" />
+                        <span>Saídas</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
+                          icmsActiveSubTab === 'saidas' ? 'bg-[#e4b35e] text-[#04243b]' : 'bg-slate-200 text-slate-700'
+                        }`}>
+                          {icmsSaidasCompleto.length}
+                        </span>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="relative w-full sm:w-72">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          value={icmsSearchTerm}
+                          onChange={(e) => {
+                            setIcmsSearchTerm(e.target.value);
+                            setIcmsCurrentPage(1);
+                          }}
+                          placeholder="Buscar por produto, CFOP, CST..."
+                          className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-[#04243b]"
+                        />
+                      </div>
+                      <div className="text-xs text-slate-500 font-bold whitespace-nowrap">
+                        Exibindo {paginatedIcmsItems.length} de {activeFilteredIcmsList.length} registros
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead className="bg-[#04243b] text-[#e4b35e] font-bold uppercase text-[10px]">
+                        <tr>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">NF</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">Data</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">CNPJ / CPF Emitente</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">CFOP</th>
+                          <th className="py-2.5 px-3 text-left whitespace-nowrap min-w-[200px]">Descrição do Produto / Item</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">NCM</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">UN</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">Quantidade</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">R$ Unitário</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">R$ Produto</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">Desconto R$</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">Valor Contábil R$</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">CST ICMS</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">R$ Base ICMS</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">% ICMS</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">R$ ICMS Declarado</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">% IPI</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">R$ IPI</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {(paginatedIcmsItems as ErpIcmsReportItem[]).map((item, idx) => (
+                          <tr key={item.id || `icms-${idx}`} className="hover:bg-slate-50 transition-colors">
+                            <td className="py-2 px-3 text-center font-bold text-[#04243b] whitespace-nowrap">{item.notaFiscal}</td>
+                            <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.dataEmissao}</td>
+                            <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{formatCnpjCpf(item.cnpjEmitente)}</td>
+                            <td className="py-2 px-3 text-center text-slate-700 font-bold whitespace-nowrap">{item.cfop}</td>
+                            <td className="py-2 px-3 text-left font-sans text-slate-800 max-w-xs truncate" title={item.produto}>
+                              {item.produto}
+                            </td>
+                            <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.ncm || '-'}</td>
+                            <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.unidade || 'UN'}</td>
+                            <td className="py-2 px-3 text-center font-bold text-slate-800 whitespace-nowrap">
+                              {(item.quantidade || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
+                              R$ {(item.valorUnitario || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                            </td>
+                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
+                              R$ {(item.valorProduto || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
+                              R$ {(item.desconto || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-2 px-3 text-center font-bold text-slate-800 whitespace-nowrap">
+                              R$ {(item.valorContabil || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.cstIcms || '-'}</td>
+                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
+                              R$ {(item.baseCalculoIcms || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">{item.aliquotaIcms || 0}%</td>
+                            <td className="py-2 px-3 text-center font-bold text-emerald-700 whitespace-nowrap">
+                              R$ {(item.valorIcms || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">{item.aliquotaIpi || 0}%</td>
+                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
+                              R$ {(item.valorIpi || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {totalIcmsPages > 1 && (
+                    <div className="flex justify-between items-center pt-2 text-xs">
+                      <button
+                        disabled={icmsCurrentPage === 1}
+                        onClick={() => setIcmsCurrentPage(p => Math.max(1, p - 1))}
+                        className="px-3 py-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-50 cursor-pointer"
+                      >
+                        Anterior
+                      </button>
+                      <span className="font-bold text-slate-600">
+                        Página {icmsCurrentPage} de {totalIcmsPages}
+                      </span>
+                      <button
+                        disabled={icmsCurrentPage === totalIcmsPages}
+                        onClick={() => setIcmsCurrentPage(p => Math.min(totalIcmsPages, p + 1))}
+                        className="px-3 py-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-50 cursor-pointer"
+                      >
+                        Próxima
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* VIEW 2: AUDITORIA — CONFRONTO COM RELATÓRIO SIGA SEFAZ */}
+              {icmsMainTab === 'auditoria' && (
+                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs space-y-6 p-6">
+                  
+                  {/* Hidden File Inputs for Import Buttons */}
+                  <input
+                    type="file"
+                    ref={sefazSaidasAuditFileInputRef}
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        handleImportSigaChannelFile(e.target.files[0], 'SAIDA');
+                        e.target.value = '';
+                      }
+                    }}
+                    className="hidden"
+                    accept=".txt,.csv,.xlsx,.xls"
+                  />
+                  <input
+                    type="file"
+                    ref={sefazEntradasAuditFileInputRef}
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        handleImportSigaChannelFile(e.target.files[0], 'ENTRADA');
+                        e.target.value = '';
+                      }
+                    }}
+                    className="hidden"
+                    accept=".txt,.csv,.xlsx,.xls"
+                  />
+                  <input
+                    type="file"
+                    ref={sigaSefazAuditFileInputRef}
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        handleProcessMultipleFiles(Array.from(e.target.files));
+                        e.target.value = '';
+                      }
+                    }}
+                    className="hidden"
+                    accept=".txt,.csv,.xlsx,.xls"
+                    multiple
+                  />
+
+                  {/* Main Actions Bar */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-3 pb-4 border-b border-slate-200">
+                    {/* Action Buttons & File Status Badge */}
+                    <div className="flex items-center gap-2.5 shrink-0 flex-wrap w-full sm:w-auto justify-end">
+                      <button
+                        type="button"
+                        onClick={() => sefazEntradasAuditFileInputRef.current?.click()}
+                        className="px-3.5 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-800 text-xs font-bold transition-all flex items-center gap-2 border border-sky-200 cursor-pointer shadow-2xs"
+                        title="Importar relatório de Entradas/Compras da SEFAZ"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-sky-600" />
+                        <span>Importar SEFAZ (Entradas)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => sefazSaidasAuditFileInputRef.current?.click()}
+                        className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold transition-all flex items-center gap-2 border border-amber-200 cursor-pointer shadow-2xs"
+                        title="Importar relatório de Saídas/Vendas da SEFAZ"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Importar SEFAZ (Saídas)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowLoadedFilesModal(true)}
+                        className="flex items-center gap-2 text-xs bg-slate-800 hover:bg-slate-900 text-white rounded-xl px-3.5 py-2 font-bold shadow-2xs transition-all cursor-pointer border border-slate-700"
+                        title="Clique para ver os relatórios importados"
+                      >
+                        <FileText className="w-4 h-4 text-[#e4b35e]" />
+                        <span>Relatórios ({loadedFiles.length})</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Clean Structured Filter Toolbar */}
+                  <div className="bg-slate-50/90 p-3 rounded-2xl border border-slate-200 flex flex-col gap-3 shadow-2xs">
+                    {/* Top Row: Operation Mode Switch & Search Input */}
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                      {/* Entradas / Saídas Segmented Switch */}
+                      <div className="flex items-center bg-slate-200/80 p-1 rounded-xl text-xs font-bold shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => { setSigaConfrontTipoFilter('entrada'); setSigaConfrontPage(1); }}
+                          className={`px-4 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                            sigaConfrontTipoFilter === 'entrada'
+                              ? 'bg-sky-700 text-white shadow-2xs font-extrabold'
+                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-300/40'
+                          }`}
+                        >
+                          <ArrowDownLeft className="w-4 h-4 text-sky-200" />
+                          <span>Entradas (Compras)</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => { setSigaConfrontTipoFilter('saida'); setSigaConfrontPage(1); }}
+                          className={`px-4 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                            sigaConfrontTipoFilter === 'saida'
+                              ? 'bg-amber-700 text-white shadow-2xs font-extrabold'
+                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-300/40'
+                          }`}
+                        >
+                          <ArrowUpRight className="w-4 h-4 text-amber-200" />
+                          <span>Saídas (Vendas)</span>
+                        </button>
+                      </div>
+
+                      {/* Search Input Box */}
+                      <div className="relative w-full sm:w-80">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                        <input
+                          type="text"
+                          value={sigaConfrontSearch}
+                          onChange={(e) => { setSigaConfrontSearch(e.target.value); setSigaConfrontPage(1); }}
+                          placeholder="Buscar por nota, CNPJ, cliente ou chave..."
+                          className="w-full pl-8 pr-8 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-medium text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#04243b]"
+                        />
+                        {sigaConfrontSearch && (
+                          <button 
+                            type="button"
+                            onClick={() => setSigaConfrontSearch('')}
+                            className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Bottom Row: Status Filter Chips */}
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200/70 text-xs">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mr-1">
+                        Inconsistências:
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => { setSigaConfrontFilterStatus('all'); setSigaConfrontPage(1); }}
+                        className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                          sigaConfrontFilterStatus === 'all'
+                            ? 'bg-[#04243b] text-white shadow-2xs font-extrabold'
+                            : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                        }`}
+                      >
+                        Todas ({sigaConfrontStatusCounts.total})
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => { setSigaConfrontFilterStatus('falta_sistema'); setSigaConfrontPage(1); }}
+                        className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          sigaConfrontFilterStatus === 'falta_sistema'
+                            ? 'bg-red-600 text-white shadow-2xs'
+                            : 'bg-white text-red-700 hover:bg-red-50 border border-red-200'
+                        }`}
+                      >
+                        <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
+                        <span>Faltam no Sistema ({sigaConfrontStatusCounts.faltaSistema})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => { setSigaConfrontFilterStatus('falta_sefaz'); setSigaConfrontPage(1); }}
+                        className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          sigaConfrontFilterStatus === 'falta_sefaz'
+                            ? 'bg-amber-600 text-white shadow-2xs'
+                            : 'bg-white text-amber-800 hover:bg-amber-50 border border-amber-200'
+                        }`}
+                      >
+                        <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                        <span>Faltam na SEFAZ ({sigaConfrontStatusCounts.faltaSefaz})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => { setSigaConfrontFilterStatus('divergencia'); setSigaConfrontPage(1); }}
+                        className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          sigaConfrontFilterStatus === 'divergencia'
+                            ? 'bg-yellow-600 text-white shadow-2xs'
+                            : 'bg-white text-yellow-800 hover:bg-yellow-50 border border-yellow-200'
+                        }`}
+                      >
+                        <span className="w-2 h-2 rounded-full bg-yellow-500 shrink-0" />
+                        <span>Divergência de Valor ({sigaConfrontStatusCounts.divergencia})</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Table of Inconsistencies & Concordances */}
+                  {filteredSigaConfrontItems.length === 0 ? (
+                    <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-300 space-y-2">
+                      <Info className="w-8 h-8 text-slate-400 mx-auto" />
+                      <p className="text-xs font-bold text-slate-600">Nenhuma nota fiscal encontrada para o filtro selecionado.</p>
+                      <p className="text-[11px] text-slate-400">Importe os relatórios SIGA/SEFAZ ou ICMS (Sistema) para ver os dados.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-100/90 text-slate-700 uppercase font-extrabold text-[10px] border-b border-slate-200">
+                            <tr>
+                              <th className="py-3 px-3">Status / Inconsistência</th>
+                              <th className="py-3 px-3">Nota Fiscal</th>
+                              <th className="py-3 px-3 text-center">Série</th>
+                              <th className="py-3 px-3">Data Emissão</th>
+                              <th className="py-3 px-3">Cliente / Fornecedor</th>
+                              <th className="py-3 px-3 text-right">Valor SEFAZ</th>
+                              <th className="py-3 px-3 text-right">Valor Sistema</th>
+                              <th className="py-3 px-3 text-right">Diferença</th>
+                              <th className="py-3 px-3">Diagnóstico / Ação Recomendada</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 font-sans">
+                            {paginatedSigaConfrontItems.map((item) => {
+                              let badgeBg = 'bg-emerald-100 text-emerald-900 border-emerald-200';
+                              if (item.status === 'FALTA_SISTEMA') badgeBg = 'bg-red-100 text-red-900 border-red-200 font-bold';
+                              if (item.status === 'FALTA_SEFAZ') badgeBg = 'bg-amber-100 text-amber-900 border-amber-200 font-bold';
+                              if (item.status === 'DIVERGENCIA_VALOR') badgeBg = 'bg-yellow-100 text-yellow-900 border-yellow-200 font-bold';
+
+                              return (
+                                <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                                  <td className="py-2.5 px-3 whitespace-nowrap">
+                                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] border ${badgeBg}`}>
+                                      {item.status === 'FALTA_SISTEMA' && <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />}
+                                      {item.status === 'FALTA_SEFAZ' && <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
+                                      {item.status === 'DIVERGENCIA_VALOR' && <Coins className="w-3.5 h-3.5 text-yellow-600 shrink-0" />}
+                                      {item.status === 'CONCILIADO' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                                      <span>{item.statusLabel}</span>
+                                    </span>
+                                  </td>
+
+                                  <td className="py-2.5 px-3 font-mono font-bold text-slate-900 whitespace-nowrap">
+                                    {item.numeroNota}
+                                  </td>
+
+                                  <td className="py-2.5 px-3 text-center font-mono text-slate-700 whitespace-nowrap">
+                                    {item.serie}
+                                  </td>
+
+                                  <td className="py-2.5 px-3 text-slate-700 whitespace-nowrap">
+                                    {item.dataEmissao}
+                                  </td>
+
+                                  <td className="py-2.5 px-3 text-slate-800 font-medium max-w-[200px] truncate" title={item.fornecedorOuCliente}>
+                                    {item.fornecedorOuCliente}
+                                  </td>
+
+                                  <td className={`py-2.5 px-3 text-right font-mono font-bold whitespace-nowrap ${
+                                    item.constaNaSefaz ? 'text-slate-900' : 'text-slate-300'
+                                  }`}>
+                                    {item.constaNaSefaz 
+                                      ? `R$ ${item.valorSefaz.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` 
+                                      : '-'
+                                    }
+                                  </td>
+
+                                  <td className={`py-2.5 px-3 text-right font-mono font-bold whitespace-nowrap ${
+                                    item.constaNoSistema ? 'text-slate-900' : 'text-slate-300'
+                                  }`}>
+                                    {item.constaNoSistema 
+                                      ? `R$ ${item.valorSistema.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` 
+                                      : '-'
+                                    }
+                                  </td>
+
+                                  <td className="py-2.5 px-3 text-right font-mono font-black text-slate-900 whitespace-nowrap">
+                                    {item.valorDivergencia > 0 ? (
+                                      <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded border border-red-100">
+                                        R$ {item.valorDivergencia.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      </span>
+                                    ) : (
+                                      <span className="text-emerald-600">R$ 0,00</span>
+                                    )}
+                                  </td>
+
+                                  <td className="py-2.5 px-3 text-slate-600 text-[11px] leading-snug">
+                                    {item.acaoRecomendada}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Pagination Controls */}
+                      {totalSigaConfrontPages > 1 && (
+                        <div className="flex justify-between items-center pt-2 text-xs">
+                          <button
+                            disabled={sigaConfrontPage === 1}
+                            onClick={() => setSigaConfrontPage(p => Math.max(1, p - 1))}
+                            className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-50 cursor-pointer font-bold text-slate-700 flex items-center gap-1"
+                          >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                            <span>Anterior</span>
+                          </button>
+                          <span className="font-extrabold text-slate-600">
+                            Página {sigaConfrontPage} de {totalSigaConfrontPages} ({filteredSigaConfrontItems.length} registros)
+                          </span>
+                          <button
+                            disabled={sigaConfrontPage === totalSigaConfrontPages}
+                            onClick={() => setSigaConfrontPage(p => Math.min(totalSigaConfrontPages, p + 1))}
+                            className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-50 cursor-pointer font-bold text-slate-700 flex items-center gap-1"
+                          >
+                            <span>Próxima</span>
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               {sefazDuplicates.length > 0 && (
                 <div className="bg-red-50 border border-red-200 rounded-2xl p-5 text-red-900 flex flex-col md:flex-row gap-4 justify-between items-start md:items-center shadow-xs animate-fadeIn">
                   <div className="flex gap-3 min-w-0">
@@ -2391,17 +4105,7 @@ export function AuditoriaFiscalWorkspace() {
                 </div>
               )}
 
-              {!auditSummary ? (
-                <div className="text-center py-16 text-slate-400 space-y-4">
-                  <Table className="w-12 h-12 text-slate-300 mx-auto" />
-                  <div className="space-y-1">
-                    <h3 className="text-sm font-bold text-slate-600 font-sans">Sem Confronto Executado</h3>
-                    <p className="text-xs text-slate-400 max-w-sm mx-auto font-sans">
-                      Carregue um arquivo SEFAZ de notas e um Extrato ERP contábil no painel acima para calcular o cruzamento de dados.
-                    </p>
-                  </div>
-                </div>
-              ) : (
+              {!auditSummary ? null : (
                 <div className="space-y-6 animate-fadeIn">
                   
                   {/* Summary Metric Cards */}
@@ -2537,20 +4241,15 @@ export function AuditoriaFiscalWorkspace() {
           {activeOutputTab === 'organizador' && (
             <div className="space-y-6">
               {organizadorEntradas.length === 0 && organizadorSaidas.length === 0 ? (
-                <div className="text-center py-16 text-slate-400 space-y-4">
+                <div className="text-center py-16 text-slate-400 space-y-2">
                   <FileSpreadsheet className="w-12 h-12 text-slate-300 mx-auto" />
-                  <div className="space-y-1">
-                    <h3 className="text-sm font-bold text-slate-600 font-sans">Sem Relatório SIGA Carregado</h3>
-                    <p className="text-xs text-slate-400 max-w-sm mx-auto font-sans">
-                      Arraste ou selecione o arquivo semicolon-delimited de movimentação SIGA no painel do Data Lake para visualizar o relatório.
-                    </p>
-                  </div>
+                  <h3 className="text-sm font-bold text-slate-600 font-sans">Sem Relatório SIGA Carregado</h3>
                 </div>
               ) : (
                 <div className="space-y-6 animate-fadeIn font-sans">
                   
                   {/* Top Stats of Organizador */}
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 flex flex-col justify-between">
                       <span className="text-[10px] uppercase font-bold text-emerald-800">Total de Entradas</span>
                       <span className="text-xl font-black text-emerald-950 font-mono mt-1">
@@ -2565,22 +4264,6 @@ export function AuditoriaFiscalWorkspace() {
                         R$ {(orgStats?.saidas?.vlrContabil ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                       </span>
                       <span className="text-[10px] text-slate-500 mt-1">{organizadorSaidas.length} lançamentos fiscais</span>
-                    </div>
-
-                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col justify-between">
-                      <span className="text-[10px] uppercase font-bold text-slate-500">Saldo Operacional</span>
-                      <span className="text-xl font-black text-slate-800 font-mono mt-1">
-                        R$ {((orgStats?.saidas?.vlrContabil ?? 0) - (orgStats?.entradas?.vlrContabil ?? 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </span>
-                      <span className="text-[10px] text-slate-500 mt-1">Diferença Saídas - Entradas</span>
-                    </div>
-
-                    <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 flex flex-col justify-between">
-                      <span className="text-[10px] uppercase font-bold text-amber-800">Carga Tributária Total</span>
-                      <span className="text-xl font-black text-amber-950 font-mono mt-1">
-                        R$ {((orgStats?.entradas?.totalTaxes ?? 0) + (orgStats?.saidas?.totalTaxes ?? 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </span>
-                      <span className="text-[10px] text-slate-500 mt-1">ICMS + IPI identificados</span>
                     </div>
                   </div>
 
@@ -2602,126 +4285,86 @@ export function AuditoriaFiscalWorkspace() {
                     >
                       Saídas (📤 {organizadorSaidas.length} NFs)
                     </button>
-                    <button
-                      onClick={() => { setActiveOrgSubTab('auditoria'); setOrgCurrentPage(1); }}
-                      className={`px-4 py-2 border-b-2 text-xs font-bold transition-all cursor-pointer ${
-                        activeOrgSubTab === 'auditoria' ? 'border-[#04243b] text-[#04243b]' : 'border-transparent text-slate-400 hover:text-slate-600'
-                      }`}
-                    >
-                      Resumo Fiscal & Impostos CST
-                    </button>
                   </div>
 
                   {/* Standard Search, Pagination and Rows display when viewing Entradas / Saídas list */}
-                  {activeOrgSubTab !== 'auditoria' ? (
-                    <div className="space-y-4">
-                      
-                      {/* Controls toolbar */}
-                      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150 flex flex-col md:flex-row gap-3 items-center justify-between">
-                        <div className="relative w-full md:w-80">
-                          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                          <input
-                            type="text"
-                            value={orgSearchTerm}
-                            onChange={(e) => { setOrgSearchTerm(e.target.value); setOrgCurrentPage(1); }}
-                            placeholder="Buscar nota, produto, CNPJ, NCM..."
-                            className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-[#04243b]"
-                          />
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-3">
-                          
-                          {/* Aggregate Duplicates Switch */}
-                          <label className="inline-flex items-center gap-2 cursor-pointer bg-white border border-slate-200 px-3 py-1 rounded-xl transition-all h-[32px] select-none shadow-2xs">
-                            <input 
-                              type="checkbox" 
-                              checked={groupDuplicates} 
-                              onChange={(e) => { setGroupDuplicates(e.target.checked); setOrgCurrentPage(1); }}
-                              className="sr-only peer"
-                            />
-                            <div className="relative w-7 h-4 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-600"></div>
-                            <span className="text-[11px] font-bold text-slate-600 flex items-center gap-1 font-sans">
-                              Somar Duplicados
-                            </span>
-                          </label>
-
-                          <select
-                            value={orgCfopFilter}
-                            onChange={(e) => { setOrgCfopFilter(e.target.value); setOrgCurrentPage(1); }}
-                            className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-700 font-bold"
-                          >
-                            <option value="all">Filtrar CFOP ({uniqueCfops.length})</option>
-                            {uniqueCfops.map(c => <option key={`opt-cfop-${c}`} value={c}>{c}</option>)}
-                          </select>
-
-                          <select
-                            value={orgCstFilter}
-                            onChange={(e) => { setOrgCstFilter(e.target.value); setOrgCurrentPage(1); }}
-                            className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-700 font-bold"
-                          >
-                            <option value="all">Filtrar CST ({uniqueCsts.length})</option>
-                            {uniqueCsts.map(c => <option key={`opt-cst-${c}`} value={c}>{c}</option>)}
-                          </select>
-
-                        </div>
+                  <div className="space-y-4">
+                    
+                    {/* Controls toolbar */}
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150 flex flex-col md:flex-row gap-3 items-center justify-between">
+                      <div className="relative w-full md:w-80">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          value={orgSearchTerm}
+                          onChange={(e) => { setOrgSearchTerm(e.target.value); setOrgCurrentPage(1); }}
+                          placeholder="Buscar nota, produto, CNPJ, NCM..."
+                          className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-[#04243b]"
+                        />
                       </div>
+                    </div>
 
                       {/* Rows Grid Table */}
                       <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto shadow-2xs">
-                        <table className="w-full text-left border-collapse min-w-[1500px]">
+                        <table className="w-full text-left border-collapse min-w-[1200px]">
                           <thead className="bg-slate-50 text-[10px] font-bold text-slate-500 uppercase border-b border-slate-100">
                             <tr>
-                              {!groupDuplicates && <th className="py-2 px-3">Nota Fiscal</th>}
-                              {!groupDuplicates && <th className="py-2 px-3">Data</th>}
-                              {!groupDuplicates && <th className="py-2 px-3">CNPJ / CPF</th>}
-                              <th className="py-2 px-3 text-center">CFOP</th>
-                              <th className="py-2 px-3">Produto</th>
-                              <th className="py-2 px-3 text-center">NCM</th>
-                              <th className="py-2 px-3 text-center">UN</th>
-                              <th className="py-2 px-3 text-center">Qtde</th>
-                              <th className="py-2 px-3 text-right">R$ Unit.</th>
-                              <th className="py-2 px-3 text-right">R$ Produto</th>
-                              <th className="py-2 px-3 text-right">Desconto</th>
-                              <th className="py-2 px-3 text-right">Vlr. Contábil</th>
-                              <th className="py-2 px-3 text-center">CST</th>
-                              <th className="py-2 px-3 text-right">R$ Base ICMS</th>
-                              <th className="py-2 px-3 text-right">% ICMS</th>
-                              <th className="py-2 px-3 text-right">R$ ICMS</th>
-                              <th className="py-2 px-3 text-right">% IPI</th>
-                              <th className="py-2 px-3 text-right">R$ IPI</th>
+                              <th className="py-2.5 px-3">Nota Fiscal</th>
+                              <th className="py-2.5 px-3 text-center">Modelo</th>
+                              <th className="py-2.5 px-3 text-center">Série</th>
+                              <th className="py-2.5 px-3">Data Emissão</th>
+                              <th className="py-2.5 px-3 text-right">Valor R$</th>
+                              <th className="py-2.5 px-3">CNPJ Emitente</th>
+                              <th className="py-2.5 px-3">Razão Social Emitente</th>
+                              <th className="py-2.5 px-3 text-center">UF</th>
+                              <th className="py-2.5 px-3 font-mono">Chave de Acesso</th>
+                              <th className="py-2.5 px-3 text-center">Situação NF-e</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-[11px] font-mono">
                             {paginatedOrgItems.length === 0 ? (
                               <tr>
-                                <td colSpan={groupDuplicates ? 15 : 18} className="text-center py-10 text-slate-400 font-sans">
+                                <td colSpan={10} className="text-center py-10 text-slate-400 font-sans">
                                   Nenhum registro encontrado correspondente aos filtros aplicados.
                                 </td>
                               </tr>
                             ) : (
                               paginatedOrgItems.map((item, idx) => (
-                                <tr key={`item-org-row-${idx}`} className="hover:bg-slate-50/50">
-                                  {!groupDuplicates && <td className="py-2 px-3 font-bold text-[#04243b]">{item.notaFiscal}</td>}
-                                  {!groupDuplicates && <td className="py-2 px-3">{item.data}</td>}
-                                  {!groupDuplicates && <td className="py-2 px-3 text-[10px] text-slate-500">{item.cnpj}</td>}
-                                  <td className="py-2 px-3 text-center font-bold">{item.cfop}</td>
-                                  <td className="py-2 px-3 font-sans max-w-[220px] truncate">
-                                    <span className="font-bold text-slate-700 block truncate text-[11px]">{item.nomeProduto}</span>
-                                    <span className="text-[9px] text-slate-400">Cód: {item.codigoProduto}</span>
+                                <tr key={`item-org-row-${idx}`} className={`hover:bg-slate-50/50 ${item.situacaoNfe === 'CANCELADA' ? 'bg-red-50/20' : ''}`}>
+                                  <td className="py-2.5 px-3 font-bold text-[#04243b]">{item.notaFiscal}</td>
+                                  <td className="py-2.5 px-3 text-center font-bold text-slate-600">{item.modelo || '55'}</td>
+                                  <td className="py-2.5 px-3 text-center text-slate-600">{item.serie || '1'}</td>
+                                  <td className="py-2.5 px-3 text-slate-700 whitespace-nowrap">{item.data}</td>
+                                  <td className="py-2.5 px-3 text-right font-bold text-slate-900 whitespace-nowrap">
+                                    R$ {(item.vlrContabil ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                   </td>
-                                  <td className="py-2 px-3 text-center text-slate-500">{item.ncm}</td>
-                                  <td className="py-2 px-3 text-center">{item.un}</td>
-                                  <td className="py-2 px-3 text-center">{item.qtde}</td>
-                                  <td className="py-2 px-3 text-right">R$ {(item.rUnit ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                  <td className="py-2 px-3 text-right">R$ {(item.rProduto ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                  <td className="py-2 px-3 text-right text-slate-500">R$ {(item.desconto ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                  <td className="py-2 px-3 text-right font-bold text-slate-800">R$ {(item.vlrContabil ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                  <td className="py-2 px-3 text-center"><span className="bg-slate-100 px-1.5 py-0.2 rounded font-bold text-[10px]">{item.cst}</span></td>
-                                  <td className="py-2 px-3 text-right text-slate-600">R$ {(item.rBaseIcms ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                  <td className="py-2 px-3 text-right text-slate-600">{(item.pIcms ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}%</td>
-                                  <td className="py-2 px-3 text-right text-slate-600 font-bold">R$ {(item.rIcms ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                  <td className="py-2 px-3 text-right text-slate-600">{(item.pIpi ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}%</td>
-                                  <td className="py-2 px-3 text-right text-slate-600 font-bold">R$ {(item.rIpi ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                  <td className="py-2.5 px-3 text-[10px] text-slate-500 font-mono whitespace-nowrap">
+                                    {(item.modelo === '65' || item.modelo === 'NFCe' || item.modelo === 'NFCE') ? '-' : (item.cnpj || '-')}
+                                  </td>
+                                  <td className="py-2.5 px-3 font-sans max-w-[220px] truncate" title={(item.modelo === '65' || item.modelo === 'NFCe' || item.modelo === 'NFCE') ? '-' : (item.razaoSocial || item.nomeProduto || '-')}>
+                                    <span className="font-bold text-slate-700 block truncate text-[11px]">
+                                      {(item.modelo === '65' || item.modelo === 'NFCe' || item.modelo === 'NFCE') ? '-' : (item.razaoSocial || item.nomeProduto || '-')}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 px-3 text-center font-bold text-slate-600">{item.uf || 'CE'}</td>
+                                  <td className="py-2.5 px-3 text-slate-400 select-all font-mono tracking-tight text-[10px] whitespace-nowrap" title={item.chaveDeAcesso}>
+                                    {item.chaveDeAcesso || '-'}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                                    {item.situacaoNfe === 'CANCELADA' ? (
+                                      <span className="bg-red-100 text-red-800 px-2 py-0.5 rounded-md text-[9px] uppercase font-extrabold font-sans">
+                                        CANCELADA
+                                      </span>
+                                    ) : item.situacaoNfe === 'DENEGADA' ? (
+                                      <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-md text-[9px] uppercase font-extrabold font-sans">
+                                        DENEGADA
+                                      </span>
+                                    ) : (
+                                      <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md text-[9px] uppercase font-extrabold font-sans">
+                                        AUTORIZADA
+                                      </span>
+                                    )}
+                                  </td>
                                 </tr>
                               ))
                             )}
@@ -2753,131 +4396,317 @@ export function AuditoriaFiscalWorkspace() {
                       )}
 
                     </div>
-                  ) : (
-                    // Auditoria summaries / Impostos tables
-                    <div className="space-y-6">
-                      
-                      {/* Sintese de Operações por CFOP */}
-                      <div className="bg-[#04243b]/5 p-5 rounded-2xl border border-slate-200/50">
-                        <h4 className="text-xs font-black text-[#04243b] uppercase mb-4 tracking-wider">
-                          Síntese das Operações Fiscais por CFOP
-                        </h4>
-
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                          
-                          {/* ENTRADAS */}
-                          <div className="bg-white border border-slate-150 rounded-xl overflow-hidden shadow-2xs">
-                            <div className="bg-emerald-700 text-white px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider flex justify-between items-center font-sans">
-                              <span>📥 SÍNTESE ENTRADAS CFOP</span>
-                              <span className="font-mono bg-emerald-800/80 px-2 py-0.5 rounded text-[10px]">
-                                R$ {(auditReport?.entradas?.cfopList ?? []).reduce((acc, curr) => acc + (curr?.total ?? 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                              </span>
-                            </div>
-                            <div className="p-2 overflow-x-auto">
-                              <table className="w-full text-left border-collapse text-[10px]">
-                                <thead className="bg-slate-50 text-slate-500 uppercase text-[8px] font-bold">
-                                  <tr>
-                                    <th className="py-2 px-2">CFOP</th>
-                                    <th className="py-2 px-2 text-right">Lançamentos</th>
-                                    <th className="py-2 px-2 text-right">Contábil</th>
-                                    <th className="py-2 px-2 text-right">Base ICMS</th>
-                                    <th className="py-2 px-2 text-right">ICMS</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-50 font-mono text-[10px]">
-                                  {auditReport.entradas.cfopList.map(c => (
-                                    <tr key={`sum-ent-cfop-${c.cfop}`} className="hover:bg-slate-50/50">
-                                      <td className="py-1.5 px-2 font-bold text-slate-700">{c.cfop}</td>
-                                      <td className="py-1.5 px-2 text-center">{c.count}</td>
-                                      <td className="py-1.5 px-2 text-right font-bold">R$ {(c?.total ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                      <td className="py-1.5 px-2 text-right text-slate-500">R$ {(c?.rBaseIcms ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                      <td className="py-1.5 px-2 text-right text-slate-600 font-bold">R$ {(c?.rIcms ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-
-                          {/* SAÍDAS */}
-                          <div className="bg-white border border-slate-150 rounded-xl overflow-hidden shadow-2xs">
-                            <div className="bg-blue-700 text-white px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider flex justify-between items-center font-sans">
-                              <span>📤 SÍNTESE SAÍDAS CFOP</span>
-                              <span className="font-mono bg-blue-800/80 px-2 py-0.5 rounded text-[10px]">
-                                R$ {(auditReport?.saidas?.cfopList ?? []).reduce((acc, curr) => acc + (curr?.total ?? 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                              </span>
-                            </div>
-                            <div className="p-2 overflow-x-auto">
-                              <table className="w-full text-left border-collapse text-[10px]">
-                                <thead className="bg-slate-50 text-slate-500 uppercase text-[8px] font-bold">
-                                  <tr>
-                                    <th className="py-2 px-2">CFOP</th>
-                                    <th className="py-2 px-2 text-right">Lançamentos</th>
-                                    <th className="py-2 px-2 text-right">Contábil</th>
-                                    <th className="py-2 px-2 text-right">Base ICMS</th>
-                                    <th className="py-2 px-2 text-right">ICMS</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-50 font-mono text-[10px]">
-                                  {auditReport.saidas.cfopList.map(c => (
-                                    <tr key={`sum-sai-cfop-${c.cfop}`} className="hover:bg-slate-50/50">
-                                      <td className="py-1.5 px-2 font-bold text-slate-700">{c.cfop}</td>
-                                      <td className="py-1.5 px-2 text-center">{c.count}</td>
-                                      <td className="py-1.5 px-2 text-right font-bold">R$ {(c?.total ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                      <td className="py-1.5 px-2 text-right text-slate-500">R$ {(c?.rBaseIcms ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                      <td className="py-1.5 px-2 text-right text-slate-600 font-bold">R$ {(c?.rIcms ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-
-                        </div>
-                      </div>
-
-                      {/* Concentração Fiscal por NCM */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs">
-                        <h4 className="text-xs font-black text-[#04243b] uppercase mb-4 tracking-wider">
-                          Concentração Fiscal por Código NCM (Nomenclatura Comum do Mercosul)
-                        </h4>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left border-collapse text-xs">
-                            <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[9px] border-b border-slate-250">
-                              <tr>
-                                <th className="py-2 px-3">Código NCM</th>
-                                <th className="py-2 px-3">Origem</th>
-                                <th className="py-2 px-3 text-right">Contábil Acumulado</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
-                              {auditReport.entradas.ncmList.slice(0, 5).map(n => (
-                                <tr key={`ncm-ent-${n.ncm}`} className="hover:bg-slate-50/50">
-                                  <td className="py-2 px-3 font-bold text-slate-700">{n.ncm}</td>
-                                  <td className="py-2 px-3"><span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-100">ENTRADA</span></td>
-                                  <td className="py-2 px-3 text-right font-bold">R$ {(n?.value ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                </tr>
-                              ))}
-                              {auditReport.saidas.ncmList.slice(0, 5).map(n => (
-                                <tr key={`ncm-sai-${n.ncm}`} className="hover:bg-slate-50/50">
-                                  <td className="py-2 px-3 font-bold text-slate-700">{n.ncm}</td>
-                                  <td className="py-2 px-3"><span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-100">SAÍDA</span></td>
-                                  <td className="py-2 px-3 text-right font-bold">R$ {(n?.value ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-
-                    </div>
-                  )}
 
                 </div>
               )}
 
             </div>
           )}
+
+          {/* ======================================================== */}
+          {/* MÓDULO 01 - TELA DE AUDITORIA FISCAL INDEPENDENTE SIGA */}
+          {/* ======================================================== */}
+          {activeOutputTab === 'auditoria_siga' && (() => {
+            const entAudit = identifySigaDuplicates(organizadorEntradas);
+            const saiAudit = identifySigaDuplicates(organizadorSaidas);
+            const totalDups = entAudit.summary.duplicateCount + saiAudit.summary.duplicateCount;
+            const totalDupVal = entAudit.summary.duplicatedValue + saiAudit.summary.duplicatedValue;
+
+            const activeDataset = auditSigaSubTab === 'entradas' ? entAudit.itemsWithStatus : saiAudit.itemsWithStatus;
+
+            const filteredAuditList = activeDataset.filter(item => {
+              if (auditSigaFilter === 'duplicates' && !item.isDuplicate) return false;
+              if (auditSigaFilter === 'unique' && item.isDuplicate) return false;
+              if (auditSigaSearch.trim()) {
+                const term = auditSigaSearch.toLowerCase();
+                const matchNota = (item.notaFiscal || '').toLowerCase().includes(term);
+                const matchProd = (item.nomeProduto || '').toLowerCase().includes(term);
+                const matchCnpj = (item.cnpj || '').toLowerCase().includes(term);
+                const matchCfop = (item.cfop || '').toLowerCase().includes(term);
+                const matchChave = (item.chaveDeAcesso || '').toLowerCase().includes(term);
+                return matchNota || matchProd || matchCnpj || matchCfop || matchChave;
+              }
+              return true;
+            });
+
+            const auditItemsPerPage = 15;
+            const totalAuditPages = Math.ceil(filteredAuditList.length / auditItemsPerPage) || 1;
+            const paginatedAuditList = filteredAuditList.slice((auditSigaPage - 1) * auditItemsPerPage, auditSigaPage * auditItemsPerPage);
+
+            const handleDeleteSingleDuplicate = (itemId: string, type: 'entradas' | 'saidas') => {
+              if (type === 'entradas') {
+                setOrganizadorEntradas(prev => prev.filter(item => item.id !== itemId));
+              } else {
+                setOrganizadorSaidas(prev => prev.filter(item => item.id !== itemId));
+              }
+            };
+
+            const handleSanitizeAllDuplicates = () => {
+              const cleanEntradas = entAudit.itemsWithStatus.filter(i => !i.isDuplicate);
+              const cleanSaidas = saiAudit.itemsWithStatus.filter(i => !i.isDuplicate);
+
+              const remEnt = organizadorEntradas.length - cleanEntradas.length;
+              const remSai = organizadorSaidas.length - cleanSaidas.length;
+              const totalRem = remEnt + remSai;
+
+              if (totalRem === 0) {
+                alert('Nenhuma duplicidade encontrada para remover no relatório SIGA!');
+                return;
+              }
+
+              setOrganizadorEntradas(cleanEntradas);
+              setOrganizadorSaidas(cleanSaidas);
+
+              alert(`⚡ SANEAMENTO CONCLUÍDO COM SUCESSO!\n\nForam eliminadas ${totalRem} duplicidades do relatório SIGA:\n- Entradas sanitizadas: ${remEnt} removidas\n- Saídas sanitizadas: ${remSai} removidas\n\nSeu relatório agora reflete os valores reais de faturamento e compras sem as distorções do SIGA.`);
+            };
+
+            return (
+              <div className="space-y-6 animate-fadeIn font-sans">
+                {/* Header Banner with Action Buttons */}
+                <div className="bg-[#04243b] text-white p-4 rounded-2xl shadow-md border-b-4 border-[#e4b35e] flex flex-wrap items-center justify-end gap-3">
+                  <button
+                    onClick={handleSanitizeAllDuplicates}
+                    disabled={totalDups === 0}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 shadow-sm ${
+                      totalDups > 0
+                        ? 'bg-red-600 hover:bg-red-700 text-white cursor-pointer hover:shadow-md'
+                        : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-60'
+                    }`}
+                  >
+                    <Zap className="w-4 h-4 fill-white" />
+                    Saneamento Automático ({totalDups} Duplicatas)
+                  </button>
+
+                  <button
+                    onClick={() => exportSigaAuditExcel({ entradas: organizadorEntradas, saidas: organizadorSaidas, metadata: organizadorMetadata })}
+                    className="px-4 py-2.5 bg-[#e4b35e] hover:bg-[#d6a24c] text-[#04243b] font-black rounded-xl text-xs uppercase tracking-wider transition-all flex items-center gap-2 shadow-sm cursor-pointer"
+                  >
+                    <Download className="w-4 h-4" />
+                    Exportar Excel Sanitizado
+                  </button>
+                </div>
+
+                {/* Checklist de Auditoria Fiscal */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-3 font-sans">
+                  <div className="flex items-center justify-between border-b border-slate-150 pb-2.5">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-5 h-5 text-[#04243b]" />
+                      <h3 className="text-sm font-black text-[#04243b] uppercase tracking-tight">
+                        Checklist de Auditoria Fiscal & Conformidade
+                      </h3>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 text-xs">
+                    {/* Item 1 */}
+                    <div 
+                      onClick={() => {
+                        setAuditSigaFilter('duplicates');
+                        setAuditSigaPage(1);
+                        if (auditSigaSubTab === 'saidas' && saiAudit.summary.duplicateCount === 0 && entAudit.summary.duplicateCount > 0) {
+                          setAuditSigaSubTab('entradas');
+                        } else if (auditSigaSubTab === 'entradas' && entAudit.summary.duplicateCount === 0 && saiAudit.summary.duplicateCount > 0) {
+                          setAuditSigaSubTab('saidas');
+                        }
+                      }}
+                      className={`p-3 rounded-xl border cursor-pointer transition-all hover:shadow-sm ${totalDups > 0 ? 'bg-red-50/60 border-red-200 hover:bg-red-100/60' : 'bg-emerald-50/60 border-emerald-200 hover:bg-emerald-100/60'} space-y-1`}
+                    >
+                      <div className="flex items-center justify-between font-bold">
+                        <span className="text-slate-800 text-[11px]">1. Deduplicação de Notas</span>
+                        {totalDups > 0 ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setAuditSigaFilter('duplicates');
+                              setAuditSigaPage(1);
+                              if (auditSigaSubTab === 'saidas' && saiAudit.summary.duplicateCount === 0 && entAudit.summary.duplicateCount > 0) {
+                                setAuditSigaSubTab('entradas');
+                              } else if (auditSigaSubTab === 'entradas' && entAudit.summary.duplicateCount === 0 && saiAudit.summary.duplicateCount > 0) {
+                                setAuditSigaSubTab('saidas');
+                              }
+                            }}
+                            className="text-[9px] font-black uppercase px-2.5 py-1 rounded-full bg-red-600 hover:bg-red-700 text-white cursor-pointer shadow-xs transition-transform active:scale-95 flex items-center gap-1"
+                          >
+                            <AlertTriangle className="w-3 h-3" />
+                            {totalDups} INCONSISTÊNCIAS
+                          </button>
+                        ) : (
+                          <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-600 text-white">
+                            OK (0 Dups)
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-500">
+                        Cruzamento exato: <strong>Chave + N° NF + Valor Total</strong>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tabs & Controls */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-4 shadow-2xs">
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-3 border-b border-slate-150">
+                    {/* Operation Subtabs */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => { setAuditSigaSubTab('saidas'); setAuditSigaPage(1); }}
+                        className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
+                          auditSigaSubTab === 'saidas'
+                            ? 'bg-blue-900 text-white shadow-xs'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        📤 Saídas / Faturamento ({organizadorSaidas.length} NFs - {saiAudit.summary.duplicateCount} dups)
+                      </button>
+
+                      <button
+                        onClick={() => { setAuditSigaSubTab('entradas'); setAuditSigaPage(1); }}
+                        className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
+                          auditSigaSubTab === 'entradas'
+                            ? 'bg-emerald-900 text-white shadow-xs'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        📥 Entradas / Compras ({organizadorEntradas.length} NFs - {entAudit.summary.duplicateCount} dups)
+                      </button>
+                    </div>
+
+                    {/* Filter & Search Bar */}
+                    <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                      <div className="relative flex-1 md:w-64">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          value={auditSigaSearch}
+                          onChange={e => { setAuditSigaSearch(e.target.value); setAuditSigaPage(1); }}
+                          placeholder="Buscar por NF, Produto, CNPJ, Chave..."
+                          className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-[#04243b]"
+                        />
+                      </div>
+
+                      <select
+                        value={auditSigaFilter}
+                        onChange={e => { setAuditSigaFilter(e.target.value as any); setAuditSigaPage(1); }}
+                        className="px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white text-slate-700 font-bold focus:outline-none focus:border-[#04243b]"
+                      >
+                        <option value="all">Exibir Todos os Registros</option>
+                        <option value="duplicates">🚨 Apenas Duplicidades (Alertas)</option>
+                        <option value="unique">✅ Apenas Registros Únicos (Saneados)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Audit Interactive Conference Table */}
+                  <div className="overflow-x-auto rounded-xl border border-slate-200">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead className="bg-[#04243b] text-white uppercase text-[10px] font-bold">
+                        <tr>
+                          <th className="py-2.5 px-3">Status / Alerta</th>
+                          <th className="py-2.5 px-3">NF-e</th>
+                          <th className="py-2.5 px-3">Data</th>
+                          <th className="py-2.5 px-3">CNPJ/CPF</th>
+                          <th className="py-2.5 px-3">CFOP</th>
+                          <th className="py-2.5 px-3">Produto / Descrição</th>
+                          <th className="py-2.5 px-3 text-right">Valor Contábil</th>
+                          <th className="py-2.5 px-3">Chave de Acesso</th>
+                          <th className="py-2.5 px-3 text-center">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+                        {paginatedAuditList.length === 0 ? (
+                          <tr>
+                            <td colSpan={9} className="py-8 text-center text-slate-400 font-sans text-xs">
+                              Nenhum registro encontrado para os filtros selecionados.
+                            </td>
+                          </tr>
+                        ) : (
+                          paginatedAuditList.map(item => {
+                            const isDup = Boolean(item.isDuplicate);
+                            return (
+                              <tr
+                                key={item.id}
+                                className={`transition-colors ${
+                                  isDup ? 'bg-red-50/80 hover:bg-red-100/80 text-red-950 font-semibold' : 'hover:bg-slate-50 text-slate-700'
+                                }`}
+                              >
+                                <td className="py-2 px-3 font-sans">
+                                  {isDup ? (
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-red-600 text-white shadow-2xs">
+                                      <AlertTriangle className="w-3 h-3" />
+                                      DUPLICIDADE DETECTADA
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                      REGISTRO ÚNICO
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2 px-3 font-bold">{item.notaFiscal}</td>
+                                <td className="py-2 px-3 text-slate-500">{item.data}</td>
+                                <td className="py-2 px-3 text-slate-600">{item.cnpj}</td>
+                                <td className="py-2 px-3 font-bold text-slate-700">{item.cfop}</td>
+                                <td className="py-2 px-3 font-sans font-medium text-slate-800 max-w-xs truncate" title={item.nomeProduto}>
+                                  {item.nomeProduto}
+                                </td>
+                                <td className={`py-2 px-3 text-right font-bold ${isDup ? 'text-red-700' : 'text-slate-900'}`}>
+                                  R$ {item.vlrContabil.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                </td>
+                                <td className="py-2 px-3 text-[10px] text-slate-500 max-w-[140px] truncate" title={item.chaveDeAcesso || 'SIGA'}>
+                                  {item.chaveDeAcesso || 'SEFAZ/SIGA-TXT'}
+                                </td>
+                                <td className="py-2 px-3 text-center font-sans">
+                                  {isDup ? (
+                                    <button
+                                      onClick={() => handleDeleteSingleDuplicate(item.id!, auditSigaSubTab)}
+                                      className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer shadow-2xs flex items-center gap-1 mx-auto"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                      Excluir Duplicata
+                                    </button>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-400 font-medium">Mantida</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination Footer */}
+                  <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-2 text-xs text-slate-500">
+                    <span>
+                      Exibindo <strong>{paginatedAuditList.length}</strong> de <strong>{filteredAuditList.length}</strong> lançamentos auditados
+                    </span>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setAuditSigaPage(p => Math.max(p - 1, 1))}
+                        disabled={auditSigaPage === 1}
+                        className="px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 disabled:opacity-40 font-bold transition-all cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        Anterior
+                      </button>
+                      <span className="text-xs font-bold text-slate-700">
+                        Página {auditSigaPage} de {totalAuditPages}
+                      </span>
+                      <button
+                        onClick={() => setAuditSigaPage(p => Math.min(p + 1, totalAuditPages))}
+                        disabled={auditSigaPage >= totalAuditPages}
+                        className="px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 disabled:opacity-40 font-bold transition-all cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        Próxima
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ======================================================== */}
           {/* MODULE 3: INTEGRIDADE & SEQUENCIA */}
@@ -3166,277 +4995,343 @@ export function AuditoriaFiscalWorkspace() {
                   </div>
                 </div>
               ) : (
-                <div className="space-y-6">
+                <div className="space-y-3 font-sans">
                   
-                  {/* Metadata Header Cards */}
-                  {pisCofinsMetadata && (
-                    <div className="bg-[#04243b] text-white p-6 rounded-2xl border border-slate-700/50 shadow-md">
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                        <div className="space-y-1">
-                          <span className="text-[#e4b35e] text-[10px] font-black uppercase tracking-wider">Metadados do Demonstrativo</span>
-                          <h3 className="text-lg font-black tracking-tight">{pisCofinsMetadata.empresa || 'Empresa não identificada'}</h3>
-                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-300 font-medium">
-                            {pisCofinsMetadata.cnpj && (
-                              <span>CNPJ: <strong className="font-mono text-white">{pisCofinsMetadata.cnpj}</strong></span>
-                            )}
-                            {pisCofinsMetadata.periodo && (
-                              <span>Período: <strong className="text-white">{pisCofinsMetadata.periodo}</strong></span>
-                            )}
-                          </div>
+                  {/* Compact Consolidated Metadata & Stats Panel */}
+                  <div className="bg-white border border-slate-200/90 rounded-2xl p-2.5 shadow-2xs space-y-2">
+                    {/* Top Row: Company Metadata Bar */}
+                    {pisCofinsMetadata && (
+                      <div className="bg-[#04243b] text-white px-3 py-1.5 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex flex-wrap items-center gap-2 min-w-0">
+                          <span className="text-[#e4b35e] text-[9px] font-black uppercase tracking-wider bg-slate-800/90 px-2 py-0.5 rounded border border-slate-700/80 shrink-0">
+                            Demonstrativo
+                          </span>
+                          <h3 className="font-extrabold text-white text-xs truncate max-w-xs md:max-w-md">
+                            {pisCofinsMetadata.empresa || 'Empresa não identificada'}
+                          </h3>
+                          {pisCofinsMetadata.cnpj && (
+                            <span className="text-slate-300 text-[11px] font-mono">
+                              CNPJ: <strong className="text-white">{pisCofinsMetadata.cnpj}</strong>
+                            </span>
+                          )}
+                          {pisCofinsMetadata.periodo && (
+                            <span className="text-slate-300 text-[11px]">
+                              Período: <strong className="text-white">{pisCofinsMetadata.periodo}</strong>
+                            </span>
+                          )}
                         </div>
-                        <div className="bg-slate-800/80 border border-slate-700 px-4 py-2.5 rounded-xl text-right">
-                          <span className="text-[9px] text-[#e4b35e] font-black uppercase block">Regime Tributário</span>
-                          <span className="font-extrabold text-sm block mt-0.5">{pisCofinsMetadata.regime || 'Lucro Real'}</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Stats of PIS/COFINS */}
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    {/* CRÉDITOS */}
-                    <div className="bg-emerald-50/70 border border-emerald-100 p-4 rounded-2xl text-emerald-900">
-                      <div className="flex items-center gap-1.5">
-                        <ArrowUpRight className="w-3.5 h-3.5 text-emerald-600" />
-                        <span className="text-[10px] uppercase font-bold text-emerald-600 block">Créditos (Entradas)</span>
-                      </div>
-                      <span className="text-xl font-black block mt-1.5 font-mono text-emerald-800">
-                        R$ {(pisCofinsStats.pisTotal + pisCofinsStats.cofinstotal).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </span>
-                      <div className="text-[10px] text-emerald-700/80 mt-1 space-y-0.5">
-                        <div className="flex justify-between">
-                          <span>PIS (1.65%):</span>
-                          <strong className="font-mono">R$ {pisCofinsStats.pisTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>COFINS (7.60%):</span>
-                          <strong className="font-mono">R$ {pisCofinsStats.cofinstotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* DÉBITOS */}
-                    <div className="bg-rose-50/70 border border-rose-100 p-4 rounded-2xl text-rose-900">
-                      <div className="flex items-center gap-1.5">
-                        <ArrowDownLeft className="w-3.5 h-3.5 text-rose-600" />
-                        <span className="text-[10px] uppercase font-bold text-rose-600 block">Débitos (Saídas)</span>
-                      </div>
-                      <span className="text-xl font-black block mt-1.5 font-mono text-rose-800">
-                        R$ {(pisCofinsStats.pisDebitoTotal + pisCofinsStats.cofinsDebitoTotal).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </span>
-                      <div className="text-[10px] text-rose-700/80 mt-1 space-y-0.5">
-                        <div className="flex justify-between">
-                          <span>PIS (1.65%):</span>
-                          <strong className="font-mono">R$ {pisCofinsStats.pisDebitoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>COFINS (7.60%):</span>
-                          <strong className="font-mono">R$ {pisCofinsStats.cofinsDebitoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* APURAÇÃO PIS */}
-                    <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl text-slate-800">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Apuração Líquida PIS</span>
-                      <span className={`text-xl font-black block mt-1.5 font-mono ${pisCofinsStats.saldoPis >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                        R$ {pisCofinsStats.saldoPis.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </span>
-                      <span className="text-[9px] font-bold uppercase tracking-wide block mt-1">
-                        {pisCofinsStats.saldoPis >= 0 ? (
-                          <span className="text-emerald-600 bg-emerald-100/60 px-1.5 py-0.5 rounded">Crédito a Compensar</span>
-                        ) : (
-                          <span className="text-rose-600 bg-rose-100/60 px-1.5 py-0.5 rounded">Imposto a Recolher</span>
-                        )}
-                      </span>
-                    </div>
-
-                    {/* APURAÇÃO COFINS */}
-                    <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl text-slate-800">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Apuração Líquida COFINS</span>
-                      <span className={`text-xl font-black block mt-1.5 font-mono ${pisCofinsStats.saldoCofins >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                        R$ {pisCofinsStats.saldoCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </span>
-                      <span className="text-[9px] font-bold uppercase tracking-wide block mt-1">
-                        {pisCofinsStats.saldoCofins >= 0 ? (
-                          <span className="text-emerald-600 bg-emerald-100/60 px-1.5 py-0.5 rounded">Crédito a Compensar</span>
-                        ) : (
-                          <span className="text-rose-600 bg-rose-100/60 px-1.5 py-0.5 rounded">Imposto a Recolher</span>
-                        )}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Visualisation Selector Mode */}
-                  <div className="flex flex-col gap-3">
-                    <div className="flex flex-col sm:flex-row items-center gap-3 bg-[#04243b]/5 p-3 rounded-2xl border border-[#04243b]/10">
-                      <span className="text-xs font-bold text-[#04243b] uppercase tracking-wider">Modo de Exibição:</span>
-                      <div className="flex flex-wrap bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
-                        <button
-                          onClick={() => {
-                            setPisCofinsViewMode('original');
-                            setActivePisCofinsSubTab('todos');
-                            setPisCofinsCurrentPage(1);
-                          }}
-                          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                            pisCofinsViewMode === 'original'
-                              ? 'bg-[#04243b] text-[#e4b35e]'
-                              : 'text-slate-500 hover:text-slate-800'
-                          }`}
-                        >
-                          <FileText className="w-3.5 h-3.5" />
-                          1. Relatório Original Formatado
-                        </button>
-                        <button
-                          onClick={() => {
-                            setPisCofinsViewMode('consolidated');
-                            setActivePisCofinsSubTab('consolidado');
-                            setPisCofinsCurrentPage(1);
-                          }}
-                          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                            pisCofinsViewMode === 'consolidated'
-                              ? 'bg-[#04243b] text-[#e4b35e]'
-                              : 'text-slate-500 hover:text-slate-800'
-                          }`}
-                        >
-                          <Combine className="w-3.5 h-3.5" />
-                          2. Relatório Consolidado (Soma por CFOP/CST)
-                        </button>
-                      </div>
-                    </div>
-
-                    {pisCofinsViewMode === 'consolidated' && (
-                      <div className="flex flex-col sm:flex-row items-center gap-3 bg-amber-500/5 p-3 rounded-2xl border border-amber-500/10">
-                        <span className="text-xs font-bold text-[#04243b] uppercase tracking-wider">Critério de Consolidação:</span>
-                        <div className="flex flex-wrap bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
-                          <button
-                            onClick={() => {
-                              setPisCofinsCriteria('cfop_cst');
-                              setPisCofinsCurrentPage(1);
-                            }}
-                            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                              pisCofinsCriteria === 'cfop_cst'
-                                ? 'bg-[#04243b] text-[#e4b35e]'
-                                : 'text-slate-500 hover:text-slate-800'
-                            }`}
-                          >
-                            <Table className="w-3.5 h-3.5" />
-                            Agrupar apenas por CFOP + CST
-                          </button>
-                          <button
-                            onClick={() => {
-                              setPisCofinsCriteria('cfop_cst_product');
-                              setPisCofinsCurrentPage(1);
-                            }}
-                            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                              pisCofinsCriteria === 'cfop_cst_product'
-                                ? 'bg-[#04243b] text-[#e4b35e]'
-                                : 'text-slate-500 hover:text-slate-800'
-                            }`}
-                          >
-                            <Package className="w-3.5 h-3.5" />
-                            Agrupar por Produto + CFOP + CST
-                          </button>
+                        <div className="text-[10px] text-slate-300 font-medium shrink-0">
+                          Regime: <span className="text-[#e4b35e] font-extrabold uppercase bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700">{pisCofinsMetadata.regime || 'Lucro Real'}</span>
                         </div>
                       </div>
                     )}
+
+                    {/* Bottom Row: Compact 4-Column Metric Cards */}
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+                      {/* CRÉDITOS */}
+                      <div className="bg-emerald-50/70 border border-emerald-100/80 px-3 py-1.5 rounded-xl flex items-center justify-between">
+                        <div>
+                          <div className="flex items-center gap-1">
+                            <ArrowUpRight className="w-3 h-3 text-emerald-600 shrink-0" />
+                            <span className="text-[9px] uppercase font-bold text-emerald-700 block">Créditos (Entradas)</span>
+                          </div>
+                          <span className="text-xs font-black font-mono text-emerald-900 block mt-0.5">
+                            R$ {(pisCofinsStats.pisTotal + pisCofinsStats.cofinstotal).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        <div className="text-[8px] text-right text-emerald-800 font-mono leading-tight space-y-0.5">
+                          <div>PIS: R$ {pisCofinsStats.pisTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                          <div>COF: R$ {pisCofinsStats.cofinstotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                        </div>
+                      </div>
+
+                      {/* DÉBITOS */}
+                      <div className="bg-rose-50/70 border border-rose-100/80 px-3 py-1.5 rounded-xl flex items-center justify-between">
+                        <div>
+                          <div className="flex items-center gap-1">
+                            <ArrowDownLeft className="w-3 h-3 text-rose-600 shrink-0" />
+                            <span className="text-[9px] uppercase font-bold text-rose-700 block">Débitos (Saídas)</span>
+                          </div>
+                          <span className="text-xs font-black font-mono text-rose-900 block mt-0.5">
+                            R$ {(pisCofinsStats.pisDebitoTotal + pisCofinsStats.cofinsDebitoTotal).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        <div className="text-[8px] text-right text-rose-800 font-mono leading-tight space-y-0.5">
+                          <div>PIS: R$ {pisCofinsStats.pisDebitoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                          <div>COF: R$ {pisCofinsStats.cofinsDebitoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                        </div>
+                      </div>
+
+                      {/* APURAÇÃO PIS */}
+                      <div className="bg-slate-50 border border-slate-200/80 px-3 py-1.5 rounded-xl flex items-center justify-between">
+                        <div>
+                          <span className="text-[9px] uppercase font-bold text-slate-500 block">Apuração Líquida PIS</span>
+                          <span className={`text-xs font-black font-mono mt-0.5 block ${pisCofinsStats.saldoPis >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                            R$ {pisCofinsStats.saldoPis.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        <span className="text-[8px] font-bold uppercase tracking-wide">
+                          {pisCofinsStats.saldoPis >= 0 ? (
+                            <span className="text-emerald-700 bg-emerald-100/80 px-1.5 py-0.5 rounded">Crédito</span>
+                          ) : (
+                            <span className="text-rose-700 bg-rose-100/80 px-1.5 py-0.5 rounded">A Recolher</span>
+                          )}
+                        </span>
+                      </div>
+
+                      {/* APURAÇÃO COFINS */}
+                      <div className="bg-slate-50 border border-slate-200/80 px-3 py-1.5 rounded-xl flex items-center justify-between">
+                        <div>
+                          <span className="text-[9px] uppercase font-bold text-slate-500 block">Apuração Líquida COFINS</span>
+                          <span className={`text-xs font-black font-mono mt-0.5 block ${pisCofinsStats.saldoCofins >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                            R$ {pisCofinsStats.saldoCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        <span className="text-[8px] font-bold uppercase tracking-wide">
+                          {pisCofinsStats.saldoCofins >= 0 ? (
+                            <span className="text-emerald-700 bg-emerald-100/80 px-1.5 py-0.5 rounded">Crédito</span>
+                          ) : (
+                            <span className="text-rose-700 bg-rose-100/80 px-1.5 py-0.5 rounded">A Recolher</span>
+                          )}
+                        </span>
+                      </div>
+                    </div>
                   </div>
 
-                  {/* Navigation controls */}
-                  <div className="flex flex-col lg:flex-row gap-4 items-stretch lg:items-center justify-between border-b border-slate-100 pb-4">
-                    {/* Sub tabs inside PIS/COFINS */}
-                    <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl w-fit self-start" id="piscofins-main-tabs">
+                  {/* ======================================================== */}
+                  {/* MAIN NAVIGATION SWITCHER FOR MODULE 3 (RELATÓRIOS vs AUDITORIA) */}
+                  {/* ======================================================== */}
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-2 p-1.5 bg-slate-100/90 rounded-xl border border-slate-200/80 shadow-2xs">
+                    <div className="flex items-center gap-1.5 w-full sm:w-auto">
                       <button
-                        onClick={() => {
-                          setActivePisCofinsSubTab('todos');
-                          setPisCofinsCurrentPage(1);
-                        }}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                          activePisCofinsSubTab === 'todos'
-                            ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
-                            : 'text-slate-500 hover:text-slate-800'
+                        onClick={() => setPisCofinsMainScreen('relatorios')}
+                        className={`flex-1 sm:flex-none px-4 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                          pisCofinsMainScreen === 'relatorios'
+                            ? 'bg-[#04243b] text-[#e4b35e] shadow-2xs'
+                            : 'bg-white/80 text-slate-600 hover:bg-white hover:text-slate-900 border border-slate-200'
                         }`}
                       >
-                        Todos ({
-                          pisCofinsViewMode === 'consolidated' 
-                            ? consolidatePisCofinsRows(pisCofinsRows, pisCofinsCriteria).length
-                            : pisCofinsRows.length
-                        })
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>RELATÓRIOS</span>
                       </button>
+
                       <button
-                        onClick={() => {
-                          setActivePisCofinsSubTab('entradas');
-                          setPisCofinsCurrentPage(1);
-                        }}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                          activePisCofinsSubTab === 'entradas'
-                            ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
-                            : 'text-slate-500 hover:text-slate-800'
-                        }`}
-                      >
-                        Entradas / Crédito ({
-                          pisCofinsViewMode === 'consolidated'
-                            ? consolidatePisCofinsRows(pisCofinsRows, pisCofinsCriteria).filter(i => i.tipo === 'entrada').length
-                            : pisCofinsRows.filter(i => i.tipo === 'entrada').length
-                        })
-                      </button>
-                      <button
-                        onClick={() => {
-                          setActivePisCofinsSubTab('saidas');
-                          setPisCofinsCurrentPage(1);
-                        }}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                          activePisCofinsSubTab === 'saidas'
-                            ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
-                            : 'text-slate-500 hover:text-slate-800'
-                        }`}
-                      >
-                        Saídas / Débito ({
-                          pisCofinsViewMode === 'consolidated'
-                            ? consolidatePisCofinsRows(pisCofinsRows, pisCofinsCriteria).filter(i => i.tipo === 'saida').length
-                            : pisCofinsRows.filter(i => i.tipo === 'saida').length
-                        })
-                      </button>
-                      <button
-                        onClick={() => {
-                          setActivePisCofinsSubTab('auditoria');
-                          setPisCofinsCurrentPage(1);
-                        }}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 relative ${
-                          activePisCofinsSubTab === 'auditoria'
-                            ? 'bg-rose-600 text-white shadow-xs'
-                            : 'text-rose-600 hover:bg-rose-50'
+                        onClick={() => setPisCofinsMainScreen('auditoria')}
+                        className={`flex-1 sm:flex-none px-4 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                          pisCofinsMainScreen === 'auditoria'
+                            ? 'bg-rose-700 text-white shadow-2xs'
+                            : 'bg-white/80 text-slate-600 hover:bg-white hover:text-slate-900 border border-slate-200'
                         }`}
                       >
                         <ShieldAlert className="w-3.5 h-3.5" />
-                        Inconsistências & Auditoria
+                        <span>AUDITORIA</span>
                         {pisCofinsAuditErrors.length > 0 && (
-                          <span className="bg-rose-500 text-white font-sans font-black text-[9px] rounded-full px-1.5 py-0.2 animate-pulse">
+                          <span className="bg-white text-rose-700 font-mono text-[9px] font-black rounded-full px-1.5 py-0.2 ml-0.5">
                             {pisCofinsAuditErrors.length}
                           </span>
                         )}
                       </button>
                     </div>
 
-                    {/* Search bar */}
-                    <div className="relative w-full lg:w-72 shrink-0">
-                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="text"
-                        value={searchTermPisCofins}
-                        onChange={(e) => {
-                          setSearchTermPisCofins(e.target.value);
-                          setPisCofinsCurrentPage(1);
-                        }}
-                        placeholder="Buscar por CFOP, CST, Produto..."
-                        className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-[#04243b]"
-                      />
-                    </div>
+                    {/* Export Action Button (Visible on Relatórios screen) */}
+                    {pisCofinsMainScreen === 'relatorios' && pisCofinsRows.length > 0 && (
+                      <button
+                        onClick={handleExportPisCofinsExcel}
+                        className="w-full sm:w-auto px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs tracking-wide uppercase rounded-lg shadow-2xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5 text-white" />
+                        Exportar PIS/COFINS Excel
+                      </button>
+                    )}
                   </div>
 
-                  {/* Table or Audit view */}
-                  {activePisCofinsSubTab === 'auditoria' ? (
-                    <div className="space-y-6">
+                  {/* ======================================================== */}
+                  {/* SCREEN 1: RELATÓRIOS */}
+                  {/* ======================================================== */}
+                  {pisCofinsMainScreen === 'relatorios' && (
+                    <div className="space-y-4">
+                      {/* Sub-tabs bar for Relatórios with the 5 required options - No line break */}
+                      <div className="flex flex-col xl:flex-row gap-3 items-stretch xl:items-center justify-between border-b border-slate-100 pb-3">
+                        <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-100 p-1.5 rounded-2xl overflow-x-auto max-w-full flex-nowrap scrollbar-none" id="piscofins-main-tabs">
+                          {/* 1. Entradas Completo */}
+                          <button
+                            onClick={() => {
+                              setActivePisCofinsSubTab('entradas');
+                              setPisCofinsViewMode('original');
+                              setPisCofinsOriginalFormat('completo');
+                              setPisCofinsCurrentPage(1);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                              activePisCofinsSubTab === 'entradas' && pisCofinsViewMode === 'original' && pisCofinsOriginalFormat === 'completo'
+                                ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900 bg-white/60 hover:bg-white'
+                            }`}
+                          >
+                            <ArrowUpRight className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span className="whitespace-nowrap">Entradas Completo</span>
+                            <span className="text-[10px] opacity-75 font-mono font-bold">
+                              ({pisCofinsRows.filter(i => i.tipo === 'entrada').length})
+                            </span>
+                          </button>
+
+                          {/* 2. Entradas Resumido */}
+                          <button
+                            onClick={() => {
+                              setActivePisCofinsSubTab('entradas');
+                              setPisCofinsViewMode('original');
+                              setPisCofinsOriginalFormat('resumido');
+                              setPisCofinsCurrentPage(1);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                              activePisCofinsSubTab === 'entradas' && pisCofinsViewMode === 'original' && pisCofinsOriginalFormat === 'resumido'
+                                ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900 bg-white/60 hover:bg-white'
+                            }`}
+                          >
+                            <Package className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span className="whitespace-nowrap">Entradas Resumido</span>
+                            <span className="text-[10px] opacity-75 font-mono font-bold">
+                              ({consolidatePisCofinsRows(pisCofinsRows, 'cfop_cst_product').filter(i => i.tipo === 'entrada').length})
+                            </span>
+                          </button>
+
+                          {/* 3. Saídas Completo */}
+                          <button
+                            onClick={() => {
+                              setActivePisCofinsSubTab('saidas');
+                              setPisCofinsViewMode('original');
+                              setPisCofinsOriginalFormat('completo');
+                              setPisCofinsCurrentPage(1);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                              activePisCofinsSubTab === 'saidas' && pisCofinsViewMode === 'original' && pisCofinsOriginalFormat === 'completo'
+                                ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900 bg-white/60 hover:bg-white'
+                            }`}
+                          >
+                            <ArrowDownLeft className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                            <span className="whitespace-nowrap">Saídas Completo</span>
+                            <span className="text-[10px] opacity-75 font-mono font-bold">
+                              ({pisCofinsRows.filter(i => i.tipo === 'saida').length})
+                            </span>
+                          </button>
+
+                          {/* 4. Saídas Resumido */}
+                          <button
+                            onClick={() => {
+                              setActivePisCofinsSubTab('saidas');
+                              setPisCofinsViewMode('original');
+                              setPisCofinsOriginalFormat('resumido');
+                              setPisCofinsCurrentPage(1);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                              activePisCofinsSubTab === 'saidas' && pisCofinsViewMode === 'original' && pisCofinsOriginalFormat === 'resumido'
+                                ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900 bg-white/60 hover:bg-white'
+                            }`}
+                          >
+                            <Package className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                            <span className="whitespace-nowrap">Saídas Resumido</span>
+                            <span className="text-[10px] opacity-75 font-mono font-bold">
+                              ({consolidatePisCofinsRows(pisCofinsRows, 'cfop_cst_product').filter(i => i.tipo === 'saida').length})
+                            </span>
+                          </button>
+
+                          {/* 5. Resumo CFOP/CST */}
+                          <button
+                            onClick={() => {
+                              setActivePisCofinsSubTab('todos');
+                              setPisCofinsViewMode('consolidated');
+                              setPisCofinsCurrentPage(1);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                              pisCofinsViewMode === 'consolidated'
+                                ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900 bg-white/60 hover:bg-white'
+                            }`}
+                          >
+                            <Combine className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                            <span className="whitespace-nowrap">Resumo CFOP/CST</span>
+                            <span className="text-[10px] opacity-75 font-mono font-bold">
+                              ({consolidatePisCofinsRows(pisCofinsRows, 'cfop_cst').length})
+                            </span>
+                          </button>
+                        </div>
+
+                        {/* Search bar */}
+                        <div className="relative w-full xl:w-72 shrink-0">
+                          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                          <input
+                            type="text"
+                            value={searchTermPisCofins}
+                            onChange={(e) => {
+                              setSearchTermPisCofins(e.target.value);
+                              setPisCofinsCurrentPage(1);
+                            }}
+                            placeholder="Buscar por CFOP, CST, Produto..."
+                            className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-[#04243b] bg-white"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ======================================================== */}
+                  {/* SCREEN 2: AUDITORIA */}
+                  {/* ======================================================== */}
+                  {pisCofinsMainScreen === 'auditoria' && (
+                    <div className="space-y-6 animate-fadeIn">
+                      {/* Sub-navigation for AUDITORIA (Inconsistências vs Alertas) */}
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                        <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-2xl overflow-x-auto max-w-full flex-nowrap scrollbar-none">
+                          <button
+                            onClick={() => setPisCofinsAuditType('todas')}
+                            className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                              pisCofinsAuditType === 'todas'
+                                ? 'bg-[#04243b] text-[#e4b35e] shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900 bg-white/60 hover:bg-white'
+                            }`}
+                          >
+                            <ShieldAlert className="w-4 h-4 shrink-0" />
+                            <span className="whitespace-nowrap">Todas ({pisCofinsAuditErrors.length})</span>
+                          </button>
+
+                          <button
+                            onClick={() => setPisCofinsAuditType('inconsistencias')}
+                            className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                              pisCofinsAuditType === 'inconsistencias'
+                                ? 'bg-rose-600 text-white shadow-xs'
+                                : 'text-slate-600 hover:text-rose-700 bg-white/60 hover:bg-white'
+                            }`}
+                          >
+                            <ShieldAlert className="w-4 h-4 text-rose-500 shrink-0" />
+                            <span className="whitespace-nowrap">Inconsistências (Críticas)</span>
+                            <span className="bg-rose-100 text-rose-700 font-mono text-[10px] font-black rounded-full px-2 py-0.5">
+                              {pisCofinsAuditErrors.filter(e => e.severidade === 'critico').length}
+                            </span>
+                          </button>
+
+                          <button
+                            onClick={() => setPisCofinsAuditType('alertas')}
+                            className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                              pisCofinsAuditType === 'alertas'
+                                ? 'bg-amber-600 text-white shadow-xs'
+                                : 'text-slate-600 hover:text-amber-700 bg-white/60 hover:bg-white'
+                            }`}
+                          >
+                            <AlertTriangle className="w-4 h-4 text-amber-500" />
+                            <span>Alertas (Avisos)</span>
+                            <span className="bg-amber-100 text-amber-800 font-mono text-[10px] font-black rounded-full px-2 py-0.5">
+                              {pisCofinsAuditErrors.filter(e => e.severidade === 'aviso').length}
+                            </span>
+                          </button>
+                        </div>
+
+                        <div className="text-xs text-slate-500 font-medium">
+                          Filtro ativo: <strong className="text-slate-800 uppercase">{pisCofinsAuditType}</strong>
+                        </div>
+                      </div>
+
                       {/* Summary statistics bar for audits */}
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="bg-rose-50 border border-rose-200 p-5 rounded-2xl flex items-center gap-4">
@@ -3444,7 +5339,7 @@ export function AuditoriaFiscalWorkspace() {
                             <ShieldAlert className="w-6 h-6" />
                           </div>
                           <div>
-                            <span className="text-[10px] uppercase font-black text-rose-500 block">Críticos / Inconsistências</span>
+                            <span className="text-[10px] uppercase font-black text-rose-500 block">Inconsistências (Críticas)</span>
                             <span className="text-2xl font-black text-rose-800 font-mono block mt-0.5">
                               {pisCofinsAuditErrors.filter(e => e.severidade === 'critico').length}
                             </span>
@@ -3457,7 +5352,7 @@ export function AuditoriaFiscalWorkspace() {
                             <AlertTriangle className="w-6 h-6" />
                           </div>
                           <div>
-                            <span className="text-[10px] uppercase font-black text-amber-500 block">Avisos / Alertas</span>
+                            <span className="text-[10px] uppercase font-black text-amber-500 block">Alertas Fiscais</span>
                             <span className="text-2xl font-black text-amber-800 font-mono block mt-0.5">
                               {pisCofinsAuditErrors.filter(e => e.severidade === 'aviso').length}
                             </span>
@@ -3558,7 +5453,9 @@ export function AuditoriaFiscalWorkspace() {
 
                       {/* Error listing */}
                       <div className="space-y-4">
-                        {pisCofinsAuditErrors.filter(e => pisCofinsActiveAuditFilter === 'todos' || e.tipoErro === pisCofinsActiveAuditFilter).length === 0 ? (
+                        {pisCofinsAuditErrors
+                          .filter(e => pisCofinsAuditType === 'todas' || (pisCofinsAuditType === 'inconsistencias' && e.severidade === 'critico') || (pisCofinsAuditType === 'alertas' && e.severidade === 'aviso'))
+                          .filter(e => pisCofinsActiveAuditFilter === 'todos' || e.tipoErro === pisCofinsActiveAuditFilter).length === 0 ? (
                           <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-8 text-center space-y-3">
                             <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto" />
                             <h4 className="text-emerald-900 font-bold text-sm">Nenhum erro encontrado!</h4>
@@ -3568,6 +5465,7 @@ export function AuditoriaFiscalWorkspace() {
                           </div>
                         ) : (
                           pisCofinsAuditErrors
+                            .filter(e => pisCofinsAuditType === 'todas' || (pisCofinsAuditType === 'inconsistencias' && e.severidade === 'critico') || (pisCofinsAuditType === 'alertas' && e.severidade === 'aviso'))
                             .filter(e => pisCofinsActiveAuditFilter === 'todos' || e.tipoErro === pisCofinsActiveAuditFilter)
                             .map((err) => (
                               <div
@@ -3655,7 +5553,9 @@ export function AuditoriaFiscalWorkspace() {
                                 <div className="shrink-0 w-full md:w-auto md:self-stretch flex flex-row md:flex-col justify-end gap-2 border-t md:border-t-0 md:border-l border-slate-100 pt-3 md:pt-0 md:pl-4">
                                   <button
                                     onClick={() => {
+                                      setPisCofinsMainScreen('relatorios');
                                       setPisCofinsViewMode('original');
+                                      setPisCofinsOriginalFormat('completo');
                                       setActivePisCofinsSubTab('todos');
                                       setSearchTermPisCofins(err.item.numeroNota);
                                       setPisCofinsCurrentPage(1);
@@ -3675,136 +5575,140 @@ export function AuditoriaFiscalWorkspace() {
                         )}
                       </div>
                     </div>
-                  ) : (
+                  )}
+
+                  {/* Render Table in RELATÓRIOS Screen */}
+                  {pisCofinsMainScreen === 'relatorios' && (
                     <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
                       <div className="overflow-x-auto">
                         <table className="w-full text-left border-collapse">
                           <thead className="bg-slate-50 text-[10px] font-bold text-slate-500 uppercase border-b border-slate-100">
                             {pisCofinsViewMode === 'consolidated' ? (
                               <tr>
-                                {pisCofinsCriteria === 'cfop_cst_product' && (
-                                  <>
-                                    <th className="py-2.5 px-3">Cód Produto</th>
-                                    <th className="py-2.5 px-3">Descrição Produto</th>
-                                  </>
-                                )}
-                                <th className="py-2.5 px-3">CFOP</th>
-                                <th className="py-2.5 px-3">CST PIS/COF</th>
-                                <th className="py-2.5 px-3 text-right">Valor Produto Total</th>
-                                <th className="py-2.5 px-3 text-right">Base de Cálculo PIS</th>
-                                <th className="py-2.5 px-3 text-center">Alíquota PIS</th>
-                                <th className="py-2.5 px-3 text-right">PIS Total</th>
-                                <th className="py-2.5 px-3 text-right">Base de Cálculo COFINS</th>
-                                <th className="py-2.5 px-3 text-center">Alíquota COFINS</th>
-                                <th className="py-2.5 px-3 text-right">COFINS Total</th>
+                                <th className="py-2.5 px-3 whitespace-nowrap font-bold min-w-[75px]">CFOP</th>
+                                <th className="py-2.5 px-3 whitespace-nowrap">CST PIS/COF</th>
+                                <th className="py-2.5 px-3 text-right whitespace-nowrap">Valor Produto Total</th>
+                                <th className="py-2.5 px-3 text-right whitespace-nowrap">Base de Cálculo PIS</th>
+                                <th className="py-2.5 px-3 text-center whitespace-nowrap">Alíquota PIS</th>
+                                <th className="py-2.5 px-3 text-right whitespace-nowrap">PIS Total</th>
+                                <th className="py-2.5 px-3 text-right whitespace-nowrap">Base de Cálculo COFINS</th>
+                                <th className="py-2.5 px-3 text-center whitespace-nowrap">Alíquota COFINS</th>
+                                <th className="py-2.5 px-3 text-right whitespace-nowrap">COFINS Total</th>
+                              </tr>
+                            ) : pisCofinsOriginalFormat === 'resumido' ? (
+                              <tr>
+                                <th className="py-2.5 px-3">Cód Produto</th>
+                                <th className="py-2.5 px-3">Descrição Produto</th>
+                                <th className="py-2.5 px-3 whitespace-nowrap font-bold min-w-[75px]">CFOP</th>
+                                <th className="py-2.5 px-3 whitespace-nowrap">CST PIS/COF</th>
+                                <th className="py-2.5 px-3 text-right whitespace-nowrap">Valor Produto Total</th>
+                                <th className="py-2.5 px-3 text-right whitespace-nowrap">Base de Cálculo PIS</th>
+                                <th className="py-2.5 px-3 text-center whitespace-nowrap">Alíquota PIS</th>
+                                <th className="py-2.5 px-3 text-right whitespace-nowrap">PIS Total</th>
+                                <th className="py-2.5 px-3 text-right whitespace-nowrap">Base de Cálculo COFINS</th>
+                                <th className="py-2.5 px-3 text-center whitespace-nowrap">Alíquota COFINS</th>
+                                <th className="py-2.5 px-3 text-right whitespace-nowrap">COFINS Total</th>
                               </tr>
                             ) : (
-                              <tr>
-                                <th className="py-2.5 px-3">Tipo</th>
-                                <th className="py-2.5 px-3">Data</th>
-                                <th className="py-2.5 px-3">Nº Nota</th>
-                                <th className="py-2.5 px-3">CFOP</th>
-                                <th className="py-2.5 px-3">CST</th>
-                                <th className="py-2.5 px-3">Código</th>
-                                <th className="py-2.5 px-3">Descrição Produto</th>
-                                <th className="py-2.5 px-3 text-right">Valor Produto</th>
-                                <th className="py-2.5 px-3 text-right">BC PIS</th>
-                                <th className="py-2.5 px-3 text-center">Alíq. PIS</th>
-                                <th className="py-2.5 px-3 text-right">Valor PIS</th>
-                                <th className="py-2.5 px-3 text-right">BC COFINS</th>
-                                <th className="py-2.5 px-3 text-center">Alíq. COFINS</th>
-                                <th className="py-2.5 px-3 text-right">Valor COFINS</th>
-                                <th className="py-2.5 px-3 text-right bg-indigo-50/50">Imposto Total</th>
-                              </tr>
+                              <>
+                                <tr>
+                                  <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-200 whitespace-nowrap text-center">Data Entrada</th>
+                                  <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-200 whitespace-nowrap text-center">Documento</th>
+                                  <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-200 whitespace-nowrap text-center">Acumulador</th>
+                                  <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-200 whitespace-nowrap text-center">Produto</th>
+                                  <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-200 whitespace-nowrap min-w-[200px]">Descrição Produto</th>
+                                  <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-200 whitespace-nowrap text-center">NCM</th>
+                                  <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-200 text-right whitespace-nowrap">Valor Produto</th>
+                                  <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-200 text-right whitespace-nowrap">Valor Contábil</th>
+                                  <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-200 text-center whitespace-nowrap min-w-[75px]">CFOP</th>
+                                  <th rowSpan={2} className="py-2.5 px-3 border-r border-slate-200 text-center whitespace-nowrap">Base Crédito</th>
+                                  <th colSpan={5} className="py-1.5 px-3 text-center bg-sky-900 text-sky-100 font-bold border-r border-slate-200">PIS</th>
+                                  <th colSpan={5} className="py-1.5 px-3 text-center bg-indigo-900 text-indigo-100 font-bold">COFINS</th>
+                                </tr>
+                                <tr className="bg-slate-100 text-[9px] text-slate-600 border-t border-slate-200">
+                                  <th className="py-1.5 px-2 border-r border-slate-200 text-center">CST PIS</th>
+                                  <th className="py-1.5 px-2 border-r border-slate-200 text-center">Vínculo Crédito</th>
+                                  <th className="py-1.5 px-2.5 border-r border-slate-200 text-right">Base Cálculo / Qtd</th>
+                                  <th className="py-1.5 px-2 border-r border-slate-200 text-center">Alíquota / Unid</th>
+                                  <th className="py-1.5 px-2.5 border-r border-slate-200 text-right">Valor PIS</th>
+                                  <th className="py-1.5 px-2 border-r border-slate-200 text-center">CST COFINS</th>
+                                  <th className="py-1.5 px-2 border-r border-slate-200 text-center">Vínculo Crédito</th>
+                                  <th className="py-1.5 px-2.5 border-r border-slate-200 text-right">Base Cálculo / Qtd</th>
+                                  <th className="py-1.5 px-2 border-r border-slate-200 text-center">Alíquota / Unid</th>
+                                  <th className="py-1.5 px-2.5 text-right">Valor COFINS</th>
+                                </tr>
+                              </>
                             )}
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-[11px] font-mono">
-                            {pisCofinsViewMode === 'consolidated' ? (
-                              consolidatedPisCofinsRows.length === 0 ? (
-                                <tr>
-                                  <td colSpan={pisCofinsCriteria === 'cfop_cst_product' ? 11 : 9} className="text-center py-10 text-slate-400 font-sans">
-                                    Nenhum item consolidado encontrado.
-                                  </td>
-                                </tr>
-                              ) : (
-                                paginatedConsolidatedPisCofinsRows.map((r, idx) => (
-                                  <tr key={`piscof-row-c-${idx}`} className="hover:bg-slate-50/50">
-                                    {pisCofinsCriteria === 'cfop_cst_product' && (
-                                      <>
-                                        <td className="py-2 px-3 text-slate-600">{r.codigoProduto || '-'}</td>
-                                        <td className="py-2 px-3 text-slate-700 font-sans max-w-xs truncate" title={r.nomeProduto}>{r.nomeProduto || '-'}</td>
-                                      </>
-                                    )}
-                                    <td className="py-2 px-3 font-bold text-[#04243b]">{r.cfop}</td>
-                                    <td className="py-2 px-3">
-                                      <span className="bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded font-sans">CST {r.cst}</span>
-                                    </td>
-                                    <td className="py-2 px-3 text-right text-slate-700">R$ {r.valorProduto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                    <td className="py-2 px-3 text-right text-slate-700">R$ {(r.baseCalculoPis !== undefined ? r.baseCalculoPis : r.baseCalculo).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                    <td className="py-2 px-3 text-center text-slate-500 font-sans">{r.aliquotaPis.toFixed(2)}%</td>
-                                    <td className="py-2 px-3 text-right text-emerald-700 font-bold">R$ {r.valorPis.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                    <td className="py-2 px-3 text-right text-slate-700">R$ {(r.baseCalculoCofins !== undefined ? r.baseCalculoCofins : r.baseCalculo).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                    <td className="py-2 px-3 text-center text-slate-500 font-sans">{r.aliquotaCofins.toFixed(2)}%</td>
-                                    <td className="py-2 px-3 text-right text-amber-700 font-bold">R$ {r.valorCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                  </tr>
-                                ))
-                              )
+                            {activePisCofinsDisplayRows.length === 0 ? (
+                              <tr>
+                                <td colSpan={20} className="text-center py-10 text-slate-400 font-sans">
+                                  Nenhum item encontrado para os filtros selecionados.
+                                </td>
+                              </tr>
+                            ) : pisCofinsViewMode === 'consolidated' || pisCofinsOriginalFormat === 'resumido' ? (
+                              <PisCofinsSummaryTableRows
+                                rows={paginatedActivePisCofinsDisplayRows}
+                                isResumido={pisCofinsOriginalFormat === 'resumido' && pisCofinsViewMode === 'original'}
+                              />
                             ) : (
-                              filteredPisCofinsRows.length === 0 ? (
-                                <tr>
-                                  <td colSpan={15} className="text-center py-10 text-slate-400 font-sans">
-                                    Nenhum item encontrado para os filtros selecionados.
+                              paginatedActivePisCofinsDisplayRows.map((r, idx) => (
+                                <tr key={`piscof-row-f-${idx}`} className={`hover:bg-slate-50/80 transition-colors ${r.isCreditReduction ? 'bg-amber-50/40' : idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}>
+                                  <td className="py-2 px-2.5 font-sans text-slate-600 whitespace-nowrap text-center">{r.data}</td>
+                                  <td className="py-2 px-2.5 text-slate-700 font-bold whitespace-nowrap text-center">{r.numeroNota}</td>
+                                  <td className="py-2 px-2.5 text-slate-600 text-center">{r.acum || '-'}</td>
+                                  <td className="py-2 px-2.5 text-slate-700 font-bold text-center">{r.codigoProduto || '-'}</td>
+                                  <td className="py-2 px-3 font-sans text-slate-800 font-medium max-w-xs truncate" title={r.nomeProduto}>{r.nomeProduto}</td>
+                                  <td className="py-2 px-2.5 text-slate-600 text-center">{r.ncm || '-'}</td>
+                                  <td className="py-2 px-2.5 text-right font-semibold text-slate-700 whitespace-nowrap">
+                                    R$ {r.valorProduto.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="py-2 px-2.5 text-right font-semibold text-slate-700 whitespace-nowrap">
+                                    R$ {(r.valorContabil ?? r.valorProduto).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="py-2 px-2.5 text-center font-bold text-[#04243b] whitespace-nowrap">{r.cfop}</td>
+                                  <td className="py-2 px-2.5 text-center text-slate-600">{r.baseCred || r.vincCredProd || '-'}</td>
+                                  
+                                  {/* PIS Block */}
+                                  <td className="py-2 px-2 text-center bg-sky-50/40 border-l border-sky-100">
+                                    <span className="bg-sky-100 text-sky-800 font-bold px-1.5 py-0.5 rounded text-[10px] font-sans">
+                                      {r.cstPis || r.cst || '-'}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-2 text-center bg-sky-50/40 text-slate-600">
+                                    {r.vincCredPis || r.vincCredProd || '01'}
+                                  </td>
+                                  <td className="py-2 px-2.5 text-right bg-sky-50/40 text-slate-700 whitespace-nowrap">
+                                    R$ {(r.baseCalculoPis !== undefined ? r.baseCalculoPis : r.baseCalculo).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="py-2 px-2 text-center bg-sky-50/40 text-slate-600 font-sans">
+                                    {r.aliquotaPis.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}%
+                                  </td>
+                                  <td className="py-2 px-2.5 text-right bg-sky-100/50 text-sky-900 font-bold whitespace-nowrap border-r border-sky-200">
+                                    R$ {r.valorPis.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+
+                                  {/* COFINS Block */}
+                                  <td className="py-2 px-2 text-center bg-indigo-50/40 border-l border-indigo-100">
+                                    <span className="bg-indigo-100 text-indigo-800 font-bold px-1.5 py-0.5 rounded text-[10px] font-sans">
+                                      {r.cstCofins || r.cst || '-'}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-2 text-center bg-indigo-50/40 text-slate-600">
+                                    {r.vincCredCofins || r.vincCredProd || '01'}
+                                  </td>
+                                  <td className="py-2 px-2.5 text-right bg-indigo-50/40 text-slate-700 whitespace-nowrap">
+                                    R$ {(r.baseCalculoCofins !== undefined ? r.baseCalculoCofins : r.baseCalculo).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="py-2 px-2 text-center bg-indigo-50/40 text-slate-600 font-sans">
+                                    {r.aliquotaCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}%
+                                  </td>
+                                  <td className="py-2 px-2.5 text-right bg-indigo-100/50 text-indigo-900 font-bold whitespace-nowrap">
+                                    R$ {r.valorCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   </td>
                                 </tr>
-                              ) : (
-                                paginatedFilteredPisCofinsRows.map((r, idx) => (
-                                  <tr key={`piscof-row-f-${idx}`} className={`hover:bg-slate-50/50 ${r.isCreditReduction ? 'bg-amber-50/30' : ''}`}>
-                                    <td className="py-2 px-3">
-                                      <span className={`font-sans text-[9px] font-black tracking-wider uppercase px-1.5 py-0.5 rounded ${
-                                        r.tipo === 'entrada'
-                                          ? r.isCreditReduction
-                                            ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                                            : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                          : 'bg-rose-50 text-rose-700 border border-rose-200'
-                                      }`}>
-                                        {r.tipo === 'entrada'
-                                          ? r.isCreditReduction
-                                            ? 'ESTORNO CRÉD.'
-                                            : 'CRÉDITO'
-                                          : 'DÉBITO'}
-                                      </span>
-                                    </td>
-                                    <td className="py-2 px-3 font-sans text-slate-500 whitespace-nowrap">{r.data}</td>
-                                    <td className="py-2 px-3 text-slate-600 font-bold">{r.numeroNota}</td>
-                                    <td className="py-2 px-3 font-bold text-[#04243b]">{r.cfop}</td>
-                                    <td className="py-2 px-3">
-                                      <span className="bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded font-sans">CST {r.cst}</span>
-                                    </td>
-                                    <td className="py-2 px-3 text-slate-600">{r.codigoProduto || '-'}</td>
-                                    <td className="py-2 px-3 font-sans text-slate-700 max-w-xs truncate" title={r.nomeProduto}>{r.nomeProduto}</td>
-                                    <td className={`py-2 px-3 text-right ${r.isCreditReduction ? 'text-amber-700 font-semibold' : 'text-slate-700'}`}>
-                                      R$ {r.valorProduto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                    </td>
-                                    <td className={`py-2 px-3 text-right ${r.isCreditReduction ? 'text-amber-700 font-semibold' : 'text-slate-700'}`}>
-                                      R$ {(r.baseCalculoPis !== undefined ? r.baseCalculoPis : r.baseCalculo).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                    </td>
-                                    <td className="py-2 px-3 text-center text-slate-500 font-sans">{r.aliquotaPis.toFixed(2)}%</td>
-                                    <td className={`py-2 px-3 text-right ${r.isCreditReduction ? 'text-red-600 font-bold' : 'text-emerald-700'}`}>
-                                      R$ {r.valorPis.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                    </td>
-                                    <td className={`py-2 px-3 text-right ${r.isCreditReduction ? 'text-amber-700 font-semibold' : 'text-slate-700'}`}>
-                                      R$ {(r.baseCalculoCofins !== undefined ? r.baseCalculoCofins : r.baseCalculo).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                    </td>
-                                    <td className="py-2 px-3 text-center text-slate-500 font-sans">{r.aliquotaCofins.toFixed(2)}%</td>
-                                    <td className={`py-2 px-3 text-right ${r.isCreditReduction ? 'text-red-600 font-bold' : 'text-amber-700'}`}>
-                                      R$ {r.valorCofins.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                    </td>
-                                    <td className="py-2 px-3 text-right font-black text-indigo-700 bg-indigo-50/20">
-                                      R$ {r.imposto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                    </td>
-                                  </tr>
-                                ))
-                              )
+                              ))
                             )}
                           </tbody>
                         </table>
@@ -3813,7 +5717,7 @@ export function AuditoriaFiscalWorkspace() {
                       {totalPisCofinsPages > 1 && (
                         <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 bg-[#04243b]/5">
                           <span className="text-xs text-slate-500 font-sans">
-                            Página <strong>{pisCofinsCurrentPage}</strong> de {totalPisCofinsPages} (Exibindo {pisCofinsCurrentPage * pisCofinsItemsPerPage - pisCofinsItemsPerPage + 1} - {Math.min(pisCofinsCurrentPage * pisCofinsItemsPerPage, pisCofinsViewMode === 'consolidated' ? consolidatedPisCofinsRows.length : filteredPisCofinsRows.length)} de {pisCofinsViewMode === 'consolidated' ? consolidatedPisCofinsRows.length : filteredPisCofinsRows.length} itens)
+                            Página <strong>{pisCofinsCurrentPage}</strong> de {totalPisCofinsPages} (Exibindo {pisCofinsCurrentPage * pisCofinsItemsPerPage - pisCofinsItemsPerPage + 1} - {Math.min(pisCofinsCurrentPage * pisCofinsItemsPerPage, activePisCofinsDisplayRows.length)} de {activePisCofinsDisplayRows.length} itens)
                           </span>
                           <div className="flex items-center gap-1.5">
                             <button
@@ -3844,6 +5748,125 @@ export function AuditoriaFiscalWorkspace() {
 
         </div>
       </div>
+
+      {/* MODAL DE RELATÓRIOS IMPORTADOS */}
+      {showLoadedFilesModal && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-4 bg-[#04243b] text-white">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-[#e4b35e]/20 text-[#e4b35e] rounded-xl font-bold">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold tracking-tight">
+                    Relatórios Importados no Sistema
+                  </h3>
+                  <p className="text-[11px] text-slate-300 font-medium">
+                    Lista de relatórios SEFAZ (SIGA) e ICMS/ERP carregados para auditoria
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowLoadedFilesModal(false)}
+                className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 max-h-[60vh] overflow-y-auto space-y-4">
+              {loadedFiles.length === 0 ? (
+                <div className="text-center py-10 text-slate-500 space-y-2">
+                  <FileText className="w-12 h-12 text-slate-300 mx-auto" />
+                  <p className="text-sm font-bold text-slate-700">Nenhum relatório foi importado ainda</p>
+                  <p className="text-xs text-slate-400 max-w-xs mx-auto">
+                    Utilize os botões de importação para carregar o arquivo da SEFAZ (Entradas/Saídas) ou o relatório de ICMS do seu Sistema/ERP.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs text-slate-500 font-bold px-1">
+                    <span>{loadedFiles.length} {loadedFiles.length === 1 ? 'arquivo importado' : 'arquivos importados'}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm('Tem certeza que deseja limpar todos os relatórios importados?')) {
+                          setLoadedFiles([]);
+                          setSefazRows([]);
+                          setErpIcmsItems([]);
+                          setOrganizadorEntradas([]);
+                          setOrganizadorSaidas([]);
+                          setPisCofinsRows([]);
+                          setRawSefazText('');
+                          setErpRowsText('');
+                          setSigaTaxText('');
+                        }
+                      }}
+                      className="text-xs text-red-600 hover:text-red-800 font-bold hover:underline cursor-pointer"
+                    >
+                      Limpar todos
+                    </button>
+                  </div>
+
+                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
+                    {loadedFiles.map((file, idx) => (
+                      <div key={idx} className="p-3.5 bg-white hover:bg-slate-50/80 flex items-center justify-between gap-3 transition-all">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`p-2.5 rounded-xl shrink-0 font-bold ${
+                            file.type === 'sefaz' ? 'bg-amber-100 text-amber-800' :
+                            file.type === 'erp' ? 'bg-sky-100 text-sky-800' :
+                            file.type === 'siga_tax' ? 'bg-emerald-100 text-emerald-800' : 'bg-purple-100 text-purple-800'
+                          }`}>
+                            <FileText className="w-4 h-4" />
+                          </div>
+
+                          <div className="min-w-0">
+                            <h4 className="text-xs font-extrabold text-slate-800 truncate" title={file.name}>
+                              {file.name}
+                            </h4>
+                            <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
+                              <span className={`px-2 py-0.5 rounded-md font-extrabold uppercase text-[9px] ${
+                                file.type === 'sefaz' ? 'bg-amber-100 text-amber-900 border border-amber-200' :
+                                file.type === 'erp' ? 'bg-sky-100 text-sky-900 border border-sky-200' :
+                                file.type === 'siga_tax' ? 'bg-emerald-100 text-emerald-900 border border-emerald-200' : 'bg-purple-100 text-purple-900 border border-purple-200'
+                              }`}>
+                                {file.type === 'sefaz' ? 'SEFAZ / SIGA' : file.type === 'erp' ? 'SISTEMA / ICMS' : file.type.toUpperCase()}
+                              </span>
+                              <span>•</span>
+                              <span className="font-mono font-bold text-slate-700">
+                                {file.recordsCount > 0 
+                                  ? `${file.recordsCount.toLocaleString('pt-BR')} registros` 
+                                  : `${(file.size / 1024).toFixed(1)} KB`
+                                }
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-end gap-3 px-5 py-3.5 bg-slate-50 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setShowLoadedFilesModal(false)}
+                className="px-4 py-2 rounded-xl bg-[#04243b] hover:bg-[#083454] text-white text-xs font-bold transition-all cursor-pointer shadow-2xs"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 5. PROCESS MONITORING MODAL SPINNER */}
       {isProcessing && (

@@ -33,8 +33,12 @@ export interface PisCofinsItem {
   codSeqNf?: string;
   fornec?: string;
   acum?: string;
+  ncm?: string;
+  valorContabil?: number;
   cstPis?: string;
+  vincCredPis?: string;
   cstCofins?: string;
+  vincCredCofins?: string;
   baseCred?: string;
   vincCredProd?: string;
   baseCredProd?: string;
@@ -308,11 +312,7 @@ export function detectEntradaLayout(lines: string[]): {
   return layout;
 }
 
-/**
- * Main parser for PIS/COFINS csv/txt report
- */
-export function parsePisCofinsReport(text: string): { items: PisCofinsItem[]; metadata: PisCofinsMetadata } {
-  const items: PisCofinsItem[] = [];
+export function extractPisCofinsMetadata(lines: string[]): PisCofinsMetadata {
   const metadata: PisCofinsMetadata = {
     empresa: '',
     cnpj: '',
@@ -320,40 +320,72 @@ export function parsePisCofinsReport(text: string): { items: PisCofinsItem[]; me
     emissao: ''
   };
 
-  if (!text) return { items, metadata };
-
-  const lines = text.split(/\r?\n/);
-
-  // Extract metadata
-  for (const line of lines) {
+  const maxHeaderLines = Math.min(lines.length, 40);
+  for (let i = 0; i < maxHeaderLines; i++) {
+    const line = lines[i];
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    if (trimmed.toLowerCase().includes('empresa:') || trimmed.toLowerCase().includes('razao social:') || trimmed.toLowerCase().includes('razão social:')) {
-      const parts = trimmed.split(';');
-      const empIdx = parts.findIndex(p => p.toLowerCase().includes('empresa:') || p.toLowerCase().includes('razao social:') || p.toLowerCase().includes('razão social:'));
-      if (empIdx !== -1) {
-        // Find the first non-empty cell after it
-        for (let idx = empIdx + 1; idx < parts.length; idx++) {
-          if (parts[idx] && parts[idx].trim()) {
-            metadata.empresa = parts[idx].trim().replace(/^"|"$/g, '');
-            break;
+    const lower = trimmed.toLowerCase();
+    const parts = trimmed.split(';').map(p => p.trim().replace(/^"|"$/g, ''));
+
+    // 1. Empresa
+    if (!metadata.empresa) {
+      if (lower.includes('empresa:') || lower.includes('razao social:') || lower.includes('razão social:')) {
+        const empIdx = parts.findIndex(p => {
+          const l = p.toLowerCase();
+          return l.includes('empresa:') || l.includes('razao social:') || l.includes('razão social:');
+        });
+        if (empIdx !== -1) {
+          for (let idx = empIdx + 1; idx < parts.length; idx++) {
+            if (parts[idx]) {
+              metadata.empresa = parts[idx];
+              break;
+            }
           }
+        }
+      } else if (i <= 5) {
+        const firstCell = parts[0];
+        const firstCellLower = firstCell ? firstCell.toLowerCase() : '';
+        if (
+          firstCell &&
+          firstCell.length >= 3 &&
+          !firstCellLower.startsWith('cnpj') &&
+          !firstCellLower.startsWith('periodo') &&
+          !firstCellLower.startsWith('período') &&
+          !firstCellLower.startsWith('data') &&
+          !firstCellLower.startsWith('detalhamento') &&
+          !firstCellLower.startsWith('relatório') &&
+          !firstCellLower.startsWith('relatorio') &&
+          !firstCellLower.startsWith('demonstração') &&
+          !firstCellLower.startsWith('demonstracao') &&
+          !firstCellLower.startsWith('código') &&
+          !firstCellLower.startsWith('codigo') &&
+          !firstCellLower.startsWith('página') &&
+          !firstCellLower.startsWith('pagina') &&
+          !firstCellLower.startsWith('produto') &&
+          !firstCellLower.startsWith('movimento') &&
+          !firstCellLower.startsWith('notas') &&
+          !firstCellLower.startsWith('entradas') &&
+          !firstCellLower.startsWith('saídas') &&
+          !firstCellLower.startsWith('saidas')
+        ) {
+          metadata.empresa = firstCell;
         }
       }
     }
-    if (trimmed.toLowerCase().includes('cnpj:')) {
-      const parts = trimmed.split(';');
+
+    // 2. CNPJ
+    if (!metadata.cnpj && lower.includes('cnpj:')) {
       const cnpjIdx = parts.findIndex(p => p.toLowerCase().includes('cnpj:'));
       if (cnpjIdx !== -1) {
         for (let idx = cnpjIdx + 1; idx < parts.length; idx++) {
-          if (parts[idx] && parts[idx].trim()) {
-            const rawCnpj = parts[idx].trim().replace(/^"|"$/g, '');
-            // Format if it is 14 numeric characters
+          if (parts[idx]) {
+            const rawCnpj = parts[idx];
             const digits = rawCnpj.replace(/\D/g, '');
             if (digits.length === 14) {
               metadata.cnpj = `${digits.substring(0, 2)}.${digits.substring(2, 5)}.${digits.substring(5, 8)}/${digits.substring(8, 12)}-${digits.substring(12, 14)}`;
-            } else {
+            } else if (rawCnpj) {
               metadata.cnpj = rawCnpj;
             }
             break;
@@ -361,32 +393,223 @@ export function parsePisCofinsReport(text: string): { items: PisCofinsItem[]; me
         }
       }
     }
-    if (trimmed.toLowerCase().includes('periodo de:') || trimmed.toLowerCase().includes('período de:')) {
-      const parts = trimmed.split(';');
-      const pIdx = parts.findIndex(p => p.toLowerCase().includes('periodo de:') || p.toLowerCase().includes('período de:'));
-      if (pIdx !== -1 && parts[pIdx]) {
-        metadata.periodo = parts[pIdx].trim().replace(/^"|"$/g, '').replace('Período de: ', '').replace('Periodo de: ', '');
+
+    // 3. Período
+    if (!metadata.periodo && (lower.includes('periodo') || lower.includes('período'))) {
+      const pIdx = parts.findIndex(p => {
+        const l = p.toLowerCase();
+        return l.includes('periodo') || l.includes('período');
+      });
+      if (pIdx !== -1) {
+        const nonValParts: string[] = [];
+        for (let idx = pIdx + 1; idx < parts.length; idx++) {
+          const item = parts[idx];
+          if (item && !item.toLowerCase().includes('hora:')) {
+            nonValParts.push(item);
+          } else if (item && item.toLowerCase().includes('hora:')) {
+            break;
+          }
+        }
+        const fullStr = nonValParts.join(' ').trim();
+        const dates = fullStr.match(/\d{2}\/\d{2}\/\d{4}/g);
+        if (dates && dates.length >= 2) {
+          if (dates[0] === dates[1]) {
+            const partsD = dates[0].split('/');
+            metadata.periodo = `${partsD[1]}/${partsD[2]}`;
+          } else {
+            metadata.periodo = `${dates[0]} até ${dates[1]}`;
+          }
+        } else if (dates && dates.length === 1) {
+          metadata.periodo = dates[0];
+        } else if (fullStr) {
+          metadata.periodo = fullStr.replace(/^de:?\s*/i, '').replace(/^por:?\s*/i, '');
+        }
       }
     }
-    if (trimmed.toLowerCase().includes('data:')) {
-      const parts = trimmed.split(';');
-      const dataPart = parts.find(p => p.toLowerCase().includes('data:'));
-      if (dataPart) {
-        const match = dataPart.match(/\d{2}\/\d{2}\/\d{4}/);
-        if (match) {
-          metadata.emissao = match[0];
+
+    // 4. Emissão
+    if (!metadata.emissao && (lower.includes('emissao:') || lower.includes('emissão:') || lower.includes('data:'))) {
+      const eIdx = parts.findIndex(p => {
+        const l = p.toLowerCase();
+        return l.includes('emissao:') || l.includes('emissão:') || l.includes('data:');
+      });
+      if (eIdx !== -1) {
+        for (let idx = eIdx + 1; idx < parts.length; idx++) {
+          if (parts[idx]) {
+            metadata.emissao = parts[idx];
+            break;
+          }
         }
       }
     }
   }
 
-  // Fallback metadata if empty
-  if (!metadata.empresa) metadata.empresa = 'MENDES E PARENTE LTDA ME';
-  if (!metadata.cnpj) metadata.cnpj = '08.470.032/0001-62';
-  if (!metadata.periodo) metadata.periodo = '06/2026';
+  if (!metadata.empresa) metadata.empresa = 'EMPRESA IDENTIFICADA NO DEMONSTRATIVO';
+  if (!metadata.periodo) metadata.periodo = 'PERÍODO AUDITADO';
   if (!metadata.emissao) metadata.emissao = new Date().toLocaleDateString('pt-BR');
 
+  return metadata;
+}
+
+/**
+ * Main parser for PIS/COFINS csv/txt report
+ */
+export function parsePisCofinsReport(text: string): { items: PisCofinsItem[]; metadata: PisCofinsMetadata } {
+  const items: PisCofinsItem[] = [];
+  if (!text) return { items, metadata: { empresa: '', cnpj: '', periodo: '', emissao: '' } };
+
+  const lines = text.split(/\r?\n/);
+  const metadata = extractPisCofinsMetadata(lines);
+
   const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+
+  // Check if file is of the 'Por Produtos' layout
+  const isPorProdutosLayout = lines.some(line => 
+    line.toLowerCase().includes('detalhamento de movimento') ||
+    line.toLowerCase().includes('por produtos') ||
+    line.toLowerCase().startsWith('produto:')
+  );
+
+  if (isPorProdutosLayout) {
+    let currentProductCode = '';
+    let currentProductName = '';
+    const isSaida = lines.some(line => line.toLowerCase().includes('movimento de saídas') || line.toLowerCase().includes('movimento de saidas'));
+
+    lines.forEach((line, index) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      if (trimmed.toLowerCase().startsWith('produto:')) {
+        const rawProd = trimmed.replace(/^produto:\s*/i, '');
+        const cleanProd = rawProd.split(';')[0].trim();
+        const parts = cleanProd.split('-').map(s => s.trim());
+        if (parts.length >= 2) {
+          currentProductCode = parts[0];
+          currentProductName = parts.slice(1).join(' - ');
+        } else {
+          currentProductCode = cleanProd;
+          currentProductName = cleanProd;
+        }
+        return;
+      }
+
+      const cells = line.split(';').map(c => c.trim().replace(/^"|"$/g, ''));
+      if (cells.length < 25) return;
+
+      if (cells[0].toLowerCase().includes('total:') || cells[1].toLowerCase().includes('total:') || cells[2].toLowerCase().includes('total:')) {
+        return;
+      }
+
+      const dateIdx = datePattern.test(cells[2]) ? 2 : datePattern.test(cells[1]) ? 1 : datePattern.test(cells[0]) ? 0 : -1;
+      if (dateIdx !== -1) {
+        const data = cells[dateIdx];
+        const codSeqNf = cells[0] || '';
+        const fornec = dateIdx === 2 ? cells[5] || '' : cells[3] || '';
+        const numeroNota = dateIdx === 2 ? cells[12] || '' : cells[4] || '';
+        const acum = dateIdx === 2 ? cells[15] || '' : cells[6] || '';
+        const codigoProduto = (dateIdx === 2 ? cells[18] : cells[7]) || currentProductCode;
+        const nomeProduto = currentProductName || `PRODUTO ${codigoProduto}`;
+        const ncm = (dateIdx === 2 ? cells[20] : cells[9]) || '';
+        const valorProduto = parseBrazilianNumber(dateIdx === 2 ? cells[22] : cells[11]);
+        const valorContabil = parseBrazilianNumber(dateIdx === 2 ? cells[24] : cells[13]);
+        const cfop = (dateIdx === 2 ? cells[26] : cells[15]) || '';
+        
+        let baseCred = '';
+        let cstPis = '';
+        let vincCredPis = '';
+        let baseCalculoPis = 0;
+        let aliquotaPis = 0;
+        let valorPis = 0;
+
+        let cstCofins = '';
+        let vincCredCofins = '';
+        let baseCalculoCofins = 0;
+        let aliquotaCofins = 0;
+        let valorCofins = 0;
+
+        if (isSaida) {
+          cstPis = (dateIdx === 2 ? cells[28] : cells[17]) || '';
+          vincCredPis = (dateIdx === 2 ? cells[30] : cells[19]) || '';
+          baseCalculoPis = parseBrazilianNumber(dateIdx === 2 ? cells[32] : cells[21]);
+          aliquotaPis = parseBrazilianNumber(dateIdx === 2 ? cells[34] : cells[23]);
+          valorPis = parseBrazilianNumber(dateIdx === 2 ? cells[36] : cells[25]);
+
+          cstCofins = (dateIdx === 2 ? cells[39] : cells[28]) || '';
+          vincCredCofins = (dateIdx === 2 ? cells[41] : cells[30]) || '';
+          baseCalculoCofins = parseBrazilianNumber(dateIdx === 2 ? cells[43] : cells[32]);
+          aliquotaCofins = parseBrazilianNumber(dateIdx === 2 ? cells[45] : cells[34]);
+
+          let rawValCofins = dateIdx === 2 ? cells[48] : cells[37];
+          if ((!rawValCofins || rawValCofins === '') && dateIdx === 2) {
+            rawValCofins = cells[49] || cells[50] || '0';
+          }
+          valorCofins = parseBrazilianNumber(rawValCofins);
+        } else {
+          baseCred = (dateIdx === 2 ? cells[28] : cells[17]) || '';
+          cstPis = (dateIdx === 2 ? cells[30] : cells[19]) || '';
+          vincCredPis = (dateIdx === 2 ? cells[32] : cells[21]) || '01';
+          baseCalculoPis = parseBrazilianNumber(dateIdx === 2 ? cells[34] : cells[23]);
+          aliquotaPis = parseBrazilianNumber(dateIdx === 2 ? cells[36] : cells[25]);
+          valorPis = parseBrazilianNumber(dateIdx === 2 ? cells[38] : cells[27]);
+
+          cstCofins = (dateIdx === 2 ? cells[41] : cells[30]) || '';
+          vincCredCofins = (dateIdx === 2 ? cells[43] : cells[32]) || '01';
+          baseCalculoCofins = parseBrazilianNumber(dateIdx === 2 ? cells[45] : cells[34]);
+          aliquotaCofins = parseBrazilianNumber(dateIdx === 2 ? cells[47] : cells[36]);
+          valorCofins = parseBrazilianNumber(dateIdx === 2 ? cells[50] : cells[39]);
+        }
+
+        let cst = cstPis || cstCofins || (isSaida ? '01' : '50');
+        if (cst.length === 1) cst = cst.padStart(2, '0');
+
+        items.push({
+          id: `pis-por-produto-${index}-${Math.random().toString(36).substring(2, 7)}`,
+          empresaId: '7',
+          data,
+          modelo: 'NF-e',
+          numeroNota,
+          cfop,
+          codigoProduto,
+          nomeProduto,
+          ncm,
+          cst,
+          cstPis,
+          cstCofins,
+          valorProduto,
+          valorContabil,
+          baseCalculo: baseCalculoPis || baseCalculoCofins || valorProduto,
+          baseCalculoPis,
+          baseCalculoCofins,
+          aliquotaPis,
+          aliquotaCofins,
+          valorPis,
+          valorCofins,
+          valor: valorProduto,
+          aliquota: aliquotaPis + aliquotaCofins,
+          imposto: valorPis + valorCofins,
+          tipo: isSaida ? 'saida' : 'entrada',
+          
+          codSeqNf,
+          fornec,
+          acum,
+          baseCred,
+          vincCredPis,
+          vincCredCofins,
+          vincCredProd: vincCredPis || vincCredCofins
+        });
+      }
+    });
+
+    if (items.length > 0) {
+      const firstDate = items[0].data;
+      const parts = firstDate.split('/');
+      if (parts.length === 3) {
+        metadata.periodo = `${parts[1]}/${parts[2]}`;
+      }
+    }
+
+    return { items, metadata };
+  }
 
   // Check if file is of the new, more robust layout
   const isNewLayout = lines.some(line => 
@@ -747,79 +970,170 @@ export async function parsePisCofinsReportAsync(
   onProgress: (pct: number) => void
 ): Promise<{ items: PisCofinsItem[]; metadata: PisCofinsMetadata }> {
   const items: PisCofinsItem[] = [];
-  const metadata: PisCofinsMetadata = {
-    empresa: '',
-    cnpj: '',
-    periodo: '',
-    emissao: ''
-  };
-
-  if (!text) return { items, metadata };
+  if (!text) return { items, metadata: { empresa: '', cnpj: '', periodo: '', emissao: '' } };
 
   const lines = text.split(/\r?\n/);
   const totalLines = lines.length;
 
-  // Extract metadata
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    if (trimmed.toLowerCase().includes('empresa:') || trimmed.toLowerCase().includes('razao social:') || trimmed.toLowerCase().includes('razão social:')) {
-      const parts = trimmed.split(';');
-      const empIdx = parts.findIndex(p => p.toLowerCase().includes('empresa:') || p.toLowerCase().includes('razao social:') || p.toLowerCase().includes('razão social:'));
-      if (empIdx !== -1) {
-        for (let idx = empIdx + 1; idx < parts.length; idx++) {
-          if (parts[idx] && parts[idx].trim()) {
-            metadata.empresa = parts[idx].trim().replace(/^"|"$/g, '');
-            break;
-          }
-        }
-      }
-    }
-    if (trimmed.toLowerCase().includes('cnpj:')) {
-      const parts = trimmed.split(';');
-      const cnpjIdx = parts.findIndex(p => p.toLowerCase().includes('cnpj:'));
-      if (cnpjIdx !== -1) {
-        for (let idx = cnpjIdx + 1; idx < parts.length; idx++) {
-          if (parts[idx] && parts[idx].trim()) {
-            const rawCnpj = parts[idx].trim().replace(/^"|"$/g, '');
-            const digits = rawCnpj.replace(/\D/g, '');
-            if (digits.length === 14) {
-              metadata.cnpj = `${digits.substring(0, 2)}.${digits.substring(2, 5)}.${digits.substring(5, 8)}/${digits.substring(8, 12)}-${digits.substring(12, 14)}`;
-            } else {
-              metadata.cnpj = rawCnpj;
-            }
-            break;
-          }
-        }
-      }
-    }
-    if (trimmed.toLowerCase().includes('periodo de:') || trimmed.toLowerCase().includes('período de:')) {
-      const parts = trimmed.split(';');
-      const pIdx = parts.findIndex(p => p.toLowerCase().includes('periodo de:') || p.toLowerCase().includes('período de:'));
-      if (pIdx !== -1 && parts[pIdx]) {
-        metadata.periodo = parts[pIdx].trim().replace(/^"|"$/g, '').replace('Período de: ', '').replace('Periodo de: ', '');
-      }
-    }
-    if (trimmed.toLowerCase().includes('data:')) {
-      const parts = trimmed.split(';');
-      const dataPart = parts.find(p => p.toLowerCase().includes('data:'));
-      if (dataPart) {
-        const match = dataPart.match(/\d{2}\/\d{2}\/\d{4}/);
-        if (match) {
-          metadata.emissao = match[0];
-        }
-      }
-    }
-  }
-
-  // Fallback metadata if empty
-  if (!metadata.empresa) metadata.empresa = 'MENDES E PARENTE LTDA ME';
-  if (!metadata.cnpj) metadata.cnpj = '08.470.032/0001-62';
-  if (!metadata.periodo) metadata.periodo = '06/2026';
-  if (!metadata.emissao) metadata.emissao = new Date().toLocaleDateString('pt-BR');
+  const metadata = extractPisCofinsMetadata(lines);
 
   const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+
+  // Check if file is of the 'Por Produtos' layout
+  const isPorProdutosLayout = lines.some(line => 
+    line.toLowerCase().includes('detalhamento de movimento') ||
+    line.toLowerCase().includes('por produtos') ||
+    line.toLowerCase().startsWith('produto:')
+  );
+
+  if (isPorProdutosLayout) {
+    let currentProductCode = '';
+    let currentProductName = '';
+    const isSaida = lines.some(line => line.toLowerCase().includes('movimento de saídas') || line.toLowerCase().includes('movimento de saidas'));
+
+    const chunkSize = 1500;
+    for (let i = 0; i < totalLines; i += chunkSize) {
+      const end = Math.min(i + chunkSize, totalLines);
+      for (let j = i; j < end; j++) {
+        const line = lines[j];
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.toLowerCase().startsWith('produto:')) {
+          const rawProd = trimmed.replace(/^produto:\s*/i, '');
+          const cleanProd = rawProd.split(';')[0].trim();
+          const parts = cleanProd.split('-').map(s => s.trim());
+          if (parts.length >= 2) {
+            currentProductCode = parts[0];
+            currentProductName = parts.slice(1).join(' - ');
+          } else {
+            currentProductCode = cleanProd;
+            currentProductName = cleanProd;
+          }
+          continue;
+        }
+
+        const cells = line.split(';').map(c => c.trim().replace(/^"|"$/g, ''));
+        if (cells.length < 25) continue;
+
+        if (cells[0].toLowerCase().includes('total:') || cells[1].toLowerCase().includes('total:') || cells[2].toLowerCase().includes('total:')) {
+          continue;
+        }
+
+        const dateIdx = datePattern.test(cells[2]) ? 2 : datePattern.test(cells[1]) ? 1 : datePattern.test(cells[0]) ? 0 : -1;
+        if (dateIdx !== -1) {
+          const data = cells[dateIdx];
+          const codSeqNf = cells[0] || '';
+          const fornec = dateIdx === 2 ? cells[5] || '' : cells[3] || '';
+          const numeroNota = dateIdx === 2 ? cells[12] || '' : cells[4] || '';
+          const acum = dateIdx === 2 ? cells[15] || '' : cells[6] || '';
+          const codigoProduto = (dateIdx === 2 ? cells[18] : cells[7]) || currentProductCode;
+          const nomeProduto = currentProductName || `PRODUTO ${codigoProduto}`;
+          const ncm = (dateIdx === 2 ? cells[20] : cells[9]) || '';
+          const valorProduto = parseBrazilianNumber(dateIdx === 2 ? cells[22] : cells[11]);
+          const valorContabil = parseBrazilianNumber(dateIdx === 2 ? cells[24] : cells[13]);
+          const cfop = (dateIdx === 2 ? cells[26] : cells[15]) || '';
+          
+          let baseCred = '';
+          let cstPis = '';
+          let vincCredPis = '';
+          let baseCalculoPis = 0;
+          let aliquotaPis = 0;
+          let valorPis = 0;
+
+          let cstCofins = '';
+          let vincCredCofins = '';
+          let baseCalculoCofins = 0;
+          let aliquotaCofins = 0;
+          let valorCofins = 0;
+
+          if (isSaida) {
+            cstPis = (dateIdx === 2 ? cells[28] : cells[17]) || '';
+            vincCredPis = (dateIdx === 2 ? cells[30] : cells[19]) || '';
+            baseCalculoPis = parseBrazilianNumber(dateIdx === 2 ? cells[32] : cells[21]);
+            aliquotaPis = parseBrazilianNumber(dateIdx === 2 ? cells[34] : cells[23]);
+            valorPis = parseBrazilianNumber(dateIdx === 2 ? cells[36] : cells[25]);
+
+            cstCofins = (dateIdx === 2 ? cells[39] : cells[28]) || '';
+            vincCredCofins = (dateIdx === 2 ? cells[41] : cells[30]) || '';
+            baseCalculoCofins = parseBrazilianNumber(dateIdx === 2 ? cells[43] : cells[32]);
+            aliquotaCofins = parseBrazilianNumber(dateIdx === 2 ? cells[45] : cells[34]);
+
+            let rawValCofins = dateIdx === 2 ? cells[48] : cells[37];
+            if ((!rawValCofins || rawValCofins === '') && dateIdx === 2) {
+              rawValCofins = cells[49] || cells[50] || '0';
+            }
+            valorCofins = parseBrazilianNumber(rawValCofins);
+          } else {
+            baseCred = (dateIdx === 2 ? cells[28] : cells[17]) || '';
+            cstPis = (dateIdx === 2 ? cells[30] : cells[19]) || '';
+            vincCredPis = (dateIdx === 2 ? cells[32] : cells[21]) || '01';
+            baseCalculoPis = parseBrazilianNumber(dateIdx === 2 ? cells[34] : cells[23]);
+            aliquotaPis = parseBrazilianNumber(dateIdx === 2 ? cells[36] : cells[25]);
+            valorPis = parseBrazilianNumber(dateIdx === 2 ? cells[38] : cells[27]);
+
+            cstCofins = (dateIdx === 2 ? cells[41] : cells[30]) || '';
+            vincCredCofins = (dateIdx === 2 ? cells[43] : cells[32]) || '01';
+            baseCalculoCofins = parseBrazilianNumber(dateIdx === 2 ? cells[45] : cells[34]);
+            aliquotaCofins = parseBrazilianNumber(dateIdx === 2 ? cells[47] : cells[36]);
+            valorCofins = parseBrazilianNumber(dateIdx === 2 ? cells[50] : cells[39]);
+          }
+
+          let cst = cstPis || cstCofins || (isSaida ? '01' : '50');
+          if (cst.length === 1) cst = cst.padStart(2, '0');
+
+          items.push({
+            id: `pis-por-produto-${j}-${Math.random().toString(36).substring(2, 7)}`,
+            empresaId: '7',
+            data,
+            modelo: 'NF-e',
+            numeroNota,
+            cfop,
+            codigoProduto,
+            nomeProduto,
+            ncm,
+            cst,
+            cstPis,
+            cstCofins,
+            valorProduto,
+            valorContabil,
+            baseCalculo: baseCalculoPis || baseCalculoCofins || valorProduto,
+            baseCalculoPis,
+            baseCalculoCofins,
+            aliquotaPis,
+            aliquotaCofins,
+            valorPis,
+            valorCofins,
+            valor: valorProduto,
+            aliquota: aliquotaPis + aliquotaCofins,
+            imposto: valorPis + valorCofins,
+            tipo: isSaida ? 'saida' : 'entrada',
+            
+            codSeqNf,
+            fornec,
+            acum,
+            baseCred,
+            vincCredPis,
+            vincCredCofins,
+            vincCredProd: vincCredPis || vincCredCofins
+          });
+        }
+      }
+      onProgress(Math.round((end / totalLines) * 100));
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    if (items.length > 0) {
+      const firstDate = items[0].data;
+      const parts = firstDate.split('/');
+      if (parts.length === 3) {
+        metadata.periodo = `${parts[1]}/${parts[2]}`;
+      }
+    }
+
+    onProgress(100);
+    return { items, metadata };
+  }
 
   // Check if file is of the new layout
   const isNewLayout = lines.some(line => 
@@ -1313,7 +1627,7 @@ export function exportPisCofinsExcel(
       { s: { r: 2, c: 0 }, e: { r: 2, c: 16 } }
     ];
 
-    ws['A1'] = { v: metadata.empresa || 'MENDES E PARENTE LTDA ME', s: styleHeaderTitle };
+    ws['A1'] = { v: metadata.empresa || 'EMPRESA IDENTIFICADA NO DEMONSTRATIVO', s: styleHeaderTitle };
     ws['A2'] = { v: title, s: styleHeaderSub };
     ws['A3'] = { v: `COMPETÊNCIA: ${metadata.periodo} | CNPJ: ${metadata.cnpj || ''}`, s: styleHeaderSub };
 
@@ -1442,7 +1756,7 @@ export function exportPisCofinsExcel(
       { s: { r: 2, c: 0 }, e: { r: 2, c: 10 } }
     ];
 
-    ws['A1'] = { v: metadata.empresa || 'MENDES E PARENTE LTDA ME', s: styleHeaderTitle };
+    ws['A1'] = { v: metadata.empresa || 'EMPRESA IDENTIFICADA NO DEMONSTRATIVO', s: styleHeaderTitle };
     ws['A2'] = { v: title, s: styleHeaderSub };
     ws['A3'] = { v: `COMPETÊNCIA: ${metadata.periodo} | CNPJ: ${metadata.cnpj || ''}`, s: styleHeaderSub };
 
@@ -1542,19 +1856,21 @@ export function exportPisCofinsExcel(
     return ws;
   };
 
-  // 3. Sheet 3: Resumo por CFOP e CST (PIS-COFINS, grouped only by CFOP + CST)
+  // 3. Sheet 3: Resumo por CFOP e CST (PIS-COFINS, grouped only by CFOP + CST with Entradas/Saídas separation and Totals)
   const buildConsolidatedByCfopCstSheet = (title: string, rows: PisCofinsConsolidatedItem[]) => {
     const ws: any = {};
-    
-    ws['!merges'] = [
+    const merges: any[] = [
       { s: { r: 0, c: 0 }, e: { r: 0, c: 8 } },
       { s: { r: 1, c: 0 }, e: { r: 1, c: 8 } },
       { s: { r: 2, c: 0 }, e: { r: 2, c: 8 } }
     ];
 
-    ws['A1'] = { v: metadata.empresa || 'MENDES E PARENTE LTDA ME', s: styleHeaderTitle };
-    ws['A2'] = { v: title, s: styleHeaderSub };
-    ws['A3'] = { v: `COMPETÊNCIA: ${metadata.periodo} | CNPJ: ${metadata.cnpj || ''}`, s: styleHeaderSub };
+    // Populate top title merged header cells across all columns A..I to ensure seamless navy background
+    for (let c = 0; c <= 8; c++) {
+      ws[XLSX.utils.encode_cell({ r: 0, c })] = { v: c === 0 ? (metadata.empresa || 'EMPRESA IDENTIFICADA NO DEMONSTRATIVO') : '', s: styleHeaderTitle };
+      ws[XLSX.utils.encode_cell({ r: 1, c })] = { v: c === 0 ? title : '', s: styleHeaderSub };
+      ws[XLSX.utils.encode_cell({ r: 2, c })] = { v: c === 0 ? `COMPETÊNCIA: ${metadata.periodo} | CNPJ: ${metadata.cnpj || ''}` : '', s: styleHeaderSub };
+    }
 
     const headers = [
       'CFOP',
@@ -1572,104 +1888,220 @@ export function exportPisCofinsExcel(
       ws[XLSX.utils.encode_cell({ r: 4, c: colIdx })] = { v: h, s: styleTableHeader };
     });
 
-    rows.forEach((item, rowIdx) => {
-      const r = 5 + rowIdx;
-      const isEven = rowIdx % 2 === 0;
+    const entradas = rows.filter(r => r.tipo === 'entrada');
+    const saidas = rows.filter(r => r.tipo === 'saida');
 
-      ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: item.cfop, s: getRowStyle(isEven, 'center') };
-      ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: `CST ${item.cst}`, s: getRowStyle(isEven, 'center') };
+    let currentR = 5;
+
+    // Brand-aligned Styles for Section Banners and Totals (matching #04243b dark navy and #e4b35e gold)
+    const styleEntradaHeader = {
+      fill: { fgColor: { rgb: "04243B" } },
+      font: { name: "Arial", sz: 10, bold: true, color: { rgb: "E4B35E" } },
+      alignment: { horizontal: "left", vertical: "center" }
+    };
+
+    const styleEntradaTotal = {
+      fill: { fgColor: { rgb: "EBF3F9" } },
+      font: { name: "Arial", sz: 9, bold: true, color: { rgb: "04243B" } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: {
+        top: { style: "thin", color: { rgb: "04243B" } },
+        bottom: { style: "double", color: { rgb: "04243B" } }
+      }
+    };
+
+    const styleEntradaTotalText = {
+      ...styleEntradaTotal,
+      alignment: { horizontal: "left", vertical: "center" }
+    };
+
+    const styleSaidaHeader = {
+      fill: { fgColor: { rgb: "3D2800" } },
+      font: { name: "Arial", sz: 10, bold: true, color: { rgb: "E4B35E" } },
+      alignment: { horizontal: "left", vertical: "center" }
+    };
+
+    const styleSaidaTotal = {
+      fill: { fgColor: { rgb: "FAF2E1" } },
+      font: { name: "Arial", sz: 9, bold: true, color: { rgb: "523600" } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: {
+        top: { style: "thin", color: { rgb: "E4B35E" } },
+        bottom: { style: "double", color: { rgb: "E4B35E" } }
+      }
+    };
+
+    const styleSaidaTotalText = {
+      ...styleSaidaTotal,
+      alignment: { horizontal: "left", vertical: "center" }
+    };
+
+    // 1. ENTRADAS SECTION
+    if (entradas.length > 0) {
+      // Banner row ENTRADAS - populate all cells A..I so fill background is continuous
+      merges.push({ s: { r: currentR, c: 0 }, e: { r: currentR, c: 8 } });
+      for (let col = 0; col <= 8; col++) {
+        ws[XLSX.utils.encode_cell({ r: currentR, c: col })] = {
+          v: col === 0 ? 'ENTRADAS / CRÉDITOS' : '',
+          s: styleEntradaHeader
+        };
+      }
+      currentR++;
+
+      // Data rows
+      let eValProd = 0, eBasePis = 0, eValPis = 0, eBaseCofins = 0, eValCofins = 0;
+
+      entradas.forEach((item, idx) => {
+        const isEven = idx % 2 === 0;
+        eValProd += item.valorProduto;
+        eBasePis += item.baseCalculoPis;
+        eValPis += item.valorPis;
+        eBaseCofins += item.baseCalculoCofins;
+        eValCofins += item.valorCofins;
+
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 0 })] = { v: item.cfop, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 1 })] = { v: `CST ${item.cst}`, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 2 })] = { v: item.valorProduto, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', true) };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 3 })] = { v: item.baseCalculoPis, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 4 })] = { v: item.aliquotaPis / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 5 })] = { v: item.valorPis, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', true) };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 6 })] = { v: item.baseCalculoCofins, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 7 })] = { v: item.aliquotaCofins / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 8 })] = { v: item.valorCofins, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', true) };
+        currentR++;
+      });
+
+      // Total row ENTRADAS - populate BOTH A and B so the merged range has continuous background and borders
+      merges.push({ s: { r: currentR, c: 0 }, e: { r: currentR, c: 1 } });
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 0 })] = { v: 'TOTAL ENTRADAS', s: styleEntradaTotalText };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 1 })] = { v: '', s: styleEntradaTotalText };
       
-      ws[XLSX.utils.encode_cell({ r, c: 2 })] = { 
-        v: item.valorProduto, 
-        t: 'n', 
-        z: '"R$ " #,##0.00', 
-        s: getRowStyle(isEven, 'right', true) 
-      };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 2 })] = { v: eValProd, t: 'n', z: '"R$ " #,##0.00', s: styleEntradaTotal };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 3 })] = { v: eBasePis, t: 'n', z: '"R$ " #,##0.00', s: styleEntradaTotal };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 4 })] = { v: '-', s: { ...styleEntradaTotal, alignment: { horizontal: 'center', vertical: 'center' } } };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 5 })] = { v: eValPis, t: 'n', z: '"R$ " #,##0.00', s: styleEntradaTotal };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 6 })] = { v: eBaseCofins, t: 'n', z: '"R$ " #,##0.00', s: styleEntradaTotal };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 7 })] = { v: '-', s: { ...styleEntradaTotal, alignment: { horizontal: 'center', vertical: 'center' } } };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 8 })] = { v: eValCofins, t: 'n', z: '"R$ " #,##0.00', s: styleEntradaTotal };
+      currentR++;
+    }
+
+    // 2. SAÍDAS SECTION
+    if (saidas.length > 0) {
+      if (entradas.length > 0) {
+        currentR++; // Empty row spacer between sections
+      }
+
+      // Banner row SAÍDAS - populate all cells A..I so fill background is continuous
+      merges.push({ s: { r: currentR, c: 0 }, e: { r: currentR, c: 8 } });
+      for (let col = 0; col <= 8; col++) {
+        ws[XLSX.utils.encode_cell({ r: currentR, c: col })] = {
+          v: col === 0 ? 'SAÍDAS / DÉBITOS' : '',
+          s: styleSaidaHeader
+        };
+      }
+      currentR++;
+
+      // Data rows
+      let sValProd = 0, sBasePis = 0, sValPis = 0, sBaseCofins = 0, sValCofins = 0;
+
+      saidas.forEach((item, idx) => {
+        const isEven = idx % 2 === 0;
+        sValProd += item.valorProduto;
+        sBasePis += item.baseCalculoPis;
+        sValPis += item.valorPis;
+        sBaseCofins += item.baseCalculoCofins;
+        sValCofins += item.valorCofins;
+
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 0 })] = { v: item.cfop, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 1 })] = { v: `CST ${item.cst}`, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 2 })] = { v: item.valorProduto, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', true) };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 3 })] = { v: item.baseCalculoPis, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 4 })] = { v: item.aliquotaPis / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 5 })] = { v: item.valorPis, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', true) };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 6 })] = { v: item.baseCalculoCofins, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 7 })] = { v: item.aliquotaCofins / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r: currentR, c: 8 })] = { v: item.valorCofins, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', true) };
+        currentR++;
+      });
+
+      // Total row SAÍDAS - populate BOTH A and B so the merged range has continuous background and borders
+      merges.push({ s: { r: currentR, c: 0 }, e: { r: currentR, c: 1 } });
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 0 })] = { v: 'TOTAL SAÍDAS', s: styleSaidaTotalText };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 1 })] = { v: '', s: styleSaidaTotalText };
       
-      ws[XLSX.utils.encode_cell({ r, c: 3 })] = { 
-        v: item.baseCalculoPis, 
-        t: 'n', 
-        z: '"R$ " #,##0.00', 
-        s: getRowStyle(isEven, 'right') 
-      };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 2 })] = { v: sValProd, t: 'n', z: '"R$ " #,##0.00', s: styleSaidaTotal };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 3 })] = { v: sBasePis, t: 'n', z: '"R$ " #,##0.00', s: styleSaidaTotal };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 4 })] = { v: '-', s: { ...styleSaidaTotal, alignment: { horizontal: 'center', vertical: 'center' } } };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 5 })] = { v: sValPis, t: 'n', z: '"R$ " #,##0.00', s: styleSaidaTotal };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 6 })] = { v: sBaseCofins, t: 'n', z: '"R$ " #,##0.00', s: styleSaidaTotal };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 7 })] = { v: '-', s: { ...styleSaidaTotal, alignment: { horizontal: 'center', vertical: 'center' } } };
+      ws[XLSX.utils.encode_cell({ r: currentR, c: 8 })] = { v: sValCofins, t: 'n', z: '"R$ " #,##0.00', s: styleSaidaTotal };
+      currentR++;
+    }
 
-      const effAliqPis = item.aliquotaPis / 100;
-      ws[XLSX.utils.encode_cell({ r, c: 4 })] = { 
-        v: effAliqPis, 
-        t: 'n', 
-        z: '0.00%', 
-        s: getRowStyle(isEven, 'center') 
-      };
-
-      ws[XLSX.utils.encode_cell({ r, c: 5 })] = { 
-        v: item.valorPis, 
-        t: 'n', 
-        z: '"R$ " #,##0.00', 
-        s: getRowStyle(isEven, 'right', true) 
-      };
-
-      ws[XLSX.utils.encode_cell({ r, c: 6 })] = { 
-        v: item.baseCalculoCofins, 
-        t: 'n', 
-        z: '"R$ " #,##0.00', 
-        s: getRowStyle(isEven, 'right') 
-      };
-
-      const effAliqCofins = item.aliquotaCofins / 100;
-      ws[XLSX.utils.encode_cell({ r, c: 7 })] = { 
-        v: effAliqCofins, 
-        t: 'n', 
-        z: '0.00%', 
-        s: getRowStyle(isEven, 'center') 
-      };
-
-      ws[XLSX.utils.encode_cell({ r, c: 8 })] = { 
-        v: item.valorCofins, 
-        t: 'n', 
-        z: '"R$ " #,##0.00', 
-        s: getRowStyle(isEven, 'right', true) 
-      };
-    });
-
-    ws['!ref'] = `A1:I${5 + Math.max(1, rows.length)}`;
+    ws['!merges'] = merges;
+    ws['!ref'] = `A1:I${currentR}`;
     ws['!cols'] = [
       { wch: 10 }, // CFOP
-      { wch: 18 }, // CST PIS/COF
+      { wch: 16 }, // CST PIS/COF
       { wch: 22 }, // VALOR PRODUTO TOTAL
       { wch: 22 }, // BASE DE CÁLCULO PIS
       { wch: 15 }, // ALÍQUOTA PIS
-      { wch: 18 }, // PIS TOTAL
-      { wch: 24 }, // BASE DE CÁLCULO COFINS
+      { wch: 16 }, // PIS TOTAL
+      { wch: 22 }, // BASE DE CÁLCULO COFINS
       { wch: 15 }, // ALÍQUOTA COFINS
-      { wch: 18 }  // COFINS TOTAL
+      { wch: 16 }  // COFINS TOTAL
     ];
     return ws;
   };
 
-  const isInputOnly = items.some(i => i.tipo === 'entrada');
-  const filteredItems = isInputOnly ? items.filter(i => i.tipo === 'entrada') : items;
-  
-  const consolidatedByProduct = consolidatePisCofinsRows(filteredItems, 'cfop_cst_product');
-  const consolidatedByCfopCst = consolidatePisCofinsRows(filteredItems, 'cfop_cst');
-
-  const wsDetailed = buildDetailedNewSheet(
-    isInputOnly ? 'RELATÓRIO COMPLETO (ENTRADAS DETALHADO)' : 'RELATÓRIO COMPLETO (SAÍDAS DETALHADO)', 
-    filteredItems
-  );
-  const wsResumoProdutos = buildConsolidatedByProductSheet(
-    isInputOnly ? 'RESUMO COM SOMA DE PRODUTOS POR CFOP E CST' : 'RESUMO COM SOMA DE PRODUTOS POR CFOP E CST (SAÍDAS)', 
-    consolidatedByProduct
-  );
-  const wsResumoPisCofins = buildConsolidatedByCfopCstSheet(
-    isInputOnly ? 'RESUMO POR CFOP E CST DE PIS/COFINS (CONFORME GUIA EM ANEXO)' : 'RESUMO POR CFOP E CST DE PIS/COFINS (CONFORME GUIA EM ANEXO - SAÍDAS)', 
-    consolidatedByCfopCst
+  // Separate items into Entradas and Saídas
+  const entradas = items.filter(i => 
+    i.tipo === 'entrada' || 
+    (i.cfop && (i.cfop.startsWith('1') || i.cfop.startsWith('2') || i.cfop.startsWith('3')))
   );
 
-  XLSX.utils.book_append_sheet(wb, wsDetailed, 'Relatório Completo');
-  XLSX.utils.book_append_sheet(wb, wsResumoProdutos, 'Resumo CFOP-CST Produtos');
-  XLSX.utils.book_append_sheet(wb, wsResumoPisCofins, 'Resumo CFOP-CST PIS-COFINS');
+  const saidas = items.filter(i => 
+    i.tipo === 'saida' || 
+    (i.cfop && (i.cfop.startsWith('5') || i.cfop.startsWith('6') || i.cfop.startsWith('7')))
+  );
 
-  XLSX.writeFile(wb, `Relatorio_PIS_COFINS_Formatado_${metadata.periodo.replace('/', '_')}_${Date.now()}.xlsx`);
+  const entradasResumidas = consolidatePisCofinsRows(entradas, 'cfop_cst_product');
+  const saidasResumidas = consolidatePisCofinsRows(saidas, 'cfop_cst_product');
+  const resumoCfopCst = consolidatePisCofinsRows(items, 'cfop_cst');
+
+  // Build the 5 worksheets
+  const wsEntradasCompleto = buildDetailedNewSheet(
+    'RELATÓRIO COMPLETO DE ENTRADAS (PIS/COFINS)', 
+    entradas
+  );
+  const wsEntradasResumido = buildConsolidatedByProductSheet(
+    'RESUMO DE ENTRADAS POR PRODUTO, CFOP E CST', 
+    entradasResumidas
+  );
+  const wsSaidasCompleto = buildDetailedNewSheet(
+    'RELATÓRIO COMPLETO DE SAÍDAS (PIS/COFINS)', 
+    saidas
+  );
+  const wsSaidasResumido = buildConsolidatedByProductSheet(
+    'RESUMO DE SAÍDAS POR PRODUTO, CFOP E CST', 
+    saidasResumidas
+  );
+  const wsResumoCfopCst = buildConsolidatedByCfopCstSheet(
+    'RESUMO CONSOLIDADO POR CFOP E CST (PIS/COFINS)', 
+    resumoCfopCst
+  );
+
+  // Append 5 sheets with EXACT requested names
+  XLSX.utils.book_append_sheet(wb, wsEntradasCompleto, 'Entradas Completo');
+  XLSX.utils.book_append_sheet(wb, wsEntradasResumido, 'Entradas Resumido');
+  XLSX.utils.book_append_sheet(wb, wsSaidasCompleto, 'Saídas Completo');
+  XLSX.utils.book_append_sheet(wb, wsSaidasResumido, 'Saídas Resumido');
+  XLSX.utils.book_append_sheet(wb, wsResumoCfopCst, 'Resumo CFOP-CST');
+
+  const periodStr = metadata && metadata.periodo ? metadata.periodo.replace('/', '_') : 'Geral';
+  XLSX.writeFile(wb, `Relatorio_PIS_COFINS_5_Abas_${periodStr}_${Date.now()}.xlsx`);
 }
 
 export interface PisCofinsAuditError {

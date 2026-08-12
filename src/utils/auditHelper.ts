@@ -119,8 +119,21 @@ function validateAndCleanDate(dateStr: string): string {
   return dateStr;
 }
 
-function formatCNPJ(cnpj: string): string {
-  return cnpj.length === 14 ? cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') : cnpj;
+export function formatCnpjCpf(doc: string | undefined | null): string {
+  if (!doc) return '';
+  const clean = doc.trim();
+  const digits = clean.replace(/\D/g, '');
+  if (digits.length === 11) {
+    return digits.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
+  }
+  if (digits.length === 14) {
+    return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+  }
+  return clean.replace(/[\s\-\/]+$/, '');
+}
+
+export function formatCNPJ(cnpj: string): string {
+  return formatCnpjCpf(cnpj);
 }
 
 export function parseChaveDeAcesso(chaveRaw: string): Omit<InvoiceRow, 'id' | 'dataEmissao' | 'valorString' | 'valorDecimal'> & { isValidChave: boolean; chaveError?: string } {
@@ -1554,3 +1567,949 @@ export async function executeDataAuditAsync(
   onProgress(100);
   return { items, summary };
 }
+
+// ==========================================
+// MÓDULO 01: AUDITORIA SIGA / SEFAZ (SIGA AUDIT ENGINE)
+// ==========================================
+
+export interface SigaReportItem {
+  id?: string;
+  notaFiscal: string;
+  modelo?: string;
+  serie?: string;
+  data: string;
+  vlrContabil: number;
+  cnpj: string;
+  razaoSocial?: string;
+  uf?: string;
+  chaveDeAcesso?: string;
+  situacaoNfe?: string;
+  cfop?: string;
+  codigoProduto?: string;
+  nomeProduto?: string;
+  ncm?: string;
+  un?: string;
+  qtde?: number;
+  rUnit?: number;
+  rProduto?: number;
+  desconto?: number;
+  cst?: string;
+  rBaseIcms?: number;
+  pIcms?: number;
+  rIcms?: number;
+  pIpi?: number;
+  rIpi?: number;
+  tipoOperacao?: 'ENTRADA' | 'SAIDA';
+  isDuplicate?: boolean;
+  deduplicationKey?: string;
+  duplicateGroupCount?: number;
+}
+
+export interface SigaReportMetadata {
+  empresa: string;
+  periodo: string;
+  dataGeracao: string;
+}
+
+function parsePtBrFloatHelper(val: string): number {
+  if (!val) return 0;
+  let clean = val.replace(/[R$\s]/g, '').trim();
+  if (clean === '' || clean === '-') return 0;
+  if (clean.includes('.') && clean.includes(',')) {
+    clean = clean.replace(/\./g, '').replace(',', '.');
+  } else if (clean.includes(',')) {
+    clean = clean.replace(',', '.');
+  }
+  const num = parseFloat(clean);
+  return Number.isNaN(num) ? 0 : num;
+}
+
+function formatCnpjCpfHelper(raw: string): string {
+  if (!raw) return '';
+  if (raw === 'DIVERSOS' || raw === 'DIVERSO') return 'DIVERSOS';
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 11) {
+    return `${digits.substring(0, 3)}.${digits.substring(3, 6)}.${digits.substring(6, 9)}-${digits.substring(9, 11)}`;
+  }
+  if (digits.length === 14) {
+    return `${digits.substring(0, 2)}.${digits.substring(2, 5)}.${digits.substring(5, 8)}/${digits.substring(8, 12)}-${digits.substring(12, 14)}`;
+  }
+  return raw;
+}
+
+/**
+ * CSV Tokenizer that handles delimiters inside quotes correctly.
+ */
+export function parseCsvLineTokens(line: string, delim: string = ','): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === delim && !inQuotes) {
+      result.push(current.trim().replace(/^["']|["']$/g, ''));
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim().replace(/^["']|["']$/g, ''));
+  return result;
+}
+
+/**
+ * Universal Line Parser for SIGA / ERP / SEFAZ / CSV / TSV reports.
+ * Flexibly handles single/double semicolons, tabs, commas, pipes, quote wrappers, and index variations.
+ */
+export function parseGenericSigaLine(line: string, forceType?: 'SAIDA' | 'ENTRADA'): SigaReportItem | null {
+  if (!line || !line.trim()) return null;
+  const raw = line.trim();
+
+  // Ignore header/summary or title lines
+  const lowerLine = raw.toLowerCase();
+  if (
+    lowerLine.includes('cnpj destinatário') ||
+    lowerLine.includes('cnpj destinatario') ||
+    lowerLine.includes('cnpj emitente') ||
+    lowerLine.includes('razão social') ||
+    lowerLine.includes('razao social') ||
+    lowerLine.includes('indicadores selecionados') ||
+    (lowerLine.includes('nota fiscal') && lowerLine.includes('data') && lowerLine.includes('cfop')) ||
+    lowerLine.includes('total de notas') ||
+    lowerLine.includes('movimentação de entrada') ||
+    lowerLine.startsWith(';;;;;')
+  ) {
+    return null;
+  }
+
+  // Detect Delimiter
+  let delim = ';';
+  const scCount = (raw.match(/;/g) || []).length;
+  const tabCount = (raw.match(/\t/g) || []).length;
+  const pipeCount = (raw.match(/\|/g) || []).length;
+  const commaCount = (raw.match(/,/g) || []).length;
+
+  if (tabCount > scCount && tabCount > pipeCount && tabCount > commaCount) delim = '\t';
+  else if (pipeCount > scCount && pipeCount > tabCount && pipeCount > commaCount) delim = '|';
+  else if (commaCount >= 3) delim = ',';
+  else if (scCount >= 2) delim = ';';
+
+  // 1. Check CSV with quotes / SEFAZ report format
+  const csvTokens = parseCsvLineTokens(raw, delim);
+  if (csvTokens.length >= 6) {
+    const chaveToken = csvTokens.find(t => t.replace(/\D/g, '').length === 44);
+    const dateToken = csvTokens.find(t => /\d{2}\/\d{2}\/\d{4}/.test(t));
+    const statusToken = csvTokens.find(t => /AUTORIZADA|CANCELADA|INUTILIZADA|DENEGADA/i.test(t));
+
+    if (chaveToken || (dateToken && csvTokens.some(t => /^\d{3,10}$/.test(t)))) {
+      const isCanceled = statusToken ? statusToken.toUpperCase().includes('CANCELADA') : false;
+
+      // Extract NF Number
+      let nfNum = csvTokens.find((t, i) => /^\d{3,10}$/.test(t) && t !== chaveToken && i !== 0);
+      if (!nfNum && chaveToken) {
+        nfNum = chaveToken.substring(25, 34).replace(/^0+/, '') || '32000';
+      }
+
+      // Extract Razão Social / Name
+      let nameToken = csvTokens[1] || '';
+      if (!nameToken || /^\d+$/.test(nameToken) || /\d{2}\/\d{2}\/\d{4}/.test(nameToken)) {
+        nameToken = csvTokens.find((t, i) => i > 0 && t.length > 2 && !/\d{2}\/\d{2}\/\d{4}/.test(t) && t !== chaveToken && !/AUTORIZADA|CANCELADA/i.test(t) && !/^[A-Z]{2}$/.test(t)) || 'DESCONHECIDO';
+      }
+
+      // Extract UF
+      let ufToken = csvTokens[2] && /^[A-Z]{2}$/i.test(csvTokens[2]) ? csvTokens[2].toUpperCase() : (csvTokens.find(t => /^[A-Z]{2}$/i.test(t)) || 'CE');
+
+      // Extract CNPJ
+      let cnpjVal = csvTokens[0] ? formatCnpjCpfHelper(csvTokens[0]) : '';
+
+      // Extract Value
+      const valToken = csvTokens[6] || csvTokens.find(t => /^\d{1,3}(\.\d{3})*,\d{2}$/.test(t) || /^\d+[\.,]\d{2}$/.test(t));
+      const rawVal = parsePtBrFloatHelper(valToken || '0');
+      const finalVal = isCanceled ? 0 : rawVal;
+
+      // CFOP determination
+      let cfopVal = forceType === 'SAIDA'
+        ? (ufToken === 'EX' ? '7102' : (ufToken === 'CE' ? '5102' : '6102'))
+        : (ufToken === 'EX' ? '3102' : (ufToken === 'CE' ? '1102' : '2102'));
+
+      // Extract Modelo and Série from Chave de Acesso if present
+      let modeloVal = '55';
+      let serieVal = '1';
+      let cnpjFromKey = '';
+      let nfFromKey = '';
+
+      if (chaveToken && chaveToken.length === 44) {
+        modeloVal = chaveToken.substring(20, 22) || '55';
+        serieVal = chaveToken.substring(22, 25).replace(/^0+/, '') || '1';
+        cnpjFromKey = formatCnpjCpfHelper(chaveToken.substring(6, 20));
+        nfFromKey = chaveToken.substring(25, 34).replace(/^0+/, '') || '0';
+        const ufCode = chaveToken.substring(0, 2);
+        if (UF_MAP[ufCode]) ufToken = UF_MAP[ufCode].sigla;
+      }
+
+      // For NFCe modelo 65 or if missing in file, extract NF Number & CNPJ from access key
+      if (!nfNum || modeloVal === '65' || nfNum === '0') {
+        if (nfFromKey && nfFromKey !== '0') nfNum = nfFromKey;
+      }
+
+      if (!cnpjVal || cnpjVal === '00.000.000/0000-00' || cnpjVal === '99.999.999/0001-99' || modeloVal === '65') {
+        cnpjVal = cnpjFromKey || cnpjVal || (ufToken === 'EX' ? 'EX - EXTERIOR' : '99.999.999/0001-99');
+      }
+
+      let situacao = 'AUTORIZADA';
+      if (statusToken) {
+        const uStatus = statusToken.toUpperCase();
+        if (uStatus.includes('CANCEL')) situacao = 'CANCELADA';
+        else if (uStatus.includes('DENEG')) situacao = 'DENEGADA';
+        else if (uStatus.includes('INUTIL')) situacao = 'INUTILIZADA';
+        else situacao = uStatus;
+      } else if (isCanceled) {
+        situacao = 'CANCELADA';
+      }
+
+      const isNfce = modeloVal === '65';
+
+      return {
+        id: `${forceType === 'SAIDA' ? 'sai' : 'ent'}-${Math.random().toString(36).substring(2, 9)}`,
+        notaFiscal: nfNum || '32000',
+        modelo: modeloVal,
+        serie: serieVal,
+        data: dateToken || new Date().toLocaleDateString('pt-BR'),
+        vlrContabil: finalVal,
+        cnpj: isNfce ? '' : cnpjVal,
+        razaoSocial: isNfce ? '' : nameToken,
+        uf: ufToken,
+        chaveDeAcesso: chaveToken || '',
+        situacaoNfe: situacao,
+
+        cfop: cfopVal,
+        codigoProduto: `NF-${nfNum}`,
+        nomeProduto: isCanceled ? `${nameToken} [CANCELADA]` : nameToken,
+        ncm: 'N/A',
+        un: 'UN',
+        qtde: 1,
+        rUnit: rawVal,
+        rProduto: finalVal,
+        desconto: 0,
+        cst: isCanceled ? '900' : '000',
+        rBaseIcms: finalVal,
+        pIcms: isCanceled ? 0 : 18,
+        rIcms: isCanceled ? 0 : Math.round(finalVal * 0.18 * 100) / 100,
+        pIpi: 0,
+        rIpi: 0,
+        tipoOperacao: forceType || 'SAIDA'
+      };
+    }
+  }
+
+  // 2. Standard SIGA / TXT parsing with simple split
+  const parts = raw.split(delim).map(p => p.trim().replace(/^["']|["']$/g, ''));
+  const nonEmpties = parts.filter(Boolean);
+  if (nonEmpties.length < 2) return null;
+
+  // Extract Chave de Acesso (44 digits)
+  let chaveDeAcesso = '';
+  for (const p of parts) {
+    const cleanP = p.replace(/\D/g, '');
+    if (cleanP.length === 44) {
+      chaveDeAcesso = cleanP;
+      break;
+    }
+  }
+  if (!chaveDeAcesso) {
+    const match44 = raw.match(/\b\d{44}\b/);
+    if (match44) chaveDeAcesso = match44[0];
+  }
+
+  let modFromKey = '';
+  let serieFromKey = '';
+  let cnpjFromKey = '';
+  let nfFromKey = '';
+  let ufFromKey = '';
+
+  if (chaveDeAcesso && chaveDeAcesso.length === 44) {
+    modFromKey = chaveDeAcesso.substring(20, 22) || '55';
+    serieFromKey = chaveDeAcesso.substring(22, 25).replace(/^0+/, '') || '1';
+    cnpjFromKey = formatCnpjCpfHelper(chaveDeAcesso.substring(6, 20));
+    nfFromKey = chaveDeAcesso.substring(25, 34).replace(/^0+/, '') || '0';
+    const ufCode = chaveDeAcesso.substring(0, 2);
+    if (UF_MAP[ufCode]) ufFromKey = UF_MAP[ufCode].sigla;
+  }
+
+  let notaFiscal = '';
+  let data = '';
+  let cnpj = '';
+  let cfop = '';
+  let rawProduct = '';
+  let ncm = '';
+  let un = '';
+  let qtde = 1;
+  let rUnit = 0;
+  let rProduto = 0;
+  let desconto = 0;
+  let vlrContabil = 0;
+  let cst = '000';
+  let rBaseIcms = 0;
+  let pIcms = 0;
+  let rIcms = 0;
+  let pIpi = 0;
+  let rIpi = 0;
+
+  // Direct Index Parsing if line starts with NF number
+  const p0 = parts[0] ? parts[0].trim() : '';
+  if (/^\d[\d\w\-\.\/]*$/.test(p0)) {
+    notaFiscal = p0;
+
+    // Double-semicolon SIGA standard (parts[2] is Date, parts[4] is CNPJ, parts[6] is CFOP)
+    if (parts.length >= 8 && (/\d{2}\/\d{2}\/\d{4}/.test(parts[2] || '') || /\d{2}\/\d{2}\/\d{4}/.test(parts[1] || ''))) {
+      if (/\d{2}\/\d{2}\/\d{4}/.test(parts[2] || '')) {
+        data = parts[2] ? parts[2].trim() : '';
+        cnpj = parts[4] ? formatCnpjCpfHelper(parts[4].trim().replace(/\s+-\s*$/, '')) : '';
+        cfop = parts[6] ? parts[6].trim() : '';
+        rawProduct = parts[9] || parts[8] || parts[7] || '';
+        ncm = parts[14] || parts[13] || '';
+        un = parts[16] || parts[15] || '';
+        qtde = parsePtBrFloatHelper(parts[18] || parts[17] || '1');
+        rUnit = parsePtBrFloatHelper(parts[20] || parts[19] || '0');
+        rProduto = parsePtBrFloatHelper(parts[22] || parts[21] || '0');
+        desconto = parsePtBrFloatHelper(parts[23] || parts[22] || '0');
+        vlrContabil = parsePtBrFloatHelper(parts[25] || parts[24] || parts[21] || '0');
+        cst = parts[26] || parts[25] || '000';
+        rBaseIcms = parsePtBrFloatHelper(parts[28] || parts[27] || '0');
+        pIcms = parsePtBrFloatHelper(parts[30] || parts[29] || '0');
+        rIcms = parsePtBrFloatHelper(parts[32] || parts[31] || '0');
+        pIpi = parsePtBrFloatHelper(parts[36] || parts[35] || '0');
+        rIpi = parsePtBrFloatHelper(parts[38] || parts[37] || '0');
+      } else {
+        // Single-delimiter standard (parts[1] is Date, parts[2] is CNPJ, parts[3] is CFOP, etc.)
+        data = parts[1] || '';
+        cnpj = parts[2] ? formatCnpjCpfHelper(parts[2].trim().replace(/\s+-\s*$/, '')) : '';
+        cfop = parts[3] || '';
+        rawProduct = parts[4] || '';
+        ncm = parts[5] || '';
+        un = parts[6] || '';
+        qtde = parsePtBrFloatHelper(parts[7] || '1');
+        rUnit = parsePtBrFloatHelper(parts[8] || '0');
+        rProduto = parsePtBrFloatHelper(parts[9] || '0');
+        desconto = parsePtBrFloatHelper(parts[10] || '0');
+        vlrContabil = parsePtBrFloatHelper(parts[11] || parts[9] || '0');
+        cst = parts[12] || '000';
+        rBaseIcms = parsePtBrFloatHelper(parts[13] || '0');
+        pIcms = parsePtBrFloatHelper(parts[14] || '0');
+        rIcms = parsePtBrFloatHelper(parts[15] || '0');
+      }
+    }
+  }
+
+  // 2. Pattern Matching Fallbacks for missing fields
+  if (!notaFiscal && nonEmpties.length >= 2) {
+    for (const p of nonEmpties) {
+      if (/^\d{3,10}$/.test(p) && p !== chaveDeAcesso) {
+        notaFiscal = p;
+        break;
+      }
+    }
+    if (!notaFiscal) notaFiscal = nonEmpties[0];
+  }
+
+  if (!data) {
+    for (const p of nonEmpties) {
+      if (/\d{2}\/\d{2}\/\d{4}/.test(p) || /\d{4}-\d{2}-\d{2}/.test(p)) {
+        data = p;
+        break;
+      }
+    }
+  }
+
+  if (!cnpj) {
+    for (const p of nonEmpties) {
+      if (/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/.test(p) || /\d{3}\.\d{3}\.\d{3}-\d{2}/.test(p)) {
+        cnpj = formatCnpjCpfHelper(p);
+        break;
+      }
+    }
+  }
+
+  if (!cfop || !/^[1-7][.\-]?\d{3}$/.test(cfop)) {
+    for (const p of nonEmpties) {
+      const cleanP = p.trim();
+      if (/^[1-7][.\-]?\d{3}$/.test(cleanP)) {
+        cfop = cleanP;
+        break;
+      }
+    }
+    if (!cfop || !/^[1-7][.\-]?\d{3}$/.test(cfop)) {
+      cfop = forceType === 'SAIDA' ? '5102' : '1102';
+    }
+  }
+
+  if (!rawProduct) {
+    for (const p of nonEmpties) {
+      if (
+        p !== notaFiscal &&
+        p !== data &&
+        p !== cnpj &&
+        p !== cfop &&
+        p !== chaveDeAcesso &&
+        !/^\d+([\.,]\d+)?$/.test(p) &&
+        p.length > 2
+      ) {
+        rawProduct = p;
+        break;
+      }
+    }
+  }
+
+  if (vlrContabil === 0) {
+    if (rProduto > 0) vlrContabil = rProduto;
+    else {
+      let maxVal = 0;
+      for (const p of nonEmpties) {
+        const val = parsePtBrFloatHelper(p);
+        if (val > maxVal && p !== notaFiscal && !/\d{2}\/\d{2}\/\d{4}/.test(p) && p.replace(/\D/g, '').length !== 44) {
+          maxVal = val;
+        }
+      }
+      vlrContabil = maxVal;
+    }
+  }
+
+  let codigoProduto = '';
+  let nomeProduto = rawProduct.trim();
+  const hyphenIndex = rawProduct.indexOf(' - ');
+  if (hyphenIndex !== -1) {
+    codigoProduto = rawProduct.substring(0, hyphenIndex).trim();
+    nomeProduto = rawProduct.substring(hyphenIndex + 3).trim();
+  }
+
+  // Determine operacao type
+  let tipoOperacao: 'SAIDA' | 'ENTRADA' = forceType || 'SAIDA';
+  if (!forceType) {
+    const cleanCfop = cfop.replace(/\D/g, '');
+    if (cleanCfop.startsWith('1') || cleanCfop.startsWith('2') || cleanCfop.startsWith('3')) {
+      tipoOperacao = 'ENTRADA';
+    } else if (cleanCfop.startsWith('5') || cleanCfop.startsWith('6') || cleanCfop.startsWith('7')) {
+      tipoOperacao = 'SAIDA';
+    }
+  }
+
+  // For NFCe modelo 65 or missing fields, populate NF number & CNPJ from Chave de Acesso
+  if (chaveDeAcesso && chaveDeAcesso.length === 44) {
+    if (!notaFiscal || modFromKey === '65' || notaFiscal === '0') {
+      if (nfFromKey && nfFromKey !== '0') notaFiscal = nfFromKey;
+    }
+    if (!cnpj || modFromKey === '65' || cnpj === '99.999.999/0001-99') {
+      if (cnpjFromKey) cnpj = cnpjFromKey;
+    }
+  }
+
+  if (!rawProduct && (modFromKey === '65' || (chaveDeAcesso && chaveDeAcesso.length === 44))) {
+    rawProduct = 'VENDA NFC-E MODELO 65';
+    nomeProduto = 'VENDA NFC-E MODELO 65';
+  }
+
+  if (!notaFiscal || (vlrContabil === 0 && !rawProduct)) return null;
+
+  let modeloVal = modFromKey || '55';
+  let serieVal = serieFromKey || '1';
+  let ufVal = ufFromKey || 'CE';
+  if (chaveDeAcesso && chaveDeAcesso.length === 44) {
+    modeloVal = chaveDeAcesso.substring(20, 22) || '55';
+    serieVal = chaveDeAcesso.substring(22, 25).replace(/^0+/, '') || '1';
+    const ufCode = chaveDeAcesso.substring(0, 2);
+    if (UF_MAP[ufCode]) ufVal = UF_MAP[ufCode].sigla;
+  }
+
+  const isNfceFull = modeloVal === '65';
+
+  return {
+    id: `${tipoOperacao === 'SAIDA' ? 'sai' : 'ent'}-${Math.random().toString(36).substring(2, 9)}`,
+    notaFiscal,
+    modelo: modeloVal,
+    serie: serieVal,
+    data,
+    vlrContabil,
+    cnpj: isNfceFull ? '' : (cnpj || '99.999.999/0001-99'),
+    razaoSocial: isNfceFull ? '' : (nomeProduto || 'NÃO INFORMADO'),
+    uf: ufVal,
+    chaveDeAcesso,
+    situacaoNfe: 'AUTORIZADA',
+
+    cfop,
+    codigoProduto,
+    nomeProduto: nomeProduto || 'PRODUTO NÃO ESPECIFICADO',
+    ncm,
+    un,
+    qtde: qtde || 1,
+    rUnit: rUnit || 0,
+    rProduto: rProduto || vlrContabil,
+    desconto: desconto || 0,
+    cst: cst || '000',
+    rBaseIcms,
+    pIcms,
+    rIcms,
+    pIpi,
+    rIpi,
+    tipoOperacao
+  };
+}
+
+/**
+ * 1. SEGREGAÇÃO DE DADOS:
+ * Distinct reader function for ENTRADAS (Purchases / Inbound NFs).
+ * Guarantees field integrity specific to Entrada operations (CFOP 1xxx, 2xxx, 3xxx).
+ */
+export function parseSigaEntradas(text: string): { items: SigaReportItem[]; metadata: SigaReportMetadata } {
+  if (!text) return { items: [], metadata: { empresa: '', periodo: '', dataGeracao: '' } };
+  
+  const lines = text.split(/\r?\n/);
+  const items: SigaReportItem[] = [];
+  let inEntradaSection = false;
+  let empresa = '';
+  let periodo = '';
+  let dataGeracao = '';
+
+  for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
+
+    const lowerLine = line.toLowerCase();
+    if (lowerLine.includes('notas fiscais de entrada')) {
+      inEntradaSection = true;
+      continue;
+    } else if (lowerLine.includes('notas fiscais de saída') || lowerLine.includes('notas fiscais de saida')) {
+      inEntradaSection = false;
+      continue;
+    }
+
+    if (line.includes('DISTRIBUIDORA') || line.includes('PRODUTOS ALIMENTICIO') || line.includes('LTDA') || line.includes('S.A')) {
+      const parts = line.split(';');
+      if (parts[0] && !empresa) empresa = parts[0].trim();
+    }
+    if (line.includes('De:') && line.includes('até:')) {
+      const parts = line.split(';');
+      if (parts[0]) periodo = parts[0].replace(/\s+/g, ' ').trim();
+      const datePart = parts.find(p => p.toLowerCase().includes('data:'));
+      if (datePart) dataGeracao = datePart.replace(/data:/i, '').trim();
+    }
+
+    const parsedItem = parseGenericSigaLine(line);
+    if (parsedItem) {
+      if (inEntradaSection || parsedItem.tipoOperacao === 'ENTRADA') {
+        parsedItem.tipoOperacao = 'ENTRADA';
+        items.push(parsedItem);
+      }
+    }
+  }
+
+  return {
+    items,
+    metadata: {
+      empresa: empresa || 'EMPRESA IDENTIFICADA NO RELATÓRIO',
+      periodo: periodo || 'Período não identificado',
+      dataGeracao: dataGeracao || new Date().toLocaleDateString('pt-BR')
+    }
+  };
+}
+
+/**
+ * 1. SEGREGAÇÃO DE DADOS:
+ * Distinct reader function for SAÍDAS (Sales / Outbound NFs).
+ * Guarantees field integrity specific to Saída operations (CFOP 5xxx, 6xxx, 7xxx).
+ */
+export function parseSigaSaidas(text: string): { items: SigaReportItem[]; metadata: SigaReportMetadata } {
+  if (!text) return { items: [], metadata: { empresa: '', periodo: '', dataGeracao: '' } };
+  
+  const lines = text.split(/\r?\n/);
+  const items: SigaReportItem[] = [];
+  let inSaidaSection = false;
+  let empresa = '';
+  let periodo = '';
+  let dataGeracao = '';
+
+  for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
+
+    const lowerLine = line.toLowerCase();
+    if (lowerLine.includes('notas fiscais de saída') || lowerLine.includes('notas fiscais de saida')) {
+      inSaidaSection = true;
+      continue;
+    } else if (lowerLine.includes('notas fiscais de entrada')) {
+      inSaidaSection = false;
+      continue;
+    }
+
+    if (line.includes('DISTRIBUIDORA') || line.includes('PRODUTOS ALIMENTICIO') || line.includes('LTDA') || line.includes('S.A')) {
+      const parts = line.split(';');
+      if (parts[0] && !empresa) empresa = parts[0].trim();
+    }
+    if (line.includes('De:') && line.includes('até:')) {
+      const parts = line.split(';');
+      if (parts[0]) periodo = parts[0].replace(/\s+/g, ' ').trim();
+      const datePart = parts.find(p => p.toLowerCase().includes('data:'));
+      if (datePart) dataGeracao = datePart.replace(/data:/i, '').trim();
+    }
+
+    const parsedItem = parseGenericSigaLine(line);
+    if (parsedItem) {
+      if (inSaidaSection || parsedItem.tipoOperacao === 'SAIDA') {
+        parsedItem.tipoOperacao = 'SAIDA';
+        items.push(parsedItem);
+      }
+    }
+  }
+
+  return {
+    items,
+    metadata: {
+      empresa: empresa || 'EMPRESA IDENTIFICADA NO RELATÓRIO',
+      periodo: periodo || 'Período não identificado',
+      dataGeracao: dataGeracao || new Date().toLocaleDateString('pt-BR')
+    }
+  };
+}
+
+/**
+ * Combined full report parser using dedicated readers for Entradas and Saídas.
+ */
+export function parseSigaFullReport(text: string): {
+  entradas: SigaReportItem[];
+  saidas: SigaReportItem[];
+  metadata: SigaReportMetadata;
+} {
+  const { items: entradas, metadata: metaEntradas } = parseSigaEntradas(text);
+  const { items: saidas, metadata: metaSaidas } = parseSigaSaidas(text);
+
+  const metadata: SigaReportMetadata = {
+    empresa: metaEntradas.empresa || metaSaidas.empresa || 'SL DISTRIBUIDORA DE PRODUTOS ALIMENTICIO',
+    periodo: metaEntradas.periodo || metaSaidas.periodo || 'Período não identificado',
+    dataGeracao: metaEntradas.dataGeracao || metaSaidas.dataGeracao || new Date().toLocaleDateString('pt-BR')
+  };
+
+  return { entradas, saidas, metadata };
+}
+
+/**
+ * Canal Import Parser: Classifies all items in the uploaded file strictly according to the channel origin.
+ * Canal A (Documentos Emitidos) -> forceType: 'SAIDA'
+ * Canal B (Documentos Recebidos) -> forceType: 'ENTRADA'
+ */
+export function parseSigaChannelFile(
+  text: string,
+  forceType: 'SAIDA' | 'ENTRADA'
+): {
+  items: SigaReportItem[];
+  metadata: SigaReportMetadata;
+  isValid: boolean;
+} {
+  if (!text || !text.trim()) {
+    return { items: [], metadata: { empresa: '', periodo: '', dataGeracao: '' }, isValid: false };
+  }
+
+  const lines = text.split(/\r?\n/);
+  const items: SigaReportItem[] = [];
+  let empresa = '';
+  let periodo = '';
+  let dataGeracao = '';
+
+  for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
+
+    if (line.includes('DISTRIBUIDORA') || line.includes('PRODUTOS ALIMENTICIO') || line.includes('LTDA') || line.includes('S.A')) {
+      const parts = line.split(';');
+      if (parts[0] && !empresa) empresa = parts[0].trim();
+    }
+    if (line.includes('De:') && line.includes('até:')) {
+      const parts = line.split(';');
+      if (parts[0]) periodo = parts[0].replace(/\s+/g, ' ').trim();
+      const datePart = parts.find(p => p.toLowerCase().includes('data:'));
+      if (datePart) dataGeracao = datePart.replace(/data:/i, '').trim();
+    }
+
+    const item = parseGenericSigaLine(line, forceType);
+    if (item) {
+      items.push(item);
+    }
+  }
+
+  const isValid = items.length > 0;
+
+  return {
+    items,
+    metadata: {
+      empresa: empresa || 'EMPRESA IDENTIFICADA NO RELATÓRIO',
+      periodo: periodo || 'Período não identificado',
+      dataGeracao: dataGeracao || new Date().toLocaleDateString('pt-BR')
+    },
+    isValid
+  };
+}
+
+/**
+ * 2. MÓDULO DE AUDITORIA INDEPENDENTE:
+ * Algoritmo de Deduplicação.
+ * Critério exato: Chave de Acesso + Número da Nota + Valor Total.
+ */
+export function getSigaDeduplicationKey(item: SigaReportItem): string {
+  const chave = item.chaveDeAcesso ? item.chaveDeAcesso.trim().replace(/\D/g, '') : '';
+  const nota = (item.notaFiscal || '').trim().replace(/\D/g, '').replace(/^0+/, '') || '0';
+  const valor = (Number(item.vlrContabil) || 0).toFixed(2);
+
+  if (chave && chave.length === 44) {
+    return `CHV_${chave}_N_${nota}_V_${valor}`;
+  }
+
+  // Fallback se a Chave de Acesso não estiver presente no arquivo texto:
+  const cnpjClean = (item.cnpj || '').trim().replace(/\D/g, '');
+  const dataClean = (item.data || '').trim();
+  return `CNPJ_${cnpjClean || 'DOC'}_N_${nota}_V_${valor}_D_${dataClean}`;
+}
+
+export function identifySigaDuplicates(items: SigaReportItem[]): {
+  itemsWithStatus: SigaReportItem[];
+  summary: {
+    totalProcessed: number;
+    uniqueRecords: number;
+    duplicateCount: number;
+    duplicatedValue: number;
+    sanitizedTotalValue: number;
+    originalTotalValue: number;
+  };
+} {
+  const frequencyMap = new Map<string, number>();
+
+  items.forEach(item => {
+    const key = getSigaDeduplicationKey(item);
+    frequencyMap.set(key, (frequencyMap.get(key) || 0) + 1);
+  });
+
+  const seenKeys = new Set<string>();
+  let duplicateCount = 0;
+  let duplicatedValue = 0;
+  let originalTotalValue = 0;
+  let sanitizedTotalValue = 0;
+
+  const itemsWithStatus = items.map((item, idx) => {
+    const key = getSigaDeduplicationKey(item);
+    const count = frequencyMap.get(key) || 1;
+    const val = Number(item.vlrContabil) || 0;
+    originalTotalValue += val;
+
+    let isDuplicate = false;
+    if (seenKeys.has(key)) {
+      isDuplicate = true;
+      duplicateCount++;
+      duplicatedValue += val;
+    } else {
+      seenKeys.add(key);
+      sanitizedTotalValue += val;
+    }
+
+    return {
+      ...item,
+      id: item.id || `siga-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+      isDuplicate,
+      deduplicationKey: key,
+      duplicateGroupCount: count
+    };
+  });
+
+  return {
+    itemsWithStatus,
+    summary: {
+      totalProcessed: items.length,
+      uniqueRecords: items.length - duplicateCount,
+      duplicateCount,
+      duplicatedValue,
+      sanitizedTotalValue,
+      originalTotalValue
+    }
+  };
+}
+
+/**
+ * 3. APRIMORAMENTO DA EXPORTAÇÃO EXCEL:
+ * Gera planilha Excel com abas separadas 'Entradas' e 'Saídas'.
+ * Aplica Formatação Condicional (destaque em vermelho para notas duplicadas).
+ * Adiciona linha de 'Resumo de Auditoria' no topo de cada aba.
+ */
+export function exportSigaAuditExcel({
+  entradas,
+  saidas,
+  metadata,
+  filename = `Auditoria_SIGA_Saneado_${Date.now()}.xlsx`
+}: {
+  entradas: SigaReportItem[];
+  saidas: SigaReportItem[];
+  metadata: SigaReportMetadata | null;
+  filename?: string;
+}): void {
+  const wb = XLSX.utils.book_new();
+
+  const styleHeaderTitle = {
+    fill: { fgColor: { rgb: "04243B" } },
+    font: { name: "Arial", sz: 14, bold: true, color: { rgb: "E4B35E" } },
+    alignment: { horizontal: "center", vertical: "center" }
+  };
+  const styleHeaderSub = {
+    fill: { fgColor: { rgb: "04243B" } },
+    font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } },
+    alignment: { horizontal: "center", vertical: "center" }
+  };
+  const styleAuditSummaryBanner = {
+    fill: { fgColor: { rgb: "1E293B" } },
+    font: { name: "Arial", sz: 10, bold: true, color: { rgb: "E4B35E" } },
+    alignment: { horizontal: "left", vertical: "center" }
+  };
+  const styleAuditSummaryDetail = {
+    fill: { fgColor: { rgb: "F1F5F9" } },
+    font: { name: "Arial", sz: 9.5, bold: true, color: { rgb: "0F172A" } },
+    alignment: { horizontal: "left", vertical: "center" },
+    border: {
+      bottom: { style: "medium", color: { rgb: "CBD5E1" } },
+      top: { style: "thin", color: { rgb: "CBD5E1" } }
+    }
+  };
+
+  const getTableHeaderStyle = (align: 'left' | 'center' | 'right' = 'center') => ({
+    fill: { fgColor: { rgb: "04243B" } },
+    font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } },
+    alignment: { horizontal: align, vertical: "center" },
+    border: {
+      top: { style: "medium", color: { rgb: "04243B" } },
+      bottom: { style: "medium", color: { rgb: "E4B35E" } }
+    }
+  });
+
+  const getStandardRowStyle = (isEven: boolean, align: 'left' | 'center' | 'right' = 'left') => ({
+    fill: { fgColor: { rgb: isEven ? "FFFFFF" : "F8FAFC" } },
+    font: { name: "Arial", sz: 9, color: { rgb: "1E293B" } },
+    alignment: { horizontal: align, vertical: "center" },
+    border: {
+      bottom: { style: "thin", color: { rgb: "E2E8F0" } }
+    }
+  });
+
+  // RED CONDITIONAL FORMATTING STYLE FOR DUPLICATE ENTRIES
+  const getDuplicateRowStyle = (align: 'left' | 'center' | 'right' = 'left') => ({
+    fill: { fgColor: { rgb: "FEE2E2" } }, // Red highlight background
+    font: { name: "Arial", sz: 9, bold: true, color: { rgb: "990000" } }, // Dark Red text
+    alignment: { horizontal: align, vertical: "center" },
+    border: {
+      bottom: { style: "thin", color: { rgb: "FCA5A5" } },
+      top: { style: "thin", color: { rgb: "FCA5A5" } }
+    }
+  });
+
+  const colConfigs: { header: string; key: keyof SigaReportItem; align: 'left' | 'center' | 'right'; width: number; isNumeric?: boolean; format?: string }[] = [
+    { header: 'Nota Fiscal', key: 'notaFiscal', align: 'center', width: 14 },
+    { header: 'Modelo', key: 'modelo', align: 'center', width: 10 },
+    { header: 'Série', key: 'serie', align: 'center', width: 10 },
+    { header: 'Data Emissão', key: 'data', align: 'center', width: 14 },
+    { header: 'Valor R$', key: 'vlrContabil', align: 'right', width: 16, isNumeric: true, format: '"R$ " #,##0.00' },
+    { header: 'CNPJ Emitente', key: 'cnpj', align: 'center', width: 20 },
+    { header: 'Razão Social Emitente', key: 'razaoSocial', align: 'left', width: 38 },
+    { header: 'UF', key: 'uf', align: 'center', width: 8 },
+    { header: 'Chave de Acesso', key: 'chaveDeAcesso', align: 'center', width: 46 },
+    { header: 'Situação NF-e', key: 'situacaoNfe', align: 'center', width: 16 }
+  ];
+
+  const makeSheet = (sheetName: string, rawItems: SigaReportItem[]) => {
+    const ws: any = {};
+    const { itemsWithStatus, summary } = identifySigaDuplicates(rawItems);
+    const numCols = colConfigs.length;
+
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: numCols - 1 } }, // Main Header Title
+      { s: { r: 1, c: 0 }, e: { r: 1, c: numCols - 1 } }, // Subtitle
+      { s: { r: 2, c: 0 }, e: { r: 2, c: numCols - 1 } }, // Resumo de Auditoria Title
+      { s: { r: 3, c: 0 }, e: { r: 3, c: numCols - 1 } }, // Resumo de Auditoria Stats
+    ];
+
+    // 1. Header Block
+    ws['A1'] = { v: 'MOREIRA & LIMA CONTADORES ASSOCIADOS - AUDITORIA DE RELATÓRIOS SIGA/SEFAZ', s: styleHeaderTitle };
+    ws['A2'] = { v: `SÍNTESE DE MOVIMENTAÇÃO DE ${sheetName.toUpperCase()} - PERÍODO: ${metadata?.periodo || 'NÃO INFORMADO'}`, s: styleHeaderSub };
+
+    // 2. Resumo de Auditoria (Top Summary Block)
+    ws['A3'] = { v: `🛡️ RESUMO DE AUDITORIA & SANEAMENTO DE DUPLICIDADES - ${sheetName.toUpperCase()}`, s: styleAuditSummaryBanner };
+    const summaryText = `Total Processado: ${summary.totalProcessed} reg. | Únicos (Saneados): ${summary.uniqueRecords} | Duplicidades Detectadas: ${summary.duplicateCount} | Valor Duplicado Removido: R$ ${summary.duplicatedValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} | Total Bruto Original: R$ ${summary.originalTotalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} | Total Real Saneado: R$ ${summary.sanitizedTotalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+    ws['A4'] = { v: summaryText, s: styleAuditSummaryDetail };
+
+    // 3. Table Column Headers
+    colConfigs.forEach((cfg, colIdx) => {
+      const cellRef = XLSX.utils.encode_cell({ r: 5, c: colIdx });
+      ws[cellRef] = { v: cfg.header, s: getTableHeaderStyle(cfg.align) };
+    });
+
+    // Sort items so duplicates appear with clear context or preserve original order
+    const ptBrCollator = new Intl.Collator('pt-BR', { numeric: true, sensitivity: 'base' });
+    const sortedItems = [...itemsWithStatus].sort((a, b) => {
+      const numA = parseInt((a.notaFiscal || '').replace(/\D/g, ''), 10) || 0;
+      const numB = parseInt((b.notaFiscal || '').replace(/\D/g, ''), 10) || 0;
+      if (numA !== numB) return numA - numB;
+      return ptBrCollator.compare(a.nomeProduto || '', b.nomeProduto || '');
+    });
+
+    // 4. Rows Writing with Conditional Red Formatting
+    sortedItems.forEach((item, rowIdx) => {
+      const r = 6 + rowIdx;
+      const isDup = Boolean(item.isDuplicate);
+      const chave = item.chaveDeAcesso || '';
+      const isChave44 = chave.length === 44;
+
+      colConfigs.forEach((cfg, colIdx) => {
+        const style = isDup ? getDuplicateRowStyle(cfg.align) : getStandardRowStyle(rowIdx % 2 === 0, cfg.align);
+        const cellRef = XLSX.utils.encode_cell({ r, c: colIdx });
+
+        let cellValue: any = item[cfg.key as keyof SigaReportItem];
+
+        const isNfceRow = item.modelo === '65' || (isChave44 && chave.substring(20, 22) === '65');
+
+        if (cfg.key === 'modelo') {
+          cellValue = item.modelo || (isChave44 ? chave.substring(20, 22) : '55');
+        } else if (cfg.key === 'serie') {
+          cellValue = item.serie || (isChave44 ? (chave.substring(22, 25).replace(/^0+/, '') || '1') : '1');
+        } else if (cfg.key === 'uf') {
+          cellValue = item.uf || (isChave44 ? (UF_MAP[chave.substring(0, 2)]?.sigla || 'CE') : 'CE');
+        } else if (cfg.key === 'situacaoNfe') {
+          cellValue = item.situacaoNfe || 'AUTORIZADA';
+        } else if (cfg.key === 'razaoSocial') {
+          cellValue = isNfceRow ? '' : (item.razaoSocial || item.nomeProduto || 'NÃO INFORMADO');
+        } else if (cfg.key === 'cnpj') {
+          cellValue = isNfceRow ? '' : item.cnpj;
+        }
+
+        if (cfg.isNumeric) {
+          const numVal = typeof cellValue === 'number' ? cellValue : parseFloat(cellValue as string) || 0;
+          ws[cellRef] = {
+            v: numVal,
+            t: 'n',
+            s: style,
+            ...(cfg.format ? { z: cfg.format } : {})
+          };
+        } else {
+          ws[cellRef] = {
+            v: cellValue === undefined || cellValue === null ? '' : String(cellValue),
+            s: style
+          };
+        }
+      });
+    });
+
+    const maxRow = 6 + sortedItems.length;
+    ws['!ref'] = `A1:${XLSX.utils.encode_col(numCols - 1)}${maxRow}`;
+    ws['!cols'] = colConfigs.map(cfg => ({ wch: cfg.width }));
+
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  };
+
+  makeSheet('Entradas', entradas);
+  makeSheet('Saídas', saidas);
+
+  XLSX.writeFile(wb, filename);
+}
+

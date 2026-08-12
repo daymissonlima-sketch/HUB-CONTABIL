@@ -44,3 +44,19 @@ export function sanitizeCsvField(field: string): string {
   }
   return clean;
 }
+
+/**
+ * Sanitizes the raw key input by removing any character that is not a numeric digit.
+ */
+export function cleanAccessKey(key: string): string {
+  if (typeof key !== 'string') return '';
+  return key.replace(/[^0-9]/g, '');
+}
+
+/**
+ * Validates if the sanitized key has exactly 44 digits.
+ */
+export function isAccessKeyValid(key: string): boolean {
+  return key.length === 44;
+}
+
