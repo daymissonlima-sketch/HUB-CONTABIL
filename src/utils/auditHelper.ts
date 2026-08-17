@@ -136,6 +136,34 @@ export function formatCNPJ(cnpj: string): string {
   return formatCnpjCpf(cnpj);
 }
 
+export function splitProductCodeAndDesc(rawProduct: string | undefined | null): { codigo: string; descricao: string } {
+  if (!rawProduct) return { codigo: '', descricao: '' };
+  const trimmed = rawProduct.trim();
+
+  // Match formats like: "11000 - ISQUEIRO CRICKET...", "11000 – ISQUEIRO...", "PROD_01 / ITEM..."
+  const sepMatch = trimmed.match(/^([A-Za-z0-9_.\/]+)\s*[\-–—:\/]\s*(.+)$/);
+  if (sepMatch && sepMatch[1] && sepMatch[2]) {
+    return {
+      codigo: sepMatch[1].trim(),
+      descricao: sepMatch[2].trim()
+    };
+  }
+
+  // Match numeric code followed by space and description: "11000 ISQUEIRO..."
+  const numPrefixMatch = trimmed.match(/^(\d{1,12})\s+([^\d].*)$/);
+  if (numPrefixMatch && numPrefixMatch[1] && numPrefixMatch[2]) {
+    return {
+      codigo: numPrefixMatch[1].trim(),
+      descricao: numPrefixMatch[2].trim()
+    };
+  }
+
+  return {
+    codigo: '',
+    descricao: trimmed
+  };
+}
+
 export function parseChaveDeAcesso(chaveRaw: string): Omit<InvoiceRow, 'id' | 'dataEmissao' | 'valorString' | 'valorDecimal'> & { isValidChave: boolean; chaveError?: string } {
   const validation = validateFiscalKey(chaveRaw);
   if (!validation.isValid) {

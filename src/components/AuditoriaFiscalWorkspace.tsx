@@ -64,7 +64,8 @@ import {
   identifySigaDuplicates,
   exportSigaAuditExcel,
   getSigaDeduplicationKey,
-  formatCnpjCpf
+  formatCnpjCpf,
+  splitProductCodeAndDesc
 } from '../utils/auditHelper';
 import {
   PisCofinsItem,
@@ -250,6 +251,8 @@ function aggregateDuplicates(items: ReportItem[]): ReportItem[] {
 
 export interface ErpIcmsSummaryItem {
   cfop: string;
+  codigoProduto?: string;
+  descricaoProduto?: string;
   produto: string;
   ncm: string;
   unidade: string;
@@ -277,12 +280,17 @@ export function aggregateIcmsItems(items: ErpIcmsReportItem[]): ErpIcmsSummaryIt
     const normProd = (item.produto || '').trim();
     const normCfop = (item.cfop || '').trim();
     const normCst = (item.cstIcms || '').trim();
+    const { codigo: splitCod, descricao: splitDesc } = splitProductCodeAndDesc(normProd);
+    const codigoProd = item.codigoProduto || splitCod || '';
+    const descProd = item.descricaoProduto || splitDesc || normProd;
 
     const key = `${normProd}___${normCfop}___${normCst}`;
 
     if (!map.has(key)) {
       map.set(key, {
         cfop: normCfop,
+        codigoProduto: codigoProd,
+        descricaoProduto: descProd,
         produto: normProd,
         ncm: item.ncm || '',
         unidade: item.unidade || 'UN',
@@ -312,10 +320,13 @@ export function aggregateIcmsItems(items: ErpIcmsReportItem[]): ErpIcmsSummaryIt
       entry.valorIcms += (item.valorIcms || 0);
       entry.valorIpi += (item.valorIpi || 0);
       if (item.aliquotaIpi && !entry.aliquotaIpi) entry.aliquotaIpi = item.aliquotaIpi;
+      if (item.aliquotaIcms && !entry.aliquotaIcms) entry.aliquotaIcms = item.aliquotaIcms;
       entry.icmsRecalculated += (item.icmsRecalculated || 0);
       entry.icmsDivergence += (item.icmsDivergence || 0);
       entry.itemsCount += 1;
       if (!entry.ncm && item.ncm) entry.ncm = item.ncm;
+      if (!entry.codigoProduto && codigoProd) entry.codigoProduto = codigoProd;
+      if (!entry.descricaoProduto && descProd) entry.descricaoProduto = descProd;
       if (item.statusAudit && item.statusAudit !== 'OK') entry.statusAudit = item.statusAudit;
     }
   });
@@ -325,12 +336,22 @@ export function aggregateIcmsItems(items: ErpIcmsReportItem[]): ErpIcmsSummaryIt
       const qtde = entry.quantidade;
       const vProd = entry.valorProduto;
       entry.valorUnitario = qtde > 0 ? Number((vProd / qtde).toFixed(4)) : 0;
-      if (entry.baseCalculoIcms > 0 && entry.valorIcms > 0) {
-        entry.aliquotaIcms = Number(((entry.valorIcms / entry.baseCalculoIcms) * 100).toFixed(2));
+      if (!entry.aliquotaIcms && entry.baseCalculoIcms > 0 && entry.valorIcms > 0) {
+        const rawAliq = (entry.valorIcms / entry.baseCalculoIcms) * 100;
+        const nearestInt = Math.round(rawAliq);
+        if (Math.abs(rawAliq - nearestInt) < 0.08) {
+          entry.aliquotaIcms = nearestInt;
+        } else {
+          entry.aliquotaIcms = Number(rawAliq.toFixed(2));
+        }
       }
       return entry;
     })
-    .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+    .sort((a, b) => {
+      const descA = a.descricaoProduto || splitProductCodeAndDesc(a.produto).descricao || a.produto || '';
+      const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
+      return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
+    });
 }
 
 function PisCofinsSummaryTableRows({ rows, isResumido }: { rows: PisCofinsConsolidatedItem[]; isResumido: boolean }) {
@@ -502,7 +523,11 @@ export function AuditoriaFiscalWorkspace() {
         (i.cfop && (i.cfop.startsWith('1') || i.cfop.startsWith('2') || i.cfop.startsWith('3')))
       )
       .slice()
-      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+      .sort((a, b) => {
+        const descA = a.descricaoProduto || splitProductCodeAndDesc(a.produto).descricao || a.produto || '';
+        const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
+        return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
+      });
   }, [erpIcmsItems]);
 
   const icmsSaidasCompleto = useMemo(() => {
@@ -512,7 +537,11 @@ export function AuditoriaFiscalWorkspace() {
         (i.cfop && (i.cfop.startsWith('5') || i.cfop.startsWith('6') || i.cfop.startsWith('7')))
       )
       .slice()
-      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+      .sort((a, b) => {
+        const descA = a.descricaoProduto || splitProductCodeAndDesc(a.produto).descricao || a.produto || '';
+        const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
+        return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
+      });
   }, [erpIcmsItems]);
 
   const activeFilteredIcmsList = useMemo(() => {
@@ -522,8 +551,13 @@ export function AuditoriaFiscalWorkspace() {
     if (!term) return rawList;
 
     return rawList.filter(item => {
+      const { codigo: prodCod, descricao: prodDesc } = splitProductCodeAndDesc(item.produto);
+      const codigoFinal = (item.codigoProduto || prodCod || '').toLowerCase();
+      const descFinal = (item.descricaoProduto || prodDesc || item.produto || '').toLowerCase();
       return (item.notaFiscal && item.notaFiscal.toLowerCase().includes(term)) ||
         (item.produto && item.produto.toLowerCase().includes(term)) ||
+        codigoFinal.includes(term) ||
+        descFinal.includes(term) ||
         (item.cnpjEmitente && item.cnpjEmitente.toLowerCase().includes(term)) ||
         (item.cfop && item.cfop.toLowerCase().includes(term)) ||
         (item.cstIcms && item.cstIcms.toLowerCase().includes(term)) ||
@@ -2581,11 +2615,17 @@ export function AuditoriaFiscalWorkspace() {
     });
 
     const createCompletoSheet = (sheetTitle: string, items: ErpIcmsReportItem[]) => {
+      const sortedItems = [...items].sort((a, b) => {
+        const descA = a.descricaoProduto || splitProductCodeAndDesc(a.produto).descricao || a.produto || '';
+        const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
+        return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
+      });
+
       const ws: any = {};
       ws['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: 18 } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: 18 } },
-        { s: { r: 2, c: 0 }, e: { r: 2, c: 18 } }
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 20 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 20 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 20 } }
       ];
 
       ws['A1'] = { v: BRAND_CONFIG.COMPANY_NAME, s: styleHeaderTitle };
@@ -2597,8 +2637,10 @@ export function AuditoriaFiscalWorkspace() {
         'Nota Fiscal',
         'Data Emissão',
         'CNPJ / CPF',
+        'PF / PJ',
         'CFOP',
-        'Descrição do Produto / Item',
+        'Código do Produto',
+        'Descrição do Produto',
         'NCM',
         'UN',
         'Quantidade',
@@ -2619,37 +2661,45 @@ export function AuditoriaFiscalWorkspace() {
         ws[cellRef] = { v: h, s: styleTableHeader };
       });
 
-      items.forEach((item, rowIdx) => {
+      sortedItems.forEach((item, rowIdx) => {
         const r = 5 + rowIdx;
         const isEven = rowIdx % 2 === 0;
+
+        const cleanDocDigits = (item.cnpjEmitente || '').replace(/\D/g, '');
+        const tipoPessoa = cleanDocDigits.length === 11 ? 'PF' : cleanDocDigits.length === 14 ? 'PJ' : '';
+        const { codigo: splitCod, descricao: splitDesc } = splitProductCodeAndDesc(item.produto);
+        const codigoProd = item.codigoProduto || splitCod || '';
+        const descProd = item.descricaoProduto || splitDesc || item.produto || '';
 
         ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: item.tipoOperacao || 'SAIDA', s: getRowStyle(isEven, 'center') };
         ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: item.notaFiscal, s: getRowStyle(isEven, 'center') };
         ws[XLSX.utils.encode_cell({ r, c: 2 })] = { v: item.dataEmissao, s: getRowStyle(isEven, 'center') };
         ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: formatCnpjCpf(item.cnpjEmitente), s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: item.cfop, s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.produto, s: getRowStyle(isEven, 'left') };
-        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.ncm, s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 7 })] = { v: item.unidade, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: tipoPessoa, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.cfop, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: codigoProd, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 7 })] = { v: descProd, s: getRowStyle(isEven, 'left') };
+        ws[XLSX.utils.encode_cell({ r, c: 8 })] = { v: item.ncm, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 9 })] = { v: item.unidade, s: getRowStyle(isEven, 'center') };
         
-        ws[XLSX.utils.encode_cell({ r, c: 8 })] = { v: item.quantidade || 0, t: 'n', z: '#,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 9 })] = { v: item.valorUnitario || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 10 })] = { v: item.valorProduto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 11 })] = { v: item.desconto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 12 })] = { v: item.valorContabil || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 13 })] = { v: item.cstIcms || '', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 14 })] = { v: item.baseCalculoIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 15 })] = { v: (item.aliquotaIcms || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 16 })] = { v: item.valorIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 17 })] = { v: (item.aliquotaIpi || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 18 })] = { v: item.valorIpi || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 10 })] = { v: item.quantidade || 0, t: 'n', z: '#,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 11 })] = { v: item.valorUnitario || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 12 })] = { v: item.valorProduto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 13 })] = { v: item.desconto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 14 })] = { v: item.valorContabil || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 15 })] = { v: item.cstIcms || '', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 16 })] = { v: item.baseCalculoIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 17 })] = { v: (item.aliquotaIcms || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 18 })] = { v: item.valorIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 19 })] = { v: (item.aliquotaIpi || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 20 })] = { v: item.valorIpi || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
       });
 
-      const maxRow = 5 + items.length;
-      ws['!ref'] = `A1:S${maxRow}`;
+      const maxRow = 5 + sortedItems.length;
+      ws['!ref'] = `A1:U${maxRow}`;
 
       ws['!cols'] = [
-        { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 10 }, { wch: 45 },
+        { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 10 }, { wch: 10 }, { wch: 18 }, { wch: 45 },
         { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 14 },
         { wch: 18 }, { wch: 10 }, { wch: 16 }, { wch: 10 }, { wch: 18 }, { wch: 10 },
         { wch: 18 }
@@ -2662,9 +2712,9 @@ export function AuditoriaFiscalWorkspace() {
       const aggregated = aggregateIcmsItems(items);
       const ws: any = {};
       ws['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: 14 } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: 14 } },
-        { s: { r: 2, c: 0 }, e: { r: 2, c: 14 } }
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 15 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 15 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 15 } }
       ];
 
       ws['A1'] = { v: BRAND_CONFIG.COMPANY_NAME, s: styleHeaderTitle };
@@ -2673,7 +2723,8 @@ export function AuditoriaFiscalWorkspace() {
 
       const headers = [
         'CFOP',
-        'Descrição do Produto / Item',
+        'Código do Produto',
+        'Descrição do Produto',
         'NCM',
         'UN',
         'Quantidade',
@@ -2697,29 +2748,33 @@ export function AuditoriaFiscalWorkspace() {
       aggregated.forEach((item, rowIdx) => {
         const r = 5 + rowIdx;
         const isEven = rowIdx % 2 === 0;
+        const { codigo: splitCod, descricao: splitDesc } = splitProductCodeAndDesc(item.produto);
+        const codigoProd = item.codigoProduto || splitCod || '';
+        const descProd = item.descricaoProduto || splitDesc || item.produto || '';
 
         ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: item.cfop, s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: item.produto, s: getRowStyle(isEven, 'left') };
-        ws[XLSX.utils.encode_cell({ r, c: 2 })] = { v: item.ncm, s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: item.unidade, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: codigoProd, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 2 })] = { v: descProd, s: getRowStyle(isEven, 'left') };
+        ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: item.ncm, s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: item.unidade, s: getRowStyle(isEven, 'center') };
         
-        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: item.quantidade || 0, t: 'n', z: '#,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.valorUnitario || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.valorProduto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 7 })] = { v: item.desconto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 8 })] = { v: item.valorContabil || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 9 })] = { v: item.cstIcms || '', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 10 })] = { v: item.baseCalculoIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 11 })] = { v: (item.aliquotaIcms || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 12 })] = { v: item.valorIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 13 })] = { v: (item.aliquotaIpi || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
-        ws[XLSX.utils.encode_cell({ r, c: 14 })] = { v: item.valorIpi || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.quantidade || 0, t: 'n', z: '#,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.valorUnitario || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 7 })] = { v: item.valorProduto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 8 })] = { v: item.desconto || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 9 })] = { v: item.valorContabil || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 10 })] = { v: item.cstIcms || '', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 11 })] = { v: item.baseCalculoIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 12 })] = { v: (item.aliquotaIcms || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 13 })] = { v: item.valorIcms || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 14 })] = { v: (item.aliquotaIpi || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'center') };
+        ws[XLSX.utils.encode_cell({ r, c: 15 })] = { v: item.valorIpi || 0, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'center') };
       });
 
       const maxRow = 5 + aggregated.length;
-      ws['!ref'] = `A1:O${maxRow}`;
+      ws['!ref'] = `A1:P${maxRow}`;
       ws['!cols'] = [
-        { wch: 10 }, { wch: 48 }, { wch: 12 }, { wch: 8 }, { wch: 14 },
+        { wch: 10 }, { wch: 18 }, { wch: 48 }, { wch: 12 }, { wch: 8 }, { wch: 14 },
         { wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 10 },
         { wch: 18 }, { wch: 10 }, { wch: 18 }, { wch: 10 }, { wch: 18 }
       ];
@@ -2733,7 +2788,11 @@ export function AuditoriaFiscalWorkspace() {
         (i.cfop && (i.cfop.startsWith('1') || i.cfop.startsWith('2') || i.cfop.startsWith('3')))
       )
       .slice()
-      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+      .sort((a, b) => {
+        const descA = a.descricaoProduto || splitProductCodeAndDesc(a.produto).descricao || a.produto || '';
+        const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
+        return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
+      });
 
     const saidas = list
       .filter(i => 
@@ -2741,7 +2800,11 @@ export function AuditoriaFiscalWorkspace() {
         (i.cfop && (i.cfop.startsWith('5') || i.cfop.startsWith('6') || i.cfop.startsWith('7')))
       )
       .slice()
-      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+      .sort((a, b) => {
+        const descA = a.descricaoProduto || splitProductCodeAndDesc(a.produto).descricao || a.produto || '';
+        const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
+        return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
+      });
 
     // 1. Entradas completo
     XLSX.utils.book_append_sheet(wb, createCompletoSheet('Entradas Completo', entradas), 'Entradas completo');
@@ -2787,11 +2850,17 @@ export function AuditoriaFiscalWorkspace() {
     });
 
     const createAuditSheet = (title: string, items: ErpIcmsReportItem[]) => {
+      const sortedItems = [...items].sort((a, b) => {
+        const descA = a.descricaoProduto || splitProductCodeAndDesc(a.produto).descricao || a.produto || '';
+        const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
+        return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
+      });
+
       const ws: any = {};
       ws['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: 11 } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: 11 } },
-        { s: { r: 2, c: 0 }, e: { r: 2, c: 11 } }
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 12 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 12 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 12 } }
       ];
 
       ws['A1'] = { v: BRAND_CONFIG.COMPANY_NAME, s: styleHeaderTitle };
@@ -2803,7 +2872,8 @@ export function AuditoriaFiscalWorkspace() {
         'Data',
         'CNPJ / CPF Emitente',
         'CFOP',
-        'Descrição do Produto / Item',
+        'Código do Produto',
+        'Descrição do Produto',
         'R$ Contábil',
         'CST',
         'R$ Base ICMS',
@@ -2818,7 +2888,7 @@ export function AuditoriaFiscalWorkspace() {
         ws[cellRef] = { v: h, s: styleTableHeader };
       });
 
-      items.forEach((item, rowIdx) => {
+      sortedItems.forEach((item, rowIdx) => {
         const r = 5 + rowIdx;
         const isEven = rowIdx % 2 === 0;
 
@@ -2842,24 +2912,29 @@ export function AuditoriaFiscalWorkspace() {
           isError = true;
         }
 
+        const { codigo: splitCod, descricao: splitDesc } = splitProductCodeAndDesc(item.produto);
+        const codigoProd = item.codigoProduto || splitCod || '';
+        const descProd = item.descricaoProduto || splitDesc || item.produto || '';
+
         ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: item.notaFiscal, s: getRowStyle(isEven, 'center', isError) };
         ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: item.dataEmissao, s: getRowStyle(isEven, 'center', isError) };
         ws[XLSX.utils.encode_cell({ r, c: 2 })] = { v: formatCnpjCpf(item.cnpjEmitente), s: getRowStyle(isEven, 'center', isError) };
         ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: item.cfop, s: getRowStyle(isEven, 'center', isError) };
-        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: item.produto, s: getRowStyle(isEven, 'left', isError) };
-        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.valorContabil, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', isError) };
-        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.cstIcms, s: getRowStyle(isEven, 'center', isError) };
-        ws[XLSX.utils.encode_cell({ r, c: 7 })] = { v: item.baseCalculoIcms, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', isError) };
-        ws[XLSX.utils.encode_cell({ r, c: 8 })] = { v: (item.aliquotaIcms || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'right', isError) };
-        ws[XLSX.utils.encode_cell({ r, c: 9 })] = { v: item.valorIcms, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', isError) };
-        ws[XLSX.utils.encode_cell({ r, c: 10 })] = { v: status, s: getRowStyle(isEven, 'center', isError) };
-        ws[XLSX.utils.encode_cell({ r, c: 11 })] = { v: diag, s: getRowStyle(isEven, 'left', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: codigoProd, s: getRowStyle(isEven, 'center', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: descProd, s: getRowStyle(isEven, 'left', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.valorContabil, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 7 })] = { v: item.cstIcms, s: getRowStyle(isEven, 'center', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 8 })] = { v: item.baseCalculoIcms, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 9 })] = { v: (item.aliquotaIcms || 0) / 100, t: 'n', z: '0.00%', s: getRowStyle(isEven, 'right', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 10 })] = { v: item.valorIcms, t: 'n', z: '"R$ " #,##0.00', s: getRowStyle(isEven, 'right', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 11 })] = { v: status, s: getRowStyle(isEven, 'center', isError) };
+        ws[XLSX.utils.encode_cell({ r, c: 12 })] = { v: diag, s: getRowStyle(isEven, 'left', isError) };
       });
 
-      const maxRow = 5 + items.length;
-      ws['!ref'] = `A1:L${maxRow}`;
+      const maxRow = 5 + sortedItems.length;
+      ws['!ref'] = `A1:M${maxRow}`;
       ws['!cols'] = [
-        { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 10 }, { wch: 45 },
+        { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 10 }, { wch: 18 }, { wch: 45 },
         { wch: 16 }, { wch: 10 }, { wch: 16 }, { wch: 10 }, { wch: 16 },
         { wch: 22 }, { wch: 55 }
       ];
@@ -2873,7 +2948,11 @@ export function AuditoriaFiscalWorkspace() {
         (i.cfop && (i.cfop.startsWith('1') || i.cfop.startsWith('2') || i.cfop.startsWith('3')))
       )
       .slice()
-      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+      .sort((a, b) => {
+        const descA = a.descricaoProduto || splitProductCodeAndDesc(a.produto).descricao || a.produto || '';
+        const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
+        return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
+      });
 
     const saidas = list
       .filter(i => 
@@ -2881,7 +2960,11 @@ export function AuditoriaFiscalWorkspace() {
         (i.cfop && (i.cfop.startsWith('5') || i.cfop.startsWith('6') || i.cfop.startsWith('7')))
       )
       .slice()
-      .sort((a, b) => (a.produto || '').localeCompare(b.produto || '', 'pt-BR', { sensitivity: 'base' }));
+      .sort((a, b) => {
+        const descA = a.descricaoProduto || splitProductCodeAndDesc(a.produto).descricao || a.produto || '';
+        const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
+        return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
+      });
 
     XLSX.utils.book_append_sheet(wb, createAuditSheet('Auditoria Entradas', entradas), 'Auditoria Entradas');
     XLSX.utils.book_append_sheet(wb, createAuditSheet('Auditoria Saídas', saidas), 'Auditoria Saídas');
@@ -3667,9 +3750,13 @@ export function AuditoriaFiscalWorkspace() {
                         <tr>
                           <th className="py-2.5 px-3 text-center whitespace-nowrap">NF</th>
                           <th className="py-2.5 px-3 text-center whitespace-nowrap">Data</th>
-                          <th className="py-2.5 px-3 text-center whitespace-nowrap">CNPJ / CPF Emitente</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">
+                            {icmsActiveSubTab === 'saidas' ? 'CNPJ / CPF Destinatário' : 'CNPJ / CPF Emitente'}
+                          </th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">PF / PJ</th>
                           <th className="py-2.5 px-3 text-center whitespace-nowrap">CFOP</th>
-                          <th className="py-2.5 px-3 text-left whitespace-nowrap min-w-[200px]">Descrição do Produto / Item</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap">Código</th>
+                          <th className="py-2.5 px-3 text-left whitespace-nowrap min-w-[200px]">Descrição do Produto</th>
                           <th className="py-2.5 px-3 text-center whitespace-nowrap">NCM</th>
                           <th className="py-2.5 px-3 text-center whitespace-nowrap">UN</th>
                           <th className="py-2.5 px-3 text-center whitespace-nowrap">Quantidade</th>
@@ -3686,46 +3773,66 @@ export function AuditoriaFiscalWorkspace() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 font-mono">
-                        {(paginatedIcmsItems as ErpIcmsReportItem[]).map((item, idx) => (
-                          <tr key={item.id || `icms-${idx}`} className="hover:bg-slate-50 transition-colors">
-                            <td className="py-2 px-3 text-center font-bold text-[#04243b] whitespace-nowrap">{item.notaFiscal}</td>
-                            <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.dataEmissao}</td>
-                            <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{formatCnpjCpf(item.cnpjEmitente)}</td>
-                            <td className="py-2 px-3 text-center text-slate-700 font-bold whitespace-nowrap">{item.cfop}</td>
-                            <td className="py-2 px-3 text-left font-sans text-slate-800 max-w-xs truncate" title={item.produto}>
-                              {item.produto}
-                            </td>
-                            <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.ncm || '-'}</td>
-                            <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.unidade || 'UN'}</td>
-                            <td className="py-2 px-3 text-center font-bold text-slate-800 whitespace-nowrap">
-                              {(item.quantidade || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
-                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
-                              R$ {(item.valorUnitario || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                            </td>
-                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
-                              R$ {(item.valorProduto || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
-                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
-                              R$ {(item.desconto || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
-                            <td className="py-2 px-3 text-center font-bold text-slate-800 whitespace-nowrap">
-                              R$ {(item.valorContabil || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
-                            <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.cstIcms || '-'}</td>
-                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
-                              R$ {(item.baseCalculoIcms || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
-                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">{item.aliquotaIcms || 0}%</td>
-                            <td className="py-2 px-3 text-center font-bold text-emerald-700 whitespace-nowrap">
-                              R$ {(item.valorIcms || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
-                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">{item.aliquotaIpi || 0}%</td>
-                            <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
-                              R$ {(item.valorIpi || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
-                          </tr>
-                        ))}
+                        {(paginatedIcmsItems as ErpIcmsReportItem[]).map((item, idx) => {
+                          const cleanDocDigits = (item.cnpjEmitente || '').replace(/\D/g, '');
+                          const tipoPessoa = cleanDocDigits.length === 11 ? 'PF' : cleanDocDigits.length === 14 ? 'PJ' : '-';
+                          const { codigo: prodCod, descricao: prodDesc } = splitProductCodeAndDesc(item.produto);
+                          const codigoFinal = item.codigoProduto || prodCod || '-';
+                          const descFinal = item.descricaoProduto || prodDesc || item.produto;
+
+                          return (
+                            <tr key={item.id || `icms-${idx}`} className="hover:bg-slate-50 transition-colors">
+                              <td className="py-2 px-3 text-center font-bold text-[#04243b] whitespace-nowrap">{item.notaFiscal}</td>
+                              <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.dataEmissao}</td>
+                              <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{formatCnpjCpf(item.cnpjEmitente)}</td>
+                              <td className="py-2 px-3 text-center whitespace-nowrap">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  tipoPessoa === 'PF' 
+                                    ? 'bg-amber-100 text-amber-800 border border-amber-300' 
+                                    : tipoPessoa === 'PJ' 
+                                    ? 'bg-blue-100 text-blue-800 border border-blue-300' 
+                                    : 'text-slate-400'
+                                }`}>
+                                  {tipoPessoa}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-700 font-bold whitespace-nowrap">{item.cfop}</td>
+                              <td className="py-2 px-3 text-center text-slate-700 font-mono font-medium whitespace-nowrap">{codigoFinal}</td>
+                              <td className="py-2 px-3 text-left font-sans text-slate-800 max-w-xs truncate" title={descFinal}>
+                                {descFinal}
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.ncm || '-'}</td>
+                              <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.unidade || 'UN'}</td>
+                              <td className="py-2 px-3 text-center font-bold text-slate-800 whitespace-nowrap">
+                                {(item.quantidade || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
+                                R$ {(item.valorUnitario || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
+                                R$ {(item.valorProduto || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
+                                R$ {(item.desconto || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="py-2 px-3 text-center font-bold text-slate-800 whitespace-nowrap">
+                                R$ {(item.valorContabil || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-600 whitespace-nowrap">{item.cstIcms || '-'}</td>
+                              <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
+                                R$ {(item.baseCalculoIcms || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">{item.aliquotaIcms || 0}%</td>
+                              <td className="py-2 px-3 text-center font-bold text-emerald-700 whitespace-nowrap">
+                                R$ {(item.valorIcms || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">{item.aliquotaIpi || 0}%</td>
+                              <td className="py-2 px-3 text-center text-slate-700 whitespace-nowrap">
+                                R$ {(item.valorIpi || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

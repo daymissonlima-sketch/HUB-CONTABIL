@@ -16,7 +16,7 @@ import {
   AuditExecutionSummary 
 } from '../types/AuditTypes';
 import { ErpIcmsConfig, DEFAULT_ERP_ICMS_CONFIG } from '../config/ErpIcmsConfig';
-import { formatCnpjCpf } from '../../../utils/auditHelper';
+import { formatCnpjCpf, splitProductCodeAndDesc } from '../../../utils/auditHelper';
 
 export interface ErpIcmsReportItem {
   id: string;
@@ -29,6 +29,8 @@ export interface ErpIcmsReportItem {
   razaoSocialEmitente: string;
   uf: string;
   cfop: string;
+  codigoProduto?: string;
+  descricaoProduto?: string;
   produto: string;
   ncm: string;
   unidade: string;
@@ -424,6 +426,17 @@ export class ErpIcmsProcessor implements IAuditStrategy {
       // Dynamic Valor ICMS Resolution:
       let valorIcms = this.parseBrazilianFloat(cells[hIndices.valorIcms] || cells[hIndices.valorIcms + 1] || cells[30] || cells[31] || '0');
 
+      // Se a alíquota não veio expressa na coluna mas há base e valor de ICMS, inferir a alíquota nominal
+      if (aliquotaIcms === 0 && baseCalculoIcms > 0 && valorIcms > 0) {
+        const rawAliq = (valorIcms / baseCalculoIcms) * 100;
+        const nearestInt = Math.round(rawAliq);
+        if (Math.abs(rawAliq - nearestInt) < 0.08) {
+          aliquotaIcms = nearestInt;
+        } else {
+          aliquotaIcms = Number(rawAliq.toFixed(2));
+        }
+      }
+
       // Dynamic Aliquota IPI & Valor IPI Resolution:
       let aliquotaIpi = this.parseBrazilianFloat(cells[hIndices.aliquotaIpi] || cells[34] || '0');
       let valorIpi = this.parseBrazilianFloat(cells[hIndices.valorIpi] || cells[36] || '0');
@@ -467,6 +480,8 @@ export class ErpIcmsProcessor implements IAuditStrategy {
         razaoSocialEmitente: 'PARCEIRO / CLIENTE',
         uf: this.config.defaultUf,
         cfop,
+        codigoProduto: splitProductCodeAndDesc(produto).codigo,
+        descricaoProduto: splitProductCodeAndDesc(produto).descricao || produto,
         produto,
         ncm,
         unidade,
@@ -529,26 +544,40 @@ export class ErpIcmsProcessor implements IAuditStrategy {
   private exportIcmsExcel(items: ErpIcmsReportItem[], summary: AuditExecutionSummary, filename: string): void {
     const wb = XLSX.utils.book_new();
 
+    const sortedItems = [...items].sort((a, b) => {
+      const descA = a.descricaoProduto || splitProductCodeAndDesc(a.produto).descricao || a.produto || '';
+      const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
+      return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
+    });
+
     const wsData: any[][] = [
       ['MOREIRA & LIMA CONTADORES ASSOCIADOS - MÓDULO 2: ERP MOVIMENTAÇÃO ICMS POR PRODUTO'],
       [`Relatório Processado em: ${new Date().toLocaleString('pt-BR')}`],
       [`Total Registros: ${summary.totalRecords} | Válidos: ${summary.validRecords} | Divergências: ${summary.divergentRecords} | Valor Total: R$ ${summary.totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`],
       [],
       [
-        'Tipo Operação', 'Nota Fiscal', 'Data Emissão', 'CNPJ/CPF', 'CFOP', 'Produto / Item', 'NCM', 'UN',
+        'Tipo Operação', 'Nota Fiscal', 'Data Emissão', 'CNPJ/CPF', 'PF / PJ', 'CFOP', 'Código do Produto', 'Descrição do Produto', 'NCM', 'UN',
         'Quantidade', 'R$ Unitario', 'R$ Produto', 'Desconto R$', 'Vlr. Contabil R$', 'CST ICMS', 'R$ Base ICMS', '% ICMS',
         'R$ ICMS Declarado', 'R$ ICMS Recalculado', 'Divergencia ICMS R$', '% IPI', 'R$ IPI', 'Status Auditoria'
       ]
     ];
 
-    items.forEach(item => {
+    sortedItems.forEach(item => {
+      const cleanDocDigits = (item.cnpjEmitente || '').replace(/\D/g, '');
+      const tipoPessoa = cleanDocDigits.length === 11 ? 'PF' : cleanDocDigits.length === 14 ? 'PJ' : '';
+      const { codigo: splitCod, descricao: splitDesc } = splitProductCodeAndDesc(item.produto);
+      const codigoProd = item.codigoProduto || splitCod || '';
+      const descProd = item.descricaoProduto || splitDesc || item.produto || '';
+
       wsData.push([
         item.tipoOperacao,
         item.notaFiscal,
         item.dataEmissao,
         item.cnpjEmitente,
+        tipoPessoa,
         item.cfop,
-        item.produto,
+        codigoProd,
+        descProd,
         item.ncm,
         item.unidade,
         item.quantidade,
@@ -570,7 +599,7 @@ export class ErpIcmsProcessor implements IAuditStrategy {
 
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     ws['!cols'] = [
-      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 }, { wch: 10 }, { wch: 42 }, { wch: 12 }, { wch: 6 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 18 }, { wch: 42 }, { wch: 12 }, { wch: 6 },
       { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 10 }, { wch: 16 }, { wch: 10 },
       { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 12 }, { wch: 22 }
     ];
