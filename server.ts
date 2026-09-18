@@ -312,6 +312,23 @@ Instruções importantes:
         return res.status(400).json({ error: "CNPJ inválido. Forneça um CNPJ com 14 dígitos." });
       }
 
+      // Checksum validation
+      const weights1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+      const weights2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+      let sum1 = 0;
+      for (let i = 0; i < 12; i++) sum1 += parseInt(cnpjClean.charAt(i), 10) * weights1[i];
+      const rest1 = sum1 % 11;
+      const d1 = rest1 < 2 ? 0 : 11 - rest1;
+      let sum2 = 0;
+      for (let i = 0; i < 13; i++) sum2 += parseInt(cnpjClean.charAt(i), 10) * weights2[i];
+      const rest2 = sum2 % 11;
+      const d2 = rest2 < 2 ? 0 : 11 - rest2;
+      
+      const isValid = (d1 === parseInt(cnpjClean.charAt(12), 10) && d2 === parseInt(cnpjClean.charAt(13), 10)) && !/^(\d)\1+$/.test(cnpjClean);
+      if (!isValid) {
+        return res.status(400).json({ error: "O documento informado é um CAEPF / Pessoa Física (Produtor Rural) ou não é um CNPJ válido na Receita Federal." });
+      }
+
       console.log(`[CNPJ API] Requesting CNPJ: ${cnpjClean}`);
       const headers = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" };
 

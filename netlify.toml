@@ -2,12 +2,46 @@
   command = "npm run build"
   publish = "dist"
 
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# Redirecionamento para funções serverless Netlify
+[[redirects]]
+  from = "/api/gemini/parse-debt"
+  to = "/.netlify/functions/parse-debt"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/parse-certificate"
+  to = "/.netlify/functions/parse-certificate"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/parse-pdf"
+  to = "/.netlify/functions/parse-pdf"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/sign-pdf"
+  to = "/.netlify/functions/sign-pdf"
+  status = 200
+  force = true
+
+# Proxy transparente de CNPJ via BrasilAPI com fallback
 [[redirects]]
   from = "/api/cnpj/*"
   to = "https://brasilapi.com.br/api/cnpj/v1/:splat"
   status = 200
   force = true
 
+# Fallback SPA para roteamento do React (evita 404 em rotas e reload de página)
 [[redirects]]
   from = "/*"
   to = "/index.html"
@@ -21,3 +55,9 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+

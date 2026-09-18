@@ -16,6 +16,12 @@ import { Comunicados } from './components/Comunicados';
 import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
 import { ChaveSanitizer } from './components/ChaveSanitizer';
 import { FileSpreadsheet, Briefcase, Menu, Calculator, Coins, Settings, Table, FileText, ShieldCheck, Sparkles } from 'lucide-react';
+import { loadStoredCompanies } from './utils/companyStorage';
+
+// Synchronously ensure companies storage is reconciled with the official database
+try {
+  loadStoredCompanies();
+} catch (e) {}
 
 // Synchronously purge all records referencing MODULUS or CNPJ 37.345.284/0001-68
 try {

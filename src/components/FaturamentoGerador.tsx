@@ -24,10 +24,10 @@ import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import { Company, FaturamentoItem } from '../types_debits';
-import importedCompaniesJson from '../data/imported_companies.json';
+import { loadStoredCompanies, saveStoredCompanies, COMPANIES_UPDATED_EVENT } from '../utils/companyStorage';
 import { convertPdfToCsvString } from '../utils/pdfToCsv';
 import { extractTextFromPdf } from '../utils/pdfExtractor';
-import { fetchCnpjSafe, parseCnpjResponseData } from '../utils/cnpjHelper';
+import { fetchCnpjSafe, parseCnpjResponseData, isCaepf, isValidCNPJ } from '../utils/cnpjHelper';
 import { calculateEstimatedTaxes } from '../utils/taxEstimator';
 import { identifyCompanyForFile, parseFaturamentoFromCsv, parseFaturamentoFromPdfDirect } from '../utils/billingParser';
 
@@ -370,47 +370,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
   // Load companies and accountants from localStorage on mount and when updated
   useEffect(() => {
     const loadAll = () => {
-      const importedList = (importedCompaniesJson as unknown) as Company[];
-      const stored = localStorage.getItem('moreira_lima_companies');
-      let mergedCompanies: Company[] = [...importedList];
-
-      if (stored) {
-        try {
-          const parsed = (JSON.parse(stored) as Company[]).filter(c => !c.id.startsWith('demo-'));
-          const importedMap = new Map(importedList.map(c => [(c.cnpj || '').replace(/\D/g, ''), c]));
-
-          const updatedParsed = parsed.map(pC => {
-            const cleanCnpj = (pC.cnpj || '').replace(/\D/g, '');
-            const imp = importedMap.get(cleanCnpj);
-            if (imp) {
-              return {
-                ...pC,
-                regimeTributario: imp.regimeTributario || pC.regimeTributario,
-                vendaVistaPercent: imp.vendaVistaPercent !== undefined ? imp.vendaVistaPercent : pC.vendaVistaPercent,
-                vendaPrazoPercent: imp.vendaPrazoPercent !== undefined ? imp.vendaPrazoPercent : pC.vendaPrazoPercent,
-              };
-            }
-            return pC;
-          });
-
-          const existingCnpjs = new Set(updatedParsed.map(c => (c.cnpj || '').replace(/\D/g, '')));
-          const newFromImport = importedList.filter(c => !existingCnpjs.has((c.cnpj || '').replace(/\D/g, '')));
-          mergedCompanies = [...updatedParsed, ...newFromImport];
-        } catch (err) {
-          console.error('Erro ao ler empresas do localStorage:', err);
-        }
-      }
-
-      // Strict filter for MODULUS and CNPJ 37.345.284
-      mergedCompanies = mergedCompanies.filter(c => {
-        const name = (c.razaoSocial || '').toUpperCase();
-        const cnpj = (c.cnpj || '').replace(/\D/g, '');
-        return !name.includes('MODULUS') && !cnpj.includes('37345284');
-      });
-
-      mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+      const mergedCompanies = loadStoredCompanies();
       setCompanies(mergedCompanies);
-      localStorage.setItem('moreira_lima_companies', JSON.stringify(mergedCompanies));
 
       const storedAcc = localStorage.getItem('moreira_lima_accountants');
       if (storedAcc) {
@@ -433,10 +394,10 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     };
 
     loadAll();
-    window.addEventListener('moreira_lima_companies_updated', loadAll);
+    window.addEventListener(COMPANIES_UPDATED_EVENT, loadAll);
     window.addEventListener('moreira_lima_accountants_updated', loadAll);
     return () => {
-      window.removeEventListener('moreira_lima_companies_updated', loadAll);
+      window.removeEventListener(COMPANIES_UPDATED_EVENT, loadAll);
       window.removeEventListener('moreira_lima_accountants_updated', loadAll);
     };
   }, []);
@@ -448,14 +409,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
 
   // Save companies when changed
   const saveCompanies = (updatedList: Company[]) => {
-    const filtered = updatedList.filter(c => {
-      const name = (c.razaoSocial || '').toUpperCase();
-      const cnpj = (c.cnpj || '').replace(/\D/g, '');
-      return !name.includes('MODULUS') && !cnpj.includes('37345284');
-    });
-    const sorted = [...filtered].sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+    const sorted = saveStoredCompanies(updatedList);
     setCompanies(sorted);
-    localStorage.setItem('moreira_lima_companies', JSON.stringify(sorted));
   };
 
   const handleSaveAccountant = (e: React.FormEvent) => {
@@ -799,7 +754,12 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
   // Helper to fetch details from public CNPJ API using our proxy endpoint
   const handleFetchCnpjData = async () => {
     const clean = newCompany.cnpj.replace(/\D/g, "");
-    if (clean.length !== 14) {
+    if (isCaepf(newCompany.cnpj)) {
+      alert("O documento informado é um CAEPF / Pessoa Física (Produtor Rural). Não possui cadastro no webservice de CNPJ da Receita Federal.");
+      return;
+    }
+
+    if (clean.length !== 14 || !isValidCNPJ(clean)) {
       alert("Por favor, digite um CNPJ válido com 14 dígitos.");
       return;
     }
@@ -866,10 +826,15 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       return;
     }
 
+    const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 10 : Number(newCompany.vendaVistaPercent)));
+    const safePrazo = 100 - safeVista;
+
     let updated: Company[];
     if (editingCompanyId) {
       updated = companies.map(c => c.id === editingCompanyId ? {
         ...newCompany,
+        vendaVistaPercent: safeVista,
+        vendaPrazoPercent: safePrazo,
         id: c.id,
         createdAt: c.createdAt
       } as Company : c);
@@ -877,6 +842,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     } else {
       const companyToAdd: Company = {
         ...newCompany,
+        vendaVistaPercent: safeVista,
+        vendaPrazoPercent: safePrazo,
         id: 'comp_' + Date.now(),
         createdAt: new Date().toISOString()
       };
@@ -1054,11 +1021,18 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
         setCsvImportProgress(`Consultando API para: ${formatCNPJ(cleanCnpj)} (${i - startIndex + 1}/${lines.length - startIndex})...`);
         
         try {
-          const data = await fetchCnpjSafe(cleanCnpj);
-          const parsed = parseCnpjResponseData(data);
+          let parsed: any = null;
+          if (cleanCnpj.length === 14 && isValidCNPJ(cleanCnpj) && !isCaepf(cleanCnpj)) {
+            try {
+              const data = await fetchCnpjSafe(cleanCnpj);
+              parsed = parseCnpjResponseData(data);
+            } catch (e) {
+              console.warn('Consulta CNPJ indisponível para importação:', e);
+            }
+          }
 
-          const razaoSocial = parsed.razaoSocial || parts[0] || 'Empresa Sem Nome';
-          const regime = parsed.regime || (parts[2] as any || 'LUCRO_PRESUMIDO');
+          const razaoSocial = (parsed && parsed.razaoSocial) || parts[0] || 'Empresa Sem Nome';
+          const regime = (parsed && parsed.regime) || (parts[2] as any || 'LUCRO_PRESUMIDO');
 
           const comp: Company = {
             id: 'comp_' + Date.now() + '_' + i,
@@ -1067,9 +1041,9 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
             regimeTributario: regime,
             vendaVistaPercent: parseFloat(parts[3]) || 10,
             vendaPrazoPercent: parseFloat(parts[4]) || 90,
-            endereco: parsed.enderecoFormatted || parts[5] || '',
-            cidade: parsed.cidadeFormatted || parts[6] || 'Fortaleza (CE)',
-            cep: parsed.cep || parts[7] || '',
+            endereco: (parsed && parsed.enderecoFormatted) || parts[5] || '',
+            cidade: (parsed && parsed.cidadeFormatted) || parts[6] || 'Fortaleza (CE)',
+            cep: (parsed && parsed.cep) || parts[7] || '',
             inscEst: parts[8] || '',
             pmr: parseInt(parts[9]) || 21,
             pr: (parts[10] as any) || 'R',
@@ -1078,10 +1052,10 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
             duplicatasPercent: parseFloat(parts[13]) || 100,
             contadorNome: parts[14] || 'PAULO HENRIQUE DE F. MOREIRA',
             contadorCrc: parts[15] || 'CRC CE 022956-O6',
-            quadroSocietario: parsed.quadro,
-            municipio: parsed.municipioNome,
-            estado: parsed.estadoNome,
-            uf: parsed.estadoSigla,
+            quadroSocietario: (parsed && parsed.quadro) || [],
+            municipio: (parsed && parsed.municipioNome) || '',
+            estado: (parsed && parsed.estadoNome) || '',
+            uf: (parsed && parsed.estadoSigla) || '',
             createdAt: new Date().toISOString()
           };
 
@@ -1305,41 +1279,43 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       // If not registered but we have an identified CNPJ, create company automatically
       if (!identifiedCompany && identifiedCnpj && identifiedCnpj.length === 14) {
         setBatchProgress(`Empresa não cadastrada (${formatCNPJ(identifiedCnpj)}). Criando perfil automaticamente...`);
-        try {
-          const data = await fetchCnpjSafe(identifiedCnpj);
-          const parsed = parseCnpjResponseData(data);
+        if (isValidCNPJ(identifiedCnpj) && !isCaepf(identifiedCnpj)) {
+          try {
+            const data = await fetchCnpjSafe(identifiedCnpj);
+            const parsed = parseCnpjResponseData(data);
 
-          const newComp: Company = {
-            id: 'comp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9),
-            razaoSocial: parsed.razaoSocial,
-            cnpj: formatCNPJ(identifiedCnpj),
-            regimeTributario: parsed.regime as any,
-            vendaVistaPercent: 10,
-            vendaPrazoPercent: 90,
-            endereco: parsed.enderecoFormatted || '',
-            cidade: parsed.cidadeFormatted || 'Fortaleza (CE)',
-            cep: parsed.cep || '',
-            inscEst: '',
-            pmr: 21,
-            pr: 'R',
-            cartoesPercent: 0,
-            chequesPercent: 0,
-            duplicatasPercent: 100,
-            contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
-            contadorCrc: 'CRC CE 022956-O6',
-            quadroSocietario: parsed.quadro,
-            municipio: parsed.municipioNome,
-            estado: parsed.estadoNome,
-            uf: parsed.estadoSigla,
-            createdAt: new Date().toISOString()
-          };
+            const newComp: Company = {
+              id: 'comp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9),
+              razaoSocial: parsed.razaoSocial,
+              cnpj: formatCNPJ(identifiedCnpj),
+              regimeTributario: parsed.regime as any,
+              vendaVistaPercent: 10,
+              vendaPrazoPercent: 90,
+              endereco: parsed.enderecoFormatted || '',
+              cidade: parsed.cidadeFormatted || 'Fortaleza (CE)',
+              cep: parsed.cep || '',
+              inscEst: '',
+              pmr: 21,
+              pr: 'R',
+              cartoesPercent: 0,
+              chequesPercent: 0,
+              duplicatasPercent: 100,
+              contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
+              contadorCrc: 'CRC CE 022956-O6',
+              quadroSocietario: parsed.quadro,
+              municipio: parsed.municipioNome,
+              estado: parsed.estadoNome,
+              uf: parsed.estadoSigla,
+              createdAt: new Date().toISOString()
+            };
 
-          currentCompanies = [newComp, ...currentCompanies];
-          setCompanies(currentCompanies);
-          saveCompanies(currentCompanies);
-          targetCompany = newComp;
-        } catch (apiErr) {
-          console.error('Erro ao buscar CNPJ via API pública:', apiErr);
+            currentCompanies = [newComp, ...currentCompanies];
+            setCompanies(currentCompanies);
+            saveCompanies(currentCompanies);
+            targetCompany = newComp;
+          } catch (apiErr) {
+            console.error('Erro ao buscar CNPJ via API pública:', apiErr);
+          }
         }
 
         if (!targetCompany) {
@@ -1433,40 +1409,42 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
 
         if (!identifiedCompany && identifiedCnpj && identifiedCnpj.length === 14) {
           setBatchProgress(`CNPJ não cadastrado encontrado: ${formatCNPJ(identifiedCnpj)}. Criando empresa automaticamente...`);
-          try {
-            const data = await fetchCnpjSafe(identifiedCnpj);
-            const parsed = parseCnpjResponseData(data);
+          if (isValidCNPJ(identifiedCnpj) && !isCaepf(identifiedCnpj)) {
+            try {
+              const data = await fetchCnpjSafe(identifiedCnpj);
+              const parsed = parseCnpjResponseData(data);
 
-            const newComp: Company = {
-              id: 'comp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9),
-              razaoSocial: parsed.razaoSocial,
-              cnpj: formatCNPJ(identifiedCnpj),
-              regimeTributario: parsed.regime as any,
-              vendaVistaPercent: 10,
-              vendaPrazoPercent: 90,
-              endereco: parsed.enderecoFormatted || '',
-              cidade: parsed.cidadeFormatted || 'Fortaleza (CE)',
-              cep: parsed.cep || '',
-              inscEst: '',
-              pmr: 21,
-              pr: 'R',
-              cartoesPercent: 0,
-              chequesPercent: 0,
-              duplicatasPercent: 100,
-              contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
-              contadorCrc: 'CRC CE 022956-O6',
-              quadroSocietario: parsed.quadro,
-              municipio: parsed.municipioNome,
-              estado: parsed.estadoNome,
-              uf: parsed.estadoSigla,
-              createdAt: new Date().toISOString()
-            };
+              const newComp: Company = {
+                id: 'comp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9),
+                razaoSocial: parsed.razaoSocial,
+                cnpj: formatCNPJ(identifiedCnpj),
+                regimeTributario: parsed.regime as any,
+                vendaVistaPercent: 10,
+                vendaPrazoPercent: 90,
+                endereco: parsed.enderecoFormatted || '',
+                cidade: parsed.cidadeFormatted || 'Fortaleza (CE)',
+                cep: parsed.cep || '',
+                inscEst: '',
+                pmr: 21,
+                pr: 'R',
+                cartoesPercent: 0,
+                chequesPercent: 0,
+                duplicatasPercent: 100,
+                contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
+                contadorCrc: 'CRC CE 022956-O6',
+                quadroSocietario: parsed.quadro,
+                municipio: parsed.municipioNome,
+                estado: parsed.estadoNome,
+                uf: parsed.estadoSigla,
+                createdAt: new Date().toISOString()
+              };
 
-            currentCompanies = [newComp, ...currentCompanies];
-            finalCompany = newComp;
-            autoCreated = true;
-          } catch (apiErr) {
-            console.error('Erro ao buscar CNPJ via API pública:', apiErr);
+              currentCompanies = [newComp, ...currentCompanies];
+              finalCompany = newComp;
+              autoCreated = true;
+            } catch (apiErr) {
+              console.error('Erro ao buscar CNPJ via API pública:', apiErr);
+            }
           }
         }
 

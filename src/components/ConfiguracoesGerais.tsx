@@ -29,13 +29,14 @@ import {
   FileText,
   Clock,
   Play,
-  X
+  X,
+  Save
 } from 'lucide-react';
 import { Logo } from './Logo';
 import { setAppLogoPath, resetAppLogoPath, getAppLogoScale, setAppLogoScale } from '../utils/logoHelper';
 import { Company, Accountant } from '../types_debits';
-import importedCompaniesJson from '../data/imported_companies.json';
-import { fetchCnpjSafe, parseCnpjResponseData } from '../utils/cnpjHelper';
+import { loadStoredCompanies, saveStoredCompanies, updateCompanyFaturamentoPercent, COMPANIES_UPDATED_EVENT } from '../utils/companyStorage';
+import { fetchCnpjSafe, parseCnpjResponseData, isCaepf, isValidCNPJ } from '../utils/cnpjHelper';
 
 interface BatchUpdateItemStatus {
   id: string;
@@ -145,46 +146,13 @@ export function ConfiguracoesGerais() {
 
   // Carregar dados iniciais de Empresas e Assinaturas
   useEffect(() => {
-    const importedList = (importedCompaniesJson as unknown) as Company[];
-    const storedComp = localStorage.getItem('moreira_lima_companies');
-    let mergedCompanies: Company[] = [...importedList];
+    const loadCompanies = () => {
+      const mergedCompanies = loadStoredCompanies();
+      setCompanies(mergedCompanies);
+    };
 
-    if (storedComp) {
-      try {
-        const parsed = (JSON.parse(storedComp) as Company[]).filter(c => !c.id.startsWith('demo-'));
-        const importedMap = new Map(importedList.map(c => [(c.cnpj || '').replace(/\D/g, ''), c]));
-
-        const updatedParsed = parsed.map(pC => {
-          const cleanCnpj = (pC.cnpj || '').replace(/\D/g, '');
-          const imp = importedMap.get(cleanCnpj);
-          if (imp) {
-            return {
-              ...pC,
-              regimeTributario: imp.regimeTributario || pC.regimeTributario,
-              vendaVistaPercent: imp.vendaVistaPercent !== undefined ? imp.vendaVistaPercent : pC.vendaVistaPercent,
-              vendaPrazoPercent: imp.vendaPrazoPercent !== undefined ? imp.vendaPrazoPercent : pC.vendaPrazoPercent,
-            };
-          }
-          return pC;
-        });
-
-        const existingCnpjs = new Set(updatedParsed.map(c => (c.cnpj || '').replace(/\D/g, '')));
-        const newFromImport = importedList.filter(c => !existingCnpjs.has((c.cnpj || '').replace(/\D/g, '')));
-        mergedCompanies = [...updatedParsed, ...newFromImport];
-      } catch (err) {
-        console.error('Erro ao ler empresas do localStorage:', err);
-      }
-    }
-
-    // Strict filter for MODULUS and CNPJ 37.345.284
-    mergedCompanies = mergedCompanies.filter(c => {
-      const name = (c.razaoSocial || '').toUpperCase();
-      const cnpj = (c.cnpj || '').replace(/\D/g, '');
-      return !name.includes('MODULUS') && !cnpj.includes('37345284');
-    });
-
-    mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
-    setCompanies(mergedCompanies);
+    loadCompanies();
+    window.addEventListener(COMPANIES_UPDATED_EVENT, loadCompanies);
 
     const storedAcc = localStorage.getItem('moreira_lima_accountants');
     if (storedAcc) {
@@ -204,6 +172,10 @@ export function ConfiguracoesGerais() {
     } else {
       setSelectedAccountantId('paulo');
     }
+
+    return () => {
+      window.removeEventListener(COMPANIES_UPDATED_EVENT, loadCompanies);
+    };
   }, []);
 
   const showNotification = (msg: string, isError = false) => {
@@ -231,19 +203,13 @@ export function ConfiguracoesGerais() {
 
   // Funções de Gestão de Empresas
   const saveCompaniesToStorage = (updatedList: Company[]) => {
-    const filtered = updatedList.filter(c => {
-      const name = (c.razaoSocial || '').toUpperCase();
-      const cnpj = (c.cnpj || '').replace(/\D/g, '');
-      return !name.includes('MODULUS') && !cnpj.includes('37345284');
-    });
-    const sorted = [...filtered].sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
+    const sorted = saveStoredCompanies(updatedList);
     setCompanies(sorted);
-    localStorage.setItem('moreira_lima_companies', JSON.stringify(sorted));
-    window.dispatchEvent(new Event('moreira_lima_companies_updated'));
   };
 
   const handleVistaChange = (val: number) => {
-    const vista = Math.min(100, Math.max(0, val));
+    const safeVal = isNaN(val) ? 0 : val;
+    const vista = Math.min(100, Math.max(0, safeVal));
     const prazo = 100 - vista;
     setNewCompany(prev => ({
       ...prev,
@@ -253,7 +219,8 @@ export function ConfiguracoesGerais() {
   };
 
   const handlePrazoChange = (val: number) => {
-    const prazo = Math.min(100, Math.max(0, val));
+    const safeVal = isNaN(val) ? 0 : val;
+    const prazo = Math.min(100, Math.max(0, safeVal));
     const vista = 100 - prazo;
     setNewCompany(prev => ({
       ...prev,
@@ -262,9 +229,44 @@ export function ConfiguracoesGerais() {
     }));
   };
 
+  const handleQuickSetPercent = (companyId: string, vistaVal: number) => {
+    const safeVista = Math.min(100, Math.max(0, isNaN(vistaVal) ? 10 : vistaVal));
+    const safePrazo = 100 - safeVista;
+    const updated = updateCompanyFaturamentoPercent(companyId, safeVista);
+    setCompanies(updated);
+    showNotification(`Divisão de faturamento atualizada: ${safeVista}% à Vista e ${safePrazo}% a Prazo!`);
+  };
+
+  const handleBackToList = () => {
+    if (editingCompanyId && newCompany.razaoSocial && newCompany.cnpj) {
+      const original = companies.find(c => c.id === editingCompanyId);
+      const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 10 : Number(newCompany.vendaVistaPercent)));
+      const safePrazo = 100 - safeVista;
+
+      if (!original || original.vendaVistaPercent !== safeVista || original.vendaPrazoPercent !== safePrazo) {
+        const updated = companies.map(c => c.id === editingCompanyId ? {
+          ...newCompany,
+          vendaVistaPercent: safeVista,
+          vendaPrazoPercent: safePrazo,
+          id: c.id,
+          createdAt: c.createdAt
+        } as Company : c);
+        saveCompaniesToStorage(updated);
+        showNotification('Alterações salvas com sucesso!');
+      }
+    }
+    setEditingCompanyId(null);
+    setCompanyScreen('list');
+  };
+
   const handleFetchCnpjData = async () => {
     const clean = newCompany.cnpj.replace(/\D/g, "");
-    if (clean.length !== 14) {
+    if (isCaepf(newCompany.cnpj)) {
+      showNotification("O documento informado é um CAEPF / Pessoa Física (Produtor Rural). Não possui cadastro no webservice de CNPJ da Receita Federal.", true);
+      return;
+    }
+
+    if (clean.length !== 14 || !isValidCNPJ(clean)) {
       showNotification("Por favor, digite um CNPJ válido com 14 dígitos.", true);
       return;
     }
@@ -361,7 +363,13 @@ export function ConfiguracoesGerais() {
       });
 
       const cleanCnpj = company.cnpj.replace(/\D/g, "");
-      if (cleanCnpj.length === 14) {
+      if (isCaepf(company.cnpj)) {
+        // Documento CAEPF / Pessoa Física (Produtor Rural)
+        successCount++;
+        setBatchItemsStatus(prev => prev.map(item => 
+          item.id === company.id ? { ...item, status: 'success', razaoSocial: company.razaoSocial, message: 'CAEPF / Pessoa Física (Cadastro manual preservado)' } : item
+        ));
+      } else if (cleanCnpj.length === 14 && isValidCNPJ(cleanCnpj)) {
         try {
           const data = await fetchCnpjSafe(cleanCnpj);
           const parsed = parseCnpjResponseData(data);
@@ -416,7 +424,7 @@ export function ConfiguracoesGerais() {
       } else {
         errorCount++;
         setBatchItemsStatus(prev => prev.map(item => 
-          item.id === company.id ? { ...item, status: 'error', message: 'CNPJ inválido (14 dígitos requeridos)' } : item
+          item.id === company.id ? { ...item, status: 'error', message: 'CNPJ com formato inválido' } : item
         ));
       }
 
@@ -436,24 +444,33 @@ export function ConfiguracoesGerais() {
     showNotification(`Atualização em lote concluída! ${successCount} atualizadas com sucesso${errorCount > 0 ? `, ${errorCount} com erro` : ''}.`);
   };
 
-  const handleSaveCompany = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveCompany = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!newCompany.razaoSocial || !newCompany.cnpj) {
       showNotification('Por favor, preencha Razão Social e CNPJ.', true);
       return;
     }
 
+    const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 10 : Number(newCompany.vendaVistaPercent)));
+    const safePrazo = 100 - safeVista;
+
+    const companyToSave = {
+      ...newCompany,
+      vendaVistaPercent: safeVista,
+      vendaPrazoPercent: safePrazo
+    };
+
     let updated: Company[];
     if (editingCompanyId) {
       updated = companies.map(c => c.id === editingCompanyId ? {
-        ...newCompany,
+        ...companyToSave,
         id: c.id,
         createdAt: c.createdAt
       } as Company : c);
       setEditingCompanyId(null);
     } else {
       const companyToAdd: Company = {
-        ...newCompany,
+        ...companyToSave,
         id: 'comp_' + Date.now(),
         createdAt: new Date().toISOString()
       };
@@ -615,7 +632,11 @@ export function ConfiguracoesGerais() {
       <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
         <button
           type="button"
-          onClick={() => { setActiveTab('empresas'); setCompanyScreen('list'); }}
+          onClick={() => {
+            if (companyScreen === 'form') handleBackToList();
+            setActiveTab('empresas');
+            setCompanyScreen('list');
+          }}
           className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
             activeTab === 'empresas'
               ? 'bg-[#04243b] text-[#e4b35e] shadow-md'
@@ -628,7 +649,11 @@ export function ConfiguracoesGerais() {
 
         <button
           type="button"
-          onClick={() => { setActiveTab('assinaturas'); setAccountantScreen('list'); }}
+          onClick={() => {
+            if (companyScreen === 'form') handleBackToList();
+            setActiveTab('assinaturas');
+            setAccountantScreen('list');
+          }}
           className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
             activeTab === 'assinaturas'
               ? 'bg-[#04243b] text-[#e4b35e] shadow-md'
@@ -641,7 +666,10 @@ export function ConfiguracoesGerais() {
 
         <button
           type="button"
-          onClick={() => setActiveTab('identidade')}
+          onClick={() => {
+            if (companyScreen === 'form') handleBackToList();
+            setActiveTab('identidade');
+          }}
           className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
             activeTab === 'identidade'
               ? 'bg-[#04243b] text-[#e4b35e] shadow-md'
@@ -754,9 +782,39 @@ export function ConfiguracoesGerais() {
                             <div className="text-[10px] text-slate-500 font-mono mt-0.5">CNPJ: {company.cnpj}</div>
                           </td>
                           <td className="px-5 py-3.5">
-                            <span className="font-semibold text-slate-700">Vista: <strong className="text-emerald-700">{company.vendaVistaPercent}%</strong></span>
-                            <span className="mx-2 text-slate-300">|</span>
-                            <span className="font-semibold text-slate-700">Prazo: <strong className="text-blue-700">{company.vendaPrazoPercent}%</strong></span>
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-1.5 text-xs">
+                                <span className="font-semibold text-slate-700">Vista: <strong className="text-emerald-700">{company.vendaVistaPercent}%</strong></span>
+                                <span className="text-slate-300">|</span>
+                                <span className="font-semibold text-slate-700">Prazo: <strong className="text-blue-700">{company.vendaPrazoPercent}%</strong></span>
+                              </div>
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleQuickSetPercent(company.id, 100)}
+                                  className={`px-1.5 py-0.5 text-[9px] font-bold rounded transition-colors cursor-pointer ${
+                                    company.vendaVistaPercent === 100
+                                      ? 'bg-emerald-600 text-white shadow-xs'
+                                      : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+                                  }`}
+                                  title="Definir 100% à Vista (0% a Prazo)"
+                                >
+                                  100% Vista
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleQuickSetPercent(company.id, 10)}
+                                  className={`px-1.5 py-0.5 text-[9px] font-bold rounded transition-colors cursor-pointer ${
+                                    company.vendaVistaPercent === 10
+                                      ? 'bg-blue-600 text-white shadow-xs'
+                                      : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
+                                  }`}
+                                  title="Definir 10% à Vista (90% a Prazo)"
+                                >
+                                  10% / 90%
+                                </button>
+                              </div>
+                            </div>
                           </td>
                           <td className="px-5 py-3.5">
                             <span className="px-2 py-1 bg-slate-100 text-[#04243b] text-[10px] font-bold rounded uppercase">
@@ -808,16 +866,26 @@ export function ConfiguracoesGerais() {
               <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                 <button
                   type="button"
-                  onClick={() => { setCompanyScreen('list'); setEditingCompanyId(null); }}
+                  onClick={handleBackToList}
                   className="text-slate-500 hover:text-slate-800 text-xs font-bold uppercase flex items-center gap-1.5 cursor-pointer transition-colors"
                 >
                   <ArrowLeft className="h-4 w-4" />
                   Voltar à Lista de Empresas
                 </button>
-                <h3 className="text-sm font-extrabold text-[#04243b] uppercase tracking-wider flex items-center gap-2">
-                  <Building2 className="h-4 w-4 text-[#e4b35e]" />
-                  {editingCompanyId ? 'Editar Cadastro de Empresa' : 'Cadastrar Nova Empresa'}
-                </h3>
+                <div className="flex items-center gap-3">
+                  <h3 className="text-sm font-extrabold text-[#04243b] uppercase tracking-wider flex items-center gap-2">
+                    <Building2 className="h-4 w-4 text-[#e4b35e]" />
+                    {editingCompanyId ? 'Editar Cadastro de Empresa' : 'Cadastrar Nova Empresa'}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveCompany()}
+                    className="px-3 py-1.5 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-bold rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm flex items-center gap-1.5"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    Salvar
+                  </button>
+                </div>
               </div>
 
               <form onSubmit={handleSaveCompany} className="space-y-6">
@@ -909,6 +977,43 @@ export function ConfiguracoesGerais() {
                         />
                         <span className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400 font-mono text-xs">%</span>
                       </div>
+                    </div>
+
+                    <div className="sm:col-span-2 flex flex-wrap items-center gap-2 pt-1">
+                      <span className="text-[11px] font-semibold text-slate-500">Predefinições rápidas de faturamento:</span>
+                      <button
+                        type="button"
+                        onClick={() => handleVistaChange(100)}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                          newCompany.vendaVistaPercent === 100
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        100% à Vista (0% a Prazo)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleVistaChange(10)}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                          newCompany.vendaVistaPercent === 10
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        10% à Vista (90% a Prazo)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleVistaChange(50)}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                          newCompany.vendaVistaPercent === 50
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        50% / 50%
+                      </button>
                     </div>
                   </div>
                 </div>

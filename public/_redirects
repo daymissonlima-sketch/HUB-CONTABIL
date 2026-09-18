@@ -1,5 +1,12 @@
+# Netlify Serverless API Functions
+/api/gemini/parse-debt  /.netlify/functions/parse-debt  200
+/api/parse-certificate  /.netlify/functions/parse-certificate  200
+/api/parse-pdf          /.netlify/functions/parse-pdf  200
+/api/sign-pdf           /.netlify/functions/sign-pdf  200
+
 # Proxy Netlify para consulta de CNPJ (evita erros de CORS e retorno de HTML 404 em produção)
-/api/cnpj/*  https://brasilapi.com.br/api/cnpj/v1/:splat  200
+/api/cnpj/*             https://brasilapi.com.br/api/cnpj/v1/:splat  200
 
 # Fallback SPA para roteamento do React no Netlify (evita erro 404 ao atualizar a página)
-/*  /index.html  200
+/*                      /index.html  200
+

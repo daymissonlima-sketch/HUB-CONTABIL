@@ -1,23 +1,81 @@
+export function isValidCNPJ(cnpj: string): boolean {
+  const clean = (cnpj || '').replace(/\D/g, '');
+  if (clean.length !== 14 || /^(\d)\1+$/.test(clean)) return false;
+  
+  const weights1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  const weights2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  
+  let sum1 = 0;
+  for (let i = 0; i < 12; i++) {
+    sum1 += parseInt(clean.charAt(i), 10) * weights1[i];
+  }
+  const rest1 = sum1 % 11;
+  const d1 = rest1 < 2 ? 0 : 11 - rest1;
+  if (d1 !== parseInt(clean.charAt(12), 10)) return false;
+  
+  let sum2 = 0;
+  for (let i = 0; i < 13; i++) {
+    sum2 += parseInt(clean.charAt(i), 10) * weights2[i];
+  }
+  const rest2 = sum2 % 11;
+  const d2 = rest2 < 2 ? 0 : 11 - rest2;
+  return d2 === parseInt(clean.charAt(13), 10);
+}
+
+export function isCaepf(doc: string): boolean {
+  const clean = (doc || '').replace(/\D/g, '');
+  // CAEPF (Cadastro de Atividade Econômica da Pessoa Física) ou CPF de produtor rural com /001-xx
+  return clean.length === 14 && !isValidCNPJ(clean);
+}
+
 export async function fetchCnpjSafe(cleanCnpj: string): Promise<any> {
-  const response = await fetch(`/api/cnpj/${cleanCnpj}`);
-  const text = await response.text();
-
-  if (!text || text.trim().startsWith("<") || !text.trim().startsWith("{")) {
-    throw new Error("A API retornou HTML em vez de JSON. Verifique a conexão com a API de CNPJ.");
+  const clean = (cleanCnpj || '').replace(/\D/g, '');
+  
+  if (isCaepf(clean)) {
+    throw new Error('O documento informado é um CAEPF / Pessoa Física (Produtor Rural). A consulta automatizada na Receita Federal é exclusiva para pessoas jurídicas (CNPJ).');
   }
 
-  let data: any;
+  if (clean.length !== 14 || !isValidCNPJ(clean)) {
+    throw new Error('CNPJ inválido. Verifique os dígitos do documento informado.');
+  }
+
+  // 1. Try internal / proxy endpoint first (/api/cnpj/:cnpj)
   try {
-    data = JSON.parse(text);
-  } catch (e) {
-    throw new Error("A resposta recebida não está no formato JSON válido.");
+    const response = await fetch(`/api/cnpj/${clean}`);
+    const text = await response.text();
+    if (text && (text.trim().startsWith("{") || text.trim().startsWith("["))) {
+      const data = JSON.parse(text);
+      if (response.ok) {
+        return data;
+      }
+    }
+  } catch (err) {
+    console.warn("Primary CNPJ endpoint unavailable, trying direct BrasilAPI fallback...", err);
   }
 
-  if (!response.ok) {
-    throw new Error(data.error || data.message || `Erro ao consultar CNPJ (Status: ${response.status})`);
+  // 2. Direct client-side fallback to BrasilAPI
+  try {
+    const brasilRes = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${clean}`);
+    if (brasilRes.ok) {
+      const bData = await brasilRes.json();
+      return bData;
+    }
+  } catch (bErr) {
+    console.warn("BrasilAPI direct fallback failed, trying publica.cnpj.ws...", bErr);
   }
 
-  return data;
+  // 3. Direct client-side fallback to publica.cnpj.ws
+  try {
+    const fallbackRes = await fetch(`https://publica.cnpj.ws/cnpj/${clean}`);
+    if (fallbackRes.ok) {
+      const pubData = await fallbackRes.json();
+      return pubData;
+    }
+  } catch (pubErr) {
+    console.warn("publica.cnpj.ws fallback failed:", pubErr);
+  }
+
+  throw new Error("Não foi possível consultar os dados do CNPJ. Verifique sua conexão ou se o CNPJ é válido.");
 }
 
 export function parseCnpjResponseData(data: any) {

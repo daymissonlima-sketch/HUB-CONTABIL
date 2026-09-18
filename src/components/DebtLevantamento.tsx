@@ -29,7 +29,7 @@ import {
   Check
 } from 'lucide-react';
 import { DebtItem, ClientInfo, DebtCategory, Company } from '../types_debits';
-import importedCompaniesJson from '../data/imported_companies.json';
+import { loadStoredCompanies, COMPANIES_UPDATED_EVENT } from '../utils/companyStorage';
 import { 
   parseSituationFiscalText, 
   formatCompetencia,
@@ -505,44 +505,14 @@ export function DebtLevantamento() {
   const [registeredCompanies, setRegisteredCompanies] = useState<Company[]>([]);
 
   useEffect(() => {
-    const importedList = (importedCompaniesJson as unknown) as Company[];
-    const stored = localStorage.getItem('moreira_lima_companies');
-    let mergedCompanies: Company[] = [...importedList];
+    const loadCompanies = () => {
+      const mergedCompanies = loadStoredCompanies();
+      setRegisteredCompanies(mergedCompanies);
+    };
 
-    if (stored) {
-      try {
-        const parsed = (JSON.parse(stored) as Company[]).filter(c => !c.id.startsWith('demo-'));
-        const importedMap = new Map(importedList.map(c => [(c.cnpj || '').replace(/\D/g, ''), c]));
-
-        const updatedParsed = parsed.map(pC => {
-          const cleanCnpj = (pC.cnpj || '').replace(/\D/g, '');
-          const imp = importedMap.get(cleanCnpj);
-          if (imp) {
-            return {
-              ...pC,
-              regimeTributario: imp.regimeTributario || pC.regimeTributario,
-              vendaVistaPercent: imp.vendaVistaPercent !== undefined ? imp.vendaVistaPercent : pC.vendaVistaPercent,
-              vendaPrazoPercent: imp.vendaPrazoPercent !== undefined ? imp.vendaPrazoPercent : pC.vendaPrazoPercent,
-            };
-          }
-          return pC;
-        });
-
-        const existingCnpjs = new Set(updatedParsed.map(c => (c.cnpj || '').replace(/\D/g, '')));
-        const newFromImport = importedList.filter(c => !existingCnpjs.has((c.cnpj || '').replace(/\D/g, '')));
-        mergedCompanies = [...updatedParsed, ...newFromImport];
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    // Strict filter for MODULUS and CNPJ 37.345.284
-    mergedCompanies = mergedCompanies.filter(c => {
-      const name = (c.razaoSocial || '').toUpperCase();
-      const cnpj = (c.cnpj || '').replace(/\D/g, '');
-      return !name.includes('MODULUS') && !cnpj.includes('37345284');
-    });
-    mergedCompanies.sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
-    setRegisteredCompanies(mergedCompanies);
+    loadCompanies();
+    window.addEventListener(COMPANIES_UPDATED_EVENT, loadCompanies);
+    return () => window.removeEventListener(COMPANIES_UPDATED_EVENT, loadCompanies);
   }, []);
 
   // Synchronize to localStorage

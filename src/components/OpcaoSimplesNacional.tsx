@@ -16,9 +16,9 @@ import {
   Download
 } from 'lucide-react';
 import { Company } from '../types_debits';
-import { fetchCnpjSafe, parseCnpjResponseData } from '../utils/cnpjHelper';
+import { fetchCnpjSafe, parseCnpjResponseData, isCaepf, isValidCNPJ } from '../utils/cnpjHelper';
 import { getAppLogoPath } from '../utils/logoHelper';
-import importedCompaniesJson from '../data/imported_companies.json';
+import { loadStoredCompanies, saveStoredCompanies, COMPANIES_UPDATED_EVENT } from '../utils/companyStorage';
 import * as XLSX from 'xlsx-js-style';
 
 interface BatchProgress {
@@ -64,42 +64,8 @@ export const OpcaoSimplesNacional: React.FC = () => {
   };
 
   const loadCompanies = () => {
-    try {
-      const saved = localStorage.getItem('moreira_lima_companies');
-      if (saved) {
-        const parsed: Company[] = JSON.parse(saved).filter((c: any) => {
-          const name = (c.razaoSocial || '').toUpperCase();
-          const cnpj = (c.cnpj || '').replace(/\D/g, '');
-          return !name.includes('MODULUS') && !cnpj.includes('37345284');
-        });
-        setCompanies(parsed);
-      } else {
-        const fallback: Company[] = (importedCompaniesJson as any[])
-          .filter((c: any) => {
-            const name = (c.razaoSocial || '').toUpperCase();
-            const cnpj = (c.cnpj || '').replace(/\D/g, '');
-            return !name.includes('MODULUS') && !cnpj.includes('37345284');
-          })
-          .map((item, idx) => ({
-            id: item.id || `imp_${idx}`,
-            razaoSocial: item.razaoSocial || item.razao_social || 'Empresa Importada',
-            cnpj: item.cnpj || '',
-            regimeTributario: (item.regimeTributario || 'SIMPLES_NACIONAL') as any,
-            vendaVistaPercent: item.vendaVistaPercent ?? 60,
-            vendaPrazoPercent: item.vendaPrazoPercent ?? 40,
-            createdAt: new Date().toISOString(),
-            opcaoSimples: item.opcaoSimples ?? (item.regimeTributario === 'SIMPLES_NACIONAL'),
-            dataOpcaoSimples: item.dataOpcaoSimples || '',
-            dataExclusaoSimples: item.dataExclusaoSimples || '',
-            motivoExclusaoSimples: item.motivoExclusaoSimples || (item.dataExclusaoSimples ? 'Ato Administrativo / Desenquadramento RFB' : ''),
-            opcaoMei: item.opcaoMei || false
-          }));
-        setCompanies(fallback);
-        localStorage.setItem('moreira_lima_companies', JSON.stringify(fallback));
-      }
-    } catch (e) {
-      console.error('Erro ao carregar empresas:', e);
-    }
+    const list = loadStoredCompanies();
+    setCompanies(list);
   };
 
   useEffect(() => {
@@ -108,20 +74,13 @@ export const OpcaoSimplesNacional: React.FC = () => {
     const handleStorageUpdate = () => {
       loadCompanies();
     };
-    window.addEventListener('moreira_lima_companies_updated', handleStorageUpdate);
-    return () => window.removeEventListener('moreira_lima_companies_updated', handleStorageUpdate);
+    window.addEventListener(COMPANIES_UPDATED_EVENT, handleStorageUpdate);
+    return () => window.removeEventListener(COMPANIES_UPDATED_EVENT, handleStorageUpdate);
   }, []);
 
   const saveToStorage = (list: Company[]) => {
-    const filtered = list.filter((c: any) => {
-      const name = (c.razaoSocial || '').toUpperCase();
-      const cnpj = (c.cnpj || '').replace(/\D/g, '');
-      return !name.includes('MODULUS') && !cnpj.includes('37345284');
-    });
-    const sorted = [...filtered].sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
-    setCompanies(sorted);
-    localStorage.setItem('moreira_lima_companies', JSON.stringify(sorted));
-    window.dispatchEvent(new Event('moreira_lima_companies_updated'));
+    const saved = saveStoredCompanies(list);
+    setCompanies(saved);
   };
 
   const formatCNPJ = (val: string) => {
@@ -136,7 +95,13 @@ export const OpcaoSimplesNacional: React.FC = () => {
   // Atualizar única empresa
   const handleUpdateSingle = async (company: Company) => {
     const cleanCnpj = company.cnpj.replace(/\D/g, '');
-    if (cleanCnpj.length !== 14) {
+    
+    if (isCaepf(company.cnpj)) {
+      showFeedback(`O documento ${company.cnpj} é um CAEPF / Pessoa Física (Produtor Rural). Não possui cadastro no webservice de CNPJ da Receita Federal (permanece tributação Pessoa Física / Presumido).`);
+      return;
+    }
+
+    if (cleanCnpj.length !== 14 || !isValidCNPJ(cleanCnpj)) {
       showFeedback('CNPJ inválido para consulta na API.', true);
       return;
     }
@@ -214,7 +179,14 @@ export const OpcaoSimplesNacional: React.FC = () => {
       });
 
       const cleanCnpj = company.cnpj.replace(/\D/g, '');
-      if (cleanCnpj.length === 14) {
+      if (isCaepf(company.cnpj)) {
+        // Documento CAEPF / Pessoa Física (Produtor Rural)
+        successCount++;
+        const msg = 'Pessoa Física / CAEPF (Produtor Rural) — Cadastro mantido';
+        setBatchItemsStatus(prev => prev.map(item =>
+          item.id === company.id ? { ...item, status: 'success', razaoSocial: company.razaoSocial, message: msg } : item
+        ));
+      } else if (cleanCnpj.length === 14 && isValidCNPJ(cleanCnpj)) {
         try {
           const raw = await fetchCnpjSafe(cleanCnpj);
           const parsed = parseCnpjResponseData(raw);
@@ -249,7 +221,7 @@ export const OpcaoSimplesNacional: React.FC = () => {
       } else {
         errorCount++;
         setBatchItemsStatus(prev => prev.map(item =>
-          item.id === company.id ? { ...item, status: 'error', message: 'CNPJ inválido' } : item
+          item.id === company.id ? { ...item, status: 'error', message: 'CNPJ com formato inválido' } : item
         ));
       }
 
