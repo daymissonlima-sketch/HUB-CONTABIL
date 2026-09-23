@@ -8,14 +8,13 @@ import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { NfeXmlAuditor } from './components/NfeXmlAuditor';
 import { DebtLevantamento } from './components/DebtLevantamento';
-import { ParcelamentoSimulador } from './components/ParcelamentoSimulador';
 import { FaturamentoGerador } from './components/FaturamentoGerador';
 import { ConfiguracoesGerais } from './components/ConfiguracoesGerais';
 import { AuditoriaFiscalWorkspace } from './components/AuditoriaFiscalWorkspace';
 import { Comunicados } from './components/Comunicados';
 import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
 import { ChaveSanitizer } from './components/ChaveSanitizer';
-import { FileSpreadsheet, Briefcase, Menu, Calculator, Coins, Settings, Table, FileText, ShieldCheck, Sparkles } from 'lucide-react';
+import { FileSpreadsheet, Briefcase, Menu, Coins, Settings, Table, FileText, ShieldCheck, Sparkles } from 'lucide-react';
 import { loadStoredCompanies } from './utils/companyStorage';
 
 // Synchronously ensure companies storage is reconciled with the official database
@@ -23,46 +22,9 @@ try {
   loadStoredCompanies();
 } catch (e) {}
 
-// Synchronously purge all records referencing MODULUS or CNPJ 37.345.284/0001-68
-try {
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key) {
-      const val = localStorage.getItem(key);
-      if (val) {
-        const upperVal = val.toUpperCase();
-        const hasModulus = upperVal.includes('MODULUS') || val.includes('37345284') || val.includes('37.345.284');
-        if (hasModulus) {
-          if (key === 'moreira_lima_companies') {
-            try {
-              const list = JSON.parse(val);
-              if (Array.isArray(list)) {
-                const filtered = list.filter((c: any) => {
-                  const name = (c.razaoSocial || '').toUpperCase();
-                  const cnpj = (c.cnpj || '').replace(/\D/g, '');
-                  return !name.includes('MODULUS') && !cnpj.includes('37345284');
-                });
-                localStorage.setItem('moreira_lima_companies', JSON.stringify(filtered));
-              }
-            } catch {
-              localStorage.removeItem('moreira_lima_companies');
-            }
-          } else if (key === 'debt_client_info') {
-            localStorage.removeItem('debt_client_info');
-          } else if (key === 'debt_items') {
-            localStorage.removeItem('debt_items');
-          } else {
-            localStorage.removeItem(key);
-          }
-        }
-      }
-    }
-  }
-} catch (e) {}
-
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'auditoria_fiscal' | 'xml_auditor' | 'debit_levantamento' | 'parcelamento_simulador' | 'faturamento_gerador' | 'configuracoes_gerais' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
+    'auditoria_fiscal' | 'xml_auditor' | 'debit_levantamento' | 'faturamento_gerador' | 'configuracoes_gerais' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
   >('auditoria_fiscal');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
@@ -141,7 +103,7 @@ export default function App() {
                 <span className="hidden sm:inline md:inline">Saneador de Chaves</span>
               </button>
 
-              {/* Button 3: Debt Levantamento (Existing module) */}
+              {/* Button 3: Débitos & Parcelamento (Módulo Consolidado Unificado) */}
               <button
                 onClick={() => setActiveTab('debit_levantamento')}
                 className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
@@ -149,27 +111,13 @@ export default function App() {
                     ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
                     : 'hover:bg-[#031d30] text-slate-300'
                 }`}
-                title="Levantamento de Débitos"
+                title="Módulo Unificado de Levantamento de Débitos e Simulação de Parcelamento"
               >
                 <Briefcase className="h-4.5 w-4.5 shrink-0" />
-                <span className="hidden sm:inline md:inline">Levantamento de Débitos</span>
+                <span className="hidden sm:inline md:inline">Débitos & Parcelamento</span>
               </button>
 
-              {/* Button 4: Simulação de Parcelamento (New module) */}
-              <button
-                onClick={() => setActiveTab('parcelamento_simulador')}
-                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
-                  activeTab === 'parcelamento_simulador'
-                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
-                    : 'hover:bg-[#031d30] text-slate-300'
-                }`}
-                title="Simulação de Parcelamento de Débitos"
-              >
-                <Calculator className="h-4.5 w-4.5 shrink-0" />
-                <span className="hidden sm:inline md:inline">Simular Parcelamento</span>
-              </button>
-
-              {/* Button 5: Geração de Faturamento (New module) */}
+              {/* Button 4: Geração de Faturamento (New module) */}
               <button
                 onClick={() => setActiveTab('faturamento_gerador')}
                 className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
@@ -259,8 +207,6 @@ export default function App() {
             <NfeXmlAuditor />
           ) : activeTab === 'debit_levantamento' ? (
             <DebtLevantamento />
-          ) : activeTab === 'parcelamento_simulador' ? (
-            <ParcelamentoSimulador />
           ) : activeTab === 'chave_sanitizer' ? (
             <ChaveSanitizer />
           ) : activeTab === 'comunicados' ? (

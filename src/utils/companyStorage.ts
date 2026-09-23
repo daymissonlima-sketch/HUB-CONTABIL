@@ -8,10 +8,8 @@ export function getCleanDocument(doc: string | undefined | null): string {
   return (doc || '').replace(/\D/g, '');
 }
 
-export function isBlacklistedCompany(company: { razaoSocial?: string; cnpj?: string }): boolean {
-  const name = (company.razaoSocial || '').toUpperCase();
-  const cleanDoc = getCleanDocument(company.cnpj);
-  return name.includes('MODULUS') || cleanDoc.includes('37345284');
+export function isBlacklistedCompany(_company?: { razaoSocial?: string; cnpj?: string }): boolean {
+  return false;
 }
 
 /**
@@ -97,8 +95,8 @@ export function loadStoredCompanies(): Company[] {
             ...official,
             ...storedItem,
             id: storedItem.id || official.id,
-            razaoSocial: official.razaoSocial, // Sempre garante a Razão Social oficial da planilha
-            cnpj: official.cnpj, // Sempre garante a formatação e documento oficial da planilha
+            razaoSocial: storedItem.razaoSocial || official.razaoSocial,
+            cnpj: storedItem.cnpj || official.cnpj,
             // Preserva dados enriquecidos pelo usuário ou pela API da Receita Federal
             regimeTributario: storedItem.regimeTributario || official.regimeTributario || 'SIMPLES_NACIONAL',
             vendaVistaPercent: resolvedVista,
@@ -154,14 +152,25 @@ export function loadStoredCompanies(): Company[] {
       });
 
       // Inclui empresas cadastradas manualmente que não estejam na planilha oficial
-      const officialCleanSet = new Set(importedList.map(o => getCleanDocument(o.cnpj)));
+      const officialCleanSet = new Set(importedList.map(o => getCleanDocument(o.cnpj)).filter(Boolean));
       const customCompanies = parsed.filter(p => {
+        if (!p || (!p.razaoSocial && !p.cnpj)) return false;
         const clean = getCleanDocument(p.cnpj);
-        return clean && !officialCleanSet.has(clean) && !isBlacklistedCompany(p);
+        if (clean) {
+          return !officialCleanSet.has(clean);
+        }
+        return Boolean(p.id);
       });
-      if (customCompanies.length > 0) {
-        reconciledCompanies = [...reconciledCompanies, ...customCompanies];
-      }
+
+      // Deduplica empresas customizadas por CNPJ limpo ou ID
+      const seenCustomKeys = new Set<string>();
+      customCompanies.forEach(c => {
+        const key = getCleanDocument(c.cnpj) || c.id;
+        if (key && !seenCustomKeys.has(key)) {
+          seenCustomKeys.add(key);
+          reconciledCompanies.push(c);
+        }
+      });
     } catch (e) {
       console.error('Erro ao reconciliar empresas com a base oficial:', e);
       reconciledCompanies = [...importedList];
@@ -185,7 +194,7 @@ export function loadStoredCompanies(): Company[] {
 
   // Filtragem de segurança e ordenação alfabética
   const cleanedList = reconciledCompanies
-    .filter(c => !isBlacklistedCompany(c))
+    .filter(c => c && (c.razaoSocial || c.cnpj))
     .sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
 
   // Atualiza no localStorage para garantir consistência imediata
@@ -204,17 +213,26 @@ export function loadStoredCompanies(): Company[] {
  * Salva a lista de empresas e dispara evento global de sincronização
  */
 export function saveStoredCompanies(list: Company[]): Company[] {
-  const importedList = (importedCompaniesJson as unknown) as Company[];
-  const officialMap = new Map<string, Company>();
-  importedList.forEach(c => {
-    const clean = getCleanDocument(c.cnpj);
-    if (clean) officialMap.set(clean, c);
-  });
+  // Deduplicar e filtrar empresas válidas
+  const seenDocs = new Set<string>();
+  const seenIds = new Set<string>();
+  const filtered: Company[] = [];
 
-  const filtered = list.filter(c => {
-    if (isBlacklistedCompany(c)) return false;
+  list.forEach(c => {
+    if (!c) return;
     const clean = getCleanDocument(c.cnpj);
-    return officialMap.has(clean) || (c.id && !c.id.startsWith('demo-'));
+    if (!c.razaoSocial && !c.cnpj && !clean) return;
+    if (c.id && c.id.startsWith('demo-')) return;
+
+    if (clean) {
+      if (seenDocs.has(clean)) return;
+      seenDocs.add(clean);
+    } else if (c.id) {
+      if (seenIds.has(c.id)) return;
+      seenIds.add(c.id);
+    }
+
+    filtered.push(c);
   });
 
   const sorted = [...filtered].sort((a, b) =>

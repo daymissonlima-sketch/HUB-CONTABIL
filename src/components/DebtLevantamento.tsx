@@ -28,8 +28,16 @@ import {
   Search,
   Check
 } from 'lucide-react';
-import { DebtItem, ClientInfo, DebtCategory, Company } from '../types_debits';
+import { DebtItem, ClientInfo, DebtCategory, Company, DebtSimulationLink, DebtCustomGroup } from '../types_debits';
 import { loadStoredCompanies, COMPANIES_UPDATED_EVENT } from '../utils/companyStorage';
+import { DebtList } from './DebtList';
+import { 
+  getAllLinkedSimulationsSync, 
+  saveLinkedSimulation, 
+  removeLinkedSimulation, 
+  syncSimulationsFromIDB, 
+  DEBT_SIMULATION_UPDATED_EVENT 
+} from '../services/InstallmentService';
 import { 
   parseSituationFiscalText, 
   formatCompetencia,
@@ -67,7 +75,7 @@ const INITIAL_CATEGORIES: DebtCategory[] = [
     categoryType: 'PARCELAMENTO',
     origin: 'FEDERAL',
     documentType: 'DARF',
-    title: 'PARCELAMENTOS PREVIDENCIÁRIOS',
+    title: 'PARCELAMENTO PREVIDENCIÁRIO',
     scope: 'ADMINISTRATIVO',
     code: ''
   },
@@ -76,7 +84,7 @@ const INITIAL_CATEGORIES: DebtCategory[] = [
     categoryType: 'PARCELAMENTO',
     origin: 'FEDERAL',
     documentType: 'DARF',
-    title: 'PARCELAMENTOS PREVIDENCIÁRIOS (PGFN)',
+    title: 'PARCELAMENTO PREVIDENCIÁRIO (PGFN)',
     scope: 'DIVIDA_ATIVA',
     code: ''
   },
@@ -85,7 +93,7 @@ const INITIAL_CATEGORIES: DebtCategory[] = [
     categoryType: 'PARCELAMENTO',
     origin: 'FEDERAL',
     documentType: 'DAS',
-    title: 'PARCELAMENTOS SIMPLES NACIONAL',
+    title: 'PARCELAMENTO SIMPLES NACIONAL',
     scope: 'ADMINISTRATIVO'
   },
   {
@@ -93,7 +101,7 @@ const INITIAL_CATEGORIES: DebtCategory[] = [
     categoryType: 'PARCELAMENTO',
     origin: 'FEDERAL',
     documentType: 'DAS',
-    title: 'PARCELAMENTOS SIMPLES NACIONAL (PGFN)',
+    title: 'PARCELAMENTO SIMPLES NACIONAL (PGFN)',
     scope: 'DIVIDA_ATIVA'
   },
   {
@@ -429,11 +437,6 @@ export function DebtLevantamento() {
       try {
         const parsed = JSON.parse(saved);
         if (parsed) {
-          const name = (parsed.name || '').toUpperCase();
-          const cnpj = (parsed.cnpj || '').replace(/\D/g, '');
-          if (name.includes('MODULUS') || cnpj.includes('37345284') || name.includes('EXEMPLO') || cnpj.includes('12345678')) {
-            return { cnpj: '', name: '' };
-          }
           return parsed;
         }
       } catch (e) {
@@ -452,10 +455,22 @@ export function DebtLevantamento() {
     if (saved) {
       try {
         const parsed: DebtCategory[] = JSON.parse(saved);
-        // Migration: rename old title if matching default id
+        // Migration: rename old title if matching default id or previous naming
         const updatedParsed = parsed.map(c => {
           if (c.id === 'cat-icms-pge' && c.title.includes('PGE')) {
             return { ...c, title: 'ICMS DÍVIDA ATIVA' };
+          }
+          if (c.title === 'PARCELAMENTOS SIMPLES NACIONAL') {
+            return { ...c, title: 'PARCELAMENTO SIMPLES NACIONAL' };
+          }
+          if (c.title === 'PARCELAMENTOS SIMPLES NACIONAL (PGFN)') {
+            return { ...c, title: 'PARCELAMENTO SIMPLES NACIONAL (PGFN)' };
+          }
+          if (c.title === 'PARCELAMENTOS PREVIDENCIÁRIOS') {
+            return { ...c, title: 'PARCELAMENTO PREVIDENCIÁRIO' };
+          }
+          if (c.title === 'PARCELAMENTOS PREVIDENCIÁRIOS (PGFN)') {
+            return { ...c, title: 'PARCELAMENTO PREVIDENCIÁRIO (PGFN)' };
           }
           return c;
         });
@@ -494,7 +509,16 @@ export function DebtLevantamento() {
     const saved = localStorage.getItem('debt_items');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed: DebtItem[] = JSON.parse(saved);
+        const migrated = parsed.map(d => {
+          if (d.category === 'PARCELAMENTOS SIMPLES NACIONAL') return { ...d, category: 'PARCELAMENTO SIMPLES NACIONAL' };
+          if (d.category === 'PARCELAMENTOS SIMPLES NACIONAL (PGFN)') return { ...d, category: 'PARCELAMENTO SIMPLES NACIONAL (PGFN)' };
+          if (d.category === 'PARCELAMENTOS PREVIDENCIÁRIOS') return { ...d, category: 'PARCELAMENTO PREVIDENCIÁRIO' };
+          if (d.category === 'PARCELAMENTOS PREVIDENCIÁRIOS (PGFN)') return { ...d, category: 'PARCELAMENTO PREVIDENCIÁRIO (PGFN)' };
+          return d;
+        });
+        localStorage.setItem('debt_items', JSON.stringify(migrated));
+        return migrated;
       } catch (e) {
         console.error(e);
       }
@@ -503,6 +527,86 @@ export function DebtLevantamento() {
   });
 
   const [registeredCompanies, setRegisteredCompanies] = useState<Company[]>([]);
+
+  // Linked Simulations state for unified debts & installment proposals (100% Client-Side)
+  const [linkedSimulations, setLinkedSimulations] = useState<Record<string, DebtSimulationLink>>(() => {
+    return getAllLinkedSimulationsSync(clientInfo.cnpj);
+  });
+
+  useEffect(() => {
+    const refreshSims = () => {
+      setLinkedSimulations(getAllLinkedSimulationsSync(clientInfo.cnpj));
+    };
+    refreshSims();
+    syncSimulationsFromIDB(clientInfo.cnpj).then(sims => setLinkedSimulations(sims));
+
+    window.addEventListener(DEBT_SIMULATION_UPDATED_EVENT, refreshSims);
+    return () => window.removeEventListener(DEBT_SIMULATION_UPDATED_EVENT, refreshSims);
+  }, [clientInfo.cnpj]);
+
+  const handleSaveSimulation = async (sim: DebtSimulationLink) => {
+    await saveLinkedSimulation(sim, clientInfo.cnpj);
+    setLinkedSimulations(getAllLinkedSimulationsSync(clientInfo.cnpj));
+  };
+
+  const handleDeleteSimulation = async (targetId: string) => {
+    await removeLinkedSimulation(targetId, clientInfo.cnpj);
+    setLinkedSimulations(getAllLinkedSimulationsSync(clientInfo.cnpj));
+  };
+
+  // Custom debt grouping state for unified visualization and single consolidated simulations
+  const [customGroups, setCustomGroups] = useState<DebtCustomGroup[]>(() => {
+    const cleanCnpj = clientInfo.cnpj.replace(/\D/g, '') || 'default';
+    const saved = localStorage.getItem(`debt_custom_groups_${cleanCnpj}`);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    const cleanCnpj = clientInfo.cnpj.replace(/\D/g, '') || 'default';
+    const saved = localStorage.getItem(`debt_custom_groups_${cleanCnpj}`);
+    if (saved) {
+      try {
+        setCustomGroups(JSON.parse(saved));
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      setCustomGroups([]);
+    }
+  }, [clientInfo.cnpj]);
+
+  const handleSaveCustomGroup = (group: DebtCustomGroup) => {
+    setCustomGroups(prev => {
+      const idx = prev.findIndex(g => g.id === group.id);
+      let next: DebtCustomGroup[];
+      if (idx >= 0) {
+        next = [...prev];
+        next[idx] = group;
+      } else {
+        next = [...prev, group];
+      }
+      const cleanCnpj = clientInfo.cnpj.replace(/\D/g, '') || 'default';
+      localStorage.setItem(`debt_custom_groups_${cleanCnpj}`, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const handleDeleteCustomGroup = (groupId: string) => {
+    setCustomGroups(prev => {
+      const next = prev.filter(g => g.id !== groupId);
+      const cleanCnpj = clientInfo.cnpj.replace(/\D/g, '') || 'default';
+      localStorage.setItem(`debt_custom_groups_${cleanCnpj}`, JSON.stringify(next));
+      return next;
+    });
+    handleDeleteSimulation(`custom_group:${groupId}`);
+  };
 
   useEffect(() => {
     const loadCompanies = () => {
@@ -518,16 +622,6 @@ export function DebtLevantamento() {
   // Synchronize to localStorage
   useEffect(() => {
     localStorage.setItem('debt_client_info', JSON.stringify(clientInfo));
-  }, [clientInfo]);
-
-  useEffect(() => {
-    if (clientInfo && clientInfo.name) {
-      const name = clientInfo.name.toUpperCase();
-      const cnpj = (clientInfo.cnpj || '').replace(/\D/g, '');
-      if (name.includes('MODULUS') || cnpj.includes('37345284')) {
-        setClientInfo({ cnpj: '', name: '' });
-      }
-    }
   }, [clientInfo]);
 
   useEffect(() => {
@@ -576,16 +670,6 @@ export function DebtLevantamento() {
   // States for interactive data preview & review
   const [tempParsedDebts, setTempParsedDebts] = useState<any[]>([]);
   const [tempClientInfo, setTempClientInfo] = useState<{ cnpj: string; name: string }>({ cnpj: '', name: '' });
-
-  useEffect(() => {
-    if (tempClientInfo && tempClientInfo.name) {
-      const name = tempClientInfo.name.toUpperCase();
-      const cnpj = (tempClientInfo.cnpj || '').replace(/\D/g, '');
-      if (name.includes('MODULUS') || cnpj.includes('37345284') || name.includes('EXEMPLO') || cnpj.includes('12345678')) {
-        setTempClientInfo({ cnpj: '', name: '' });
-      }
-    }
-  }, [tempClientInfo]);
 
   useEffect(() => {
     if (tempClientInfo && tempClientInfo.name) {
@@ -1480,20 +1564,9 @@ export function DebtLevantamento() {
 
     const sortedDebts = sortDebtsByCompetencia<DebtItem>(debts).sort((a, b) => getCategorySortOrder(a.category) - getCategorySortOrder(b.category));
 
-    exportDebtsToPDF(clientInfo, sortedDebts, sortedCategoryTitles);
+    exportDebtsToPDF(clientInfo, sortedDebts, sortedCategoryTitles, linkedSimulations, customGroups);
   };
 
-  // Calculations for consolidated highlights
-  const filteredDebts = debts.filter(d => {
-    if (originFilter === 'TODOS') return true;
-    const cat = getCategoryByTitle(d.category);
-    return cat.origin === originFilter;
-  });
-
-  const totalPrincipal = filteredDebts.reduce((sum, item) => sum + item.principal, 0);
-  const totalPenalty = filteredDebts.reduce((sum, item) => sum + item.penalty, 0);
-  const totalInterest = filteredDebts.reduce((sum, item) => sum + item.interest, 0);
-  const grandTotal = filteredDebts.reduce((sum, item) => sum + item.total, 0);
 
   return (
     <div 
@@ -1576,7 +1649,7 @@ export function DebtLevantamento() {
                 return scoring[organ] || 99;
               };
               const sortedDebts = sortDebtsByCompetencia<DebtItem>(debts).sort((a, b) => getCategorySortOrder(a.category) - getCategorySortOrder(b.category));
-              exportDebtsToExcel(clientInfo, sortedDebts);
+              exportDebtsToExcel(clientInfo, sortedDebts, linkedSimulations, customGroups);
             }}
             disabled={debts.length === 0}
             className={`flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-sky-900 hover:bg-sky-950 border border-[#e4b35e]/30 text-white rounded-xl text-[11px] sm:text-xs font-bold transition-all duration-200 shadow-sm cursor-pointer w-full ${debts.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -1617,40 +1690,6 @@ export function DebtLevantamento() {
         </div>
       )}
 
-      {/* Dashboard KPI Summary Widgets */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 animate-fadeIn">
-        
-        {/* Widget 1: Original */}
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-              Valor Original
-            </span>
-            <span className="block text-sm sm:text-base font-bold text-slate-800 mt-1">
-              {formatBrl(totalPrincipal)}
-            </span>
-          </div>
-          <div className="p-2.5 bg-slate-50 rounded-xl text-slate-500">
-            <FileText className="h-5 w-5" />
-          </div>
-        </div>
-
-        {/* Widget 2: Total Atualizado */}
-        <div className="bg-[#04243b] p-4 rounded-2xl border border-[#e4b35e]/35 shadow-md flex items-center justify-between">
-          <div>
-            <span className="block text-[10px] font-bold text-[#e4b35e]/80 uppercase tracking-wider">
-              Valor Atualizado
-            </span>
-            <span className="block text-sm sm:text-base font-black text-white mt-1">
-              {formatBrl(grandTotal)}
-            </span>
-          </div>
-          <div className="p-2 bg-[#04243b] border border-[#e4b35e]/40 rounded-xl text-[#e4b35e]">
-            <CheckCircle className="h-5 w-5" />
-          </div>
-        </div>
-
-      </div>
 
       {/* Contribuinte under audit block */}
       <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
@@ -1752,237 +1791,32 @@ export function DebtLevantamento() {
         </div>
       </div>
 
-      {/* DETALHAMENTO DE DÉBITOS SEPARADOS POR ÂMBITOS */}
-      <div className="flex flex-col gap-8 items-stretch">
-        {(() => {
-          const SCOPES_CONFIG = [
-            {
-              id: 'FEDERAL' as const,
-              title: 'Âmbito Federal',
-              description: 'Tributos e parcelamentos sob a competência da União',
-              headerBg: 'bg-[#04243b] border-b-2 border-[#e4b35e]',
-              icon: Layers,
-              organBadgeClass: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
-              organs: [
-                { id: 'RFB', title: 'Receita Federal do Brasil (RFB)', scope: 'ADMINISTRATIVO' as const },
-                { id: 'PGFN', title: 'Procuradoria-Geral da Fazenda Nacional (PGFN)', scope: 'DIVIDA_ATIVA' as const }
-              ]
-            },
-            {
-              id: 'ESTADUAL' as const,
-              title: 'Âmbito Estadual',
-              description: 'Tributos e parcelamentos sob a competência do Estado',
-              headerBg: 'bg-slate-800 border-b-2 border-amber-500',
-              icon: Briefcase,
-              organBadgeClass: 'bg-blue-50 text-blue-700 border border-blue-200',
-              organs: [
-                { id: 'SEFAZ', title: 'Secretaria de Estado da Fazenda (SEFAZ)', scope: 'ADMINISTRATIVO' as const },
-                { id: 'PGE', title: 'Procuradoria-Geral do Estado (PGE)', scope: 'DIVIDA_ATIVA' as const }
-              ]
-            },
-            {
-              id: 'MUNICIPAL' as const,
-              title: 'Âmbito Municipal',
-              description: 'Tributos e parcelamentos sob a competência do Município',
-              headerBg: 'bg-zinc-800 border-b-2 border-indigo-500',
-              icon: FolderSync,
-              organBadgeClass: 'bg-purple-50 text-purple-700 border border-purple-200',
-              organs: [
-                { id: 'SEFIN', title: 'Secretaria Municipal de Finanças (SEFIN)', scope: 'ADMINISTRATIVO' as const },
-                { id: 'PGM', title: 'Procuradoria-Geral do Município (PGM)', scope: 'DIVIDA_ATIVA' as const }
-              ]
-            }
-          ];
+      {/* LISTAGEM MODULAR DE DÉBITOS COM SIMULAÇÃO INTEGRADA (DebtList) */}
+      <DebtList
+        debts={debts}
+        categories={categories}
+        company={registeredCompanies.find(c => c.cnpj === clientInfo.cnpj) || null}
+        originFilter={originFilter}
+        searchQuery=""
+        onAddDebt={(categoryTitle) => {
+          setFormCategoryTitle(categoryTitle);
+          setIsAddingDebt(true);
+          setEditingDebtId(null);
+        }}
+        onEditDebt={(debt) => {
+          startEditDebt(debt);
+        }}
+        onDeleteDebt={(debtId) => {
+          handleDeleteDebt(debtId);
+        }}
+        linkedSimulations={linkedSimulations}
+        onSaveSimulation={handleSaveSimulation}
+        onDeleteSimulation={handleDeleteSimulation}
+        customGroups={customGroups}
+        onSaveCustomGroup={handleSaveCustomGroup}
+        onDeleteCustomGroup={handleDeleteCustomGroup}
+      />
 
-          const scopesToRender = SCOPES_CONFIG.filter(
-            scope => originFilter === 'TODOS' || originFilter === scope.id
-          );
-
-          return scopesToRender.map(scope => {
-            const scopeDebts = filteredDebts.filter(d => {
-              const cat = getCategoryByTitle(d.category);
-              return cat.origin === scope.id;
-            });
-
-            const totalScope = scopeDebts.reduce((sum, item) => sum + item.total, 0);
-
-            return (
-              <div key={scope.id} className="space-y-4">
-                {/* Scope Header Banner */}
-                <div className={`p-4 rounded-2xl text-white shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${scope.headerBg}`}>
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-white/10 rounded-xl">
-                      <scope.icon className="h-5 w-5 text-[#e4b35e]" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm sm:text-base font-black uppercase tracking-wider">
-                        {scope.title}
-                      </h3>
-                      <p className="text-[10px] text-slate-300 font-medium leading-tight">
-                        {scope.description}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 self-stretch sm:self-auto justify-between sm:justify-start">
-                    <span className="text-[10px] font-mono font-bold px-2 py-1 bg-white/10 rounded">
-                      {scopeDebts.length} débito(s)
-                    </span>
-                    <span className="text-xs font-black text-[#e4b35e] bg-slate-950/40 border border-[#e4b35e]/30 px-3 py-1 rounded-xl font-mono">
-                      {formatBrl(totalScope)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Empty state or Organs list */}
-                {scopeDebts.length === 0 ? (
-                  <div className="bg-white border border-dashed border-slate-200 rounded-2xl p-6 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-1 shadow-sm">
-                    <CheckCircle className="h-8 w-8 text-emerald-500 mb-1" />
-                    <span className="font-bold text-slate-700 text-xs">Situação Regularizada</span>
-                    <span className="text-[10px] text-slate-400">Nenhum débito em aberto cadastrado no {scope.title.toLowerCase()}.</span>
-                  </div>
-                ) : (
-                  <div className="space-y-6">
-                    {scope.organs.map(organ => {
-                      const organDebts = scopeDebts.filter(d => {
-                        const cat = getCategoryByTitle(d.category);
-                        return getAdministrationOrgan(cat.origin, cat.scope) === organ.id;
-                      });
-
-                      if (organDebts.length === 0) return null;
-
-                      const organTotal = organDebts.reduce((sum, item) => sum + item.total, 0);
-                      const organCategories = Array.from(new Set(organDebts.map(d => d.category))) as string[];
-
-                      return (
-                        <div key={organ.id} className="space-y-3.5 pl-2 sm:pl-3 border-l-2 border-slate-200">
-                          {/* Organ ribbon */}
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 bg-slate-50 border border-slate-150 p-2 rounded-xl">
-                            <div className="flex items-center space-x-2">
-                              <span className={`px-2 py-0.5 ${scope.organBadgeClass} rounded-md text-[10px] font-black tracking-wider`}>
-                                {organ.id}
-                              </span>
-                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">
-                                {organ.title}
-                              </span>
-                            </div>
-                            <span className="text-[11px] font-bold text-slate-500 font-mono self-start sm:self-auto pl-1 sm:pl-0">
-                              Total {organ.id}: <span className="text-[#04243b] font-black">{formatBrl(organTotal)}</span>
-                            </span>
-                          </div>
-
-                          {/* Categories Grid (2 columns to prevent stretching on wide screens) */}
-                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                            {organCategories.map(categoryTitle => {
-                              const categoryDebts = sortDebtsByCompetencia<DebtItem>(organDebts.filter(d => d.category === categoryTitle));
-                              const catInfo = getCategoryByTitle(categoryTitle);
-
-                              const catPrincipal = categoryDebts.reduce((sum, item) => sum + item.principal, 0);
-                              const catTotal = categoryDebts.reduce((sum, item) => sum + item.total, 0);
-
-                              return (
-                                <div key={categoryTitle} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden animate-fadeIn flex flex-col justify-between">
-                                  <div>
-                                    {/* Header Ribbon */}
-                                    <div className="bg-slate-50/75 border-b border-slate-150 px-3.5 py-2.5 flex items-center justify-between gap-2">
-                                      <div className="min-w-0 flex-1">
-                                        <span className="text-[11px] font-black text-[#04243b] tracking-wider uppercase block truncate">
-                                          {categoryTitle}
-                                        </span>
-                                        <span className="text-[9px] text-slate-400 font-medium">
-                                          Tipo: {catInfo.documentType} • {catInfo.categoryType} {catInfo.code ? `• Cód. ${catInfo.code}` : ''}
-                                        </span>
-                                      </div>
-                                      <div className="flex items-center gap-1.5 shrink-0">
-                                        <button
-                                          onClick={() => {
-                                            setEditingDebtId(null);
-                                            setFormCategoryTitle(categoryTitle);
-                                            setFormPeriod('');
-                                            setFormPrincipal('');
-                                            setFormTotal('');
-                                            setFormStatus('DEVEDOR');
-                                            setIsAddingDebt(true);
-                                          }}
-                                          className="px-2 py-1 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] hover:text-white border border-[#e4b35e]/30 rounded-md text-[9px] font-extrabold uppercase transition-all flex items-center gap-1 cursor-pointer"
-                                          title={`Lançar novo débito de ${categoryTitle}`}
-                                        >
-                                          <Plus className="h-2.5 w-2.5" />
-                                          <span>Lançar</span>
-                                        </button>
-                                        <span className="text-[10px] font-bold text-[#e4b35e] bg-[#04243b] border border-[#e4b35e]/30 px-2 py-0.5 rounded font-mono shrink-0">
-                                          {formatBrl(catTotal)}
-                                        </span>
-                                      </div>
-                                    </div>
-
-                                    {/* Table */}
-                                    <div className="overflow-x-auto">
-                                      <table className="w-full text-left text-xs table-fixed">
-                                        <colgroup>
-                                          <col className="w-[30%]" />
-                                          <col className="w-[30%]" />
-                                          <col className="w-[30%]" />
-                                          <col className="w-[10%]" />
-                                        </colgroup>
-                                        <thead>
-                                          <tr className="bg-slate-50/20 border-b border-slate-100 text-[9px] font-bold text-slate-400 uppercase tracking-wider">
-                                            <th className="p-2 pl-3">Competência</th>
-                                            <th className="p-2">Original</th>
-                                            <th className="p-2 text-right pr-3">Atualizado</th>
-                                            <th className="p-2 text-center">Ações</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100 font-medium text-slate-600 text-[11px]">
-                                          {categoryDebts.map(debt => (
-                                            <tr key={debt.id} className="hover:bg-slate-50/30 transition-colors">
-                                              <td className="p-2 pl-3 text-slate-800 font-bold">{debt.period}</td>
-                                              <td className="p-2 text-slate-500 font-semibold">{formatBrl(debt.principal)}</td>
-                                              <td className="p-2 text-slate-800 font-black text-right pr-3">{formatBrl(debt.total)}</td>
-                                              <td className="p-2 flex items-center justify-center gap-0.5">
-                                                <button
-                                                  onClick={() => startEditDebt(debt)}
-                                                  className="p-1 hover:bg-slate-100 text-slate-400 hover:text-slate-600 rounded transition-all"
-                                                  title="Editar débito"
-                                                >
-                                                  <Edit2 className="h-3 w-3" />
-                                                </button>
-                                                <button
-                                                  onClick={() => handleDeleteDebt(debt.id)}
-                                                  className="p-1 hover:bg-red-50 text-red-500 hover:text-red-700 rounded transition-all"
-                                                  title="Remover débito"
-                                                >
-                                                  <Trash2 className="h-3 w-3" />
-                                                </button>
-                                              </td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </div>
-
-                                  {/* Footer */}
-                                  <div className="bg-slate-50/35 border-t border-slate-150 px-3 py-2 font-bold text-[#04243b] text-[10px] flex items-center justify-between">
-                                    <span>Subtotal</span>
-                                    <div className="flex items-center space-x-3">
-                                      <span className="font-normal text-slate-500">{formatBrl(catPrincipal)}</span>
-                                      <span className="text-[#e4b35e] font-black text-[11px]">{formatBrl(catTotal)}</span>
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          });
-        })()}
-      </div>
 
                      {/* MODAL 1: SYSTEM SETTINGS TABLE MODAL ("CONFIGURAÇÕES") */}
       {isSettingsOpen && (() => {

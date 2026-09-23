@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Upload, 
@@ -35,7 +35,7 @@ import {
 import { Logo } from './Logo';
 import { setAppLogoPath, resetAppLogoPath, getAppLogoScale, setAppLogoScale } from '../utils/logoHelper';
 import { Company, Accountant } from '../types_debits';
-import { loadStoredCompanies, saveStoredCompanies, updateCompanyFaturamentoPercent, COMPANIES_UPDATED_EVENT } from '../utils/companyStorage';
+import { loadStoredCompanies, saveStoredCompanies, updateCompanyFaturamentoPercent, COMPANIES_UPDATED_EVENT, getCleanDocument } from '../utils/companyStorage';
 import { fetchCnpjSafe, parseCnpjResponseData, isCaepf, isValidCNPJ } from '../utils/cnpjHelper';
 
 interface BatchUpdateItemStatus {
@@ -177,6 +177,28 @@ export function ConfiguracoesGerais() {
       window.removeEventListener(COMPANIES_UPDATED_EVENT, loadCompanies);
     };
   }, []);
+
+  const filteredCompanies = useMemo(() => {
+    const q = companySearchQuery.trim();
+    if (!q) return companies;
+    const normQ = q.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    const cleanQ = q.replace(/\D/g, '');
+
+    return companies.filter(c => {
+      const normRazao = (c.razaoSocial || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+      const normFantasia = ((c as any).nomeFantasia || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+      const cleanCnpj = getCleanDocument(c.cnpj);
+      const normCidade = ((c.cidade || '') + ' ' + (c.municipio || '')).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+
+      return (
+        normRazao.includes(normQ) ||
+        normFantasia.includes(normQ) ||
+        (c.cnpj && c.cnpj.includes(q)) ||
+        (cleanQ.length > 0 && cleanCnpj.includes(cleanQ)) ||
+        normCidade.includes(normQ)
+      );
+    });
+  }, [companies, companySearchQuery]);
 
   const showNotification = (msg: string, isError = false) => {
     if (isError) {
@@ -454,8 +476,13 @@ export function ConfiguracoesGerais() {
     const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 10 : Number(newCompany.vendaVistaPercent)));
     const safePrazo = 100 - safeVista;
 
+    const cleanCnpj = getCleanDocument(newCompany.cnpj);
+    const formattedCnpj = cleanCnpj.length === 14 ? formatCNPJ(cleanCnpj) : newCompany.cnpj.trim();
+
     const companyToSave = {
       ...newCompany,
+      razaoSocial: newCompany.razaoSocial.trim(),
+      cnpj: formattedCnpj,
       vendaVistaPercent: safeVista,
       vendaPrazoPercent: safePrazo
     };
@@ -463,24 +490,36 @@ export function ConfiguracoesGerais() {
     let updated: Company[];
     if (editingCompanyId) {
       updated = companies.map(c => c.id === editingCompanyId ? {
+        ...c,
         ...companyToSave,
         id: c.id,
-        createdAt: c.createdAt
+        createdAt: c.createdAt || new Date().toISOString()
       } as Company : c);
       setEditingCompanyId(null);
     } else {
-      const companyToAdd: Company = {
-        ...companyToSave,
-        id: 'comp_' + Date.now(),
-        createdAt: new Date().toISOString()
-      };
-      updated = [companyToAdd, ...companies];
+      const existingIdx = cleanCnpj ? companies.findIndex(c => getCleanDocument(c.cnpj) === cleanCnpj) : -1;
+      if (existingIdx >= 0) {
+        const existing = companies[existingIdx];
+        updated = companies.map((c, idx) => idx === existingIdx ? {
+          ...c,
+          ...companyToSave,
+          id: existing.id,
+          createdAt: existing.createdAt || new Date().toISOString()
+        } as Company : c);
+      } else {
+        const companyToAdd: Company = {
+          ...companyToSave,
+          id: 'comp_' + Date.now(),
+          createdAt: new Date().toISOString()
+        };
+        updated = [companyToAdd, ...companies];
+      }
     }
 
     saveCompaniesToStorage(updated);
     setNewCompany({ ...DEFAULT_NEW_COMPANY });
     setCompanyScreen('list');
-    showNotification('Empresa salva com sucesso!');
+    showNotification('Empresa salva com sucesso no cadastro central!');
   };
 
   const handleDeleteCompany = (id: string, e: React.MouseEvent) => {
@@ -760,22 +799,14 @@ export function ConfiguracoesGerais() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
-                    {companies.filter(c => {
-                      const q = companySearchQuery.toUpperCase().trim();
-                      if (!q) return true;
-                      return c.razaoSocial.toUpperCase().includes(q) || c.cnpj.includes(q);
-                    }).length === 0 ? (
+                    {filteredCompanies.length === 0 ? (
                       <tr>
                         <td colSpan={4} className="px-5 py-10 text-center text-slate-400 italic">
                           Nenhuma empresa encontrada na busca.
                         </td>
                       </tr>
                     ) : (
-                      companies.filter(c => {
-                        const q = companySearchQuery.toUpperCase().trim();
-                        if (!q) return true;
-                        return c.razaoSocial.toUpperCase().includes(q) || c.cnpj.includes(q);
-                      }).map((company) => (
+                      filteredCompanies.map((company) => (
                         <tr key={company.id} className="hover:bg-slate-50/70 transition-colors">
                           <td className="px-5 py-3.5">
                             <div className="font-bold text-slate-800">{company.razaoSocial}</div>
@@ -914,7 +945,15 @@ export function ConfiguracoesGerais() {
                         <input
                           type="text"
                           value={newCompany.cnpj}
-                          onChange={(e) => setNewCompany(prev => ({ ...prev, cnpj: e.target.value }))}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const clean = val.replace(/\D/g, "");
+                            if (clean.length <= 14 && !isCaepf(val)) {
+                              setNewCompany(prev => ({ ...prev, cnpj: formatCNPJ(clean) }));
+                            } else {
+                              setNewCompany(prev => ({ ...prev, cnpj: val }));
+                            }
+                          }}
                           className="flex-1 bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-[#04243b]/30"
                           placeholder="00.000.000/0001-00"
                           required

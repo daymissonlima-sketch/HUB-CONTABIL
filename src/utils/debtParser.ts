@@ -411,9 +411,9 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
     if (line.includes('MEI - EM PARCELAMENTO')) {
       currentParcelCategory = 'PARCELAMENTO MEI';
     } else if (line.includes('SIMPLES NACIONAL - EM PARCELAMENTO')) {
-      currentParcelCategory = 'PARCELAMENTOS SIMPLES NACIONAL';
+      currentParcelCategory = 'PARCELAMENTO SIMPLES NACIONAL';
     } else if (line.includes('PREVIDENCIÁRIO') && line.includes('PARCELAMENTO')) {
-      currentParcelCategory = 'PARCELAMENTOS PREVIDENCIÁRIOS';
+      currentParcelCategory = 'PARCELAMENTO PREVIDENCIÁRIO';
     }
 
     // C) SIEF status on a secondary line: e.g. "Situação: A ANALISAR-A VENCER"
@@ -443,7 +443,7 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
       if (matchedCat) {
         category = matchedCat.title;
       } else if (uCategory.includes('CP-SEGUR') || uCategory.includes('INSS') || uCategory.includes('PREV')) {
-        category = 'PARCELAMENTOS PREVIDENCIÁRIOS';
+        category = 'PARCELAMENTO PREVIDENCIÁRIO';
       } else if (uCategory.includes('SIMPLES NACIONAL') || uCategory.includes('PGDAS')) {
         category = 'DAS SIMPLES NACIONAL';
       } else if (uCategory.includes('FECOP')) {
@@ -502,7 +502,7 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
       } else if (category.includes('PGDAS') || category.includes('SIMPLES NACIONAL')) {
         category = 'DAS SIMPLES NACIONAL';
       } else if (category.includes('DCTFWEB') || category.includes('SEGUR') || category.includes('INSS')) {
-        category = 'PARCELAMENTOS PREVIDENCIÁRIOS';
+        category = 'PARCELAMENTO PREVIDENCIÁRIO';
       }
 
       debts.push({
@@ -558,7 +558,7 @@ export function parseSituationFiscalText(text: string, categories?: DebtCategory
         const totalValue = parseBrFloat(valMatch[1]);
         const count = atrasoMatch ? parseInt(atrasoMatch[1], 10) : 1;
         
-        let category = currentParcelCategory || 'PARCELAMENTOS PREVIDENCIÁRIOS';
+        let category = currentParcelCategory || 'PARCELAMENTO PREVIDENCIÁRIO';
         debts.push({
           id: Math.random().toString(36).substr(2, 9),
           category,

@@ -24,7 +24,7 @@ import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import { Company, FaturamentoItem } from '../types_debits';
-import { loadStoredCompanies, saveStoredCompanies, COMPANIES_UPDATED_EVENT } from '../utils/companyStorage';
+import { loadStoredCompanies, saveStoredCompanies, COMPANIES_UPDATED_EVENT, getCleanDocument } from '../utils/companyStorage';
 import { convertPdfToCsvString } from '../utils/pdfToCsv';
 import { extractTextFromPdf } from '../utils/pdfExtractor';
 import { fetchCnpjSafe, parseCnpjResponseData, isCaepf, isValidCNPJ } from '../utils/cnpjHelper';
@@ -829,26 +829,46 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 10 : Number(newCompany.vendaVistaPercent)));
     const safePrazo = 100 - safeVista;
 
+    const cleanCnpj = getCleanDocument(newCompany.cnpj);
+    const formattedCnpj = cleanCnpj.length === 14 ? formatCNPJ(cleanCnpj) : newCompany.cnpj.trim();
+
+    const companyToSave = {
+      ...newCompany,
+      razaoSocial: newCompany.razaoSocial.trim(),
+      cnpj: formattedCnpj,
+      vendaVistaPercent: safeVista,
+      vendaPrazoPercent: safePrazo
+    };
+
     let updated: Company[];
     if (editingCompanyId) {
       updated = companies.map(c => c.id === editingCompanyId ? {
-        ...newCompany,
-        vendaVistaPercent: safeVista,
-        vendaPrazoPercent: safePrazo,
+        ...c,
+        ...companyToSave,
         id: c.id,
-        createdAt: c.createdAt
+        createdAt: c.createdAt || new Date().toISOString()
       } as Company : c);
       setEditingCompanyId(null);
     } else {
-      const companyToAdd: Company = {
-        ...newCompany,
-        vendaVistaPercent: safeVista,
-        vendaPrazoPercent: safePrazo,
-        id: 'comp_' + Date.now(),
-        createdAt: new Date().toISOString()
-      };
-      updated = [companyToAdd, ...companies];
-      setSelectedCompanyId(companyToAdd.id);
+      const existingIdx = cleanCnpj ? companies.findIndex(c => getCleanDocument(c.cnpj) === cleanCnpj) : -1;
+      if (existingIdx >= 0) {
+        const existing = companies[existingIdx];
+        updated = companies.map((c, idx) => idx === existingIdx ? {
+          ...c,
+          ...companyToSave,
+          id: existing.id,
+          createdAt: existing.createdAt || new Date().toISOString()
+        } as Company : c);
+        setSelectedCompanyId(existing.id);
+      } else {
+        const companyToAdd: Company = {
+          ...companyToSave,
+          id: 'comp_' + Date.now(),
+          createdAt: new Date().toISOString()
+        };
+        updated = [companyToAdd, ...companies];
+        setSelectedCompanyId(companyToAdd.id);
+      }
     }
 
     saveCompanies(updated);

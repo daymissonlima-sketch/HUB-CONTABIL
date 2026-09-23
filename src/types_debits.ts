@@ -136,4 +136,42 @@ export interface Accountant {
   crc: string;
 }
 
+export interface DebtSimulationLink {
+  id: string;
+  targetId: string; // debt.id or category title or 'TOTAL_CONSOLIDADO' or custom_group:id
+  targetType: 'DEBT_ITEM' | 'CATEGORY_GROUP' | 'TOTAL_CONSOLIDADO';
+  debtPeriod?: string;
+  debtCategory?: string;
+  totalDebt: number;
+  downPayment: number;
+  isDownPaymentInstallment?: boolean;
+  downPaymentInstallmentsCount?: number;
+  downPaymentInstallmentValue?: number;
+  installmentsCount: number;
+  installmentValue?: number;
+  interestRate?: number; // % monthly (e.g. 1% or SELIC)
+  penaltyRate?: number;
+  firstDueDate?: string;
+  parcelamentoType: string;
+  // Computed values
+  totalPaid: number;
+  avgInstallment: number;
+  totalDown: number;
+  financedAmount: number;
+  isViable: boolean;
+  viabilityReason?: string;
+  savedAt: string;
+}
+
+export interface DebtCustomGroup {
+  id: string;
+  name: string;
+  categories: string[];
+  debtIds?: string[];
+  origin?: 'FEDERAL' | 'ESTADUAL' | 'MUNICIPAL';
+  organId?: string;
+  color?: string;
+  createdAt: string;
+}
+
 
