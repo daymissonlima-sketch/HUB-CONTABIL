@@ -250,7 +250,11 @@ export const parseFaturamentoFromCsv = (csvContent: string, company: Company): F
       lowerLine.includes('competência') ||
       lowerLine.includes('faturamento bruto') ||
       lowerLine.includes('vendas a vista') ||
+      lowerLine.includes('vendas à vista') ||
       lowerLine.includes('vendas a prazo') ||
+      lowerLine.includes('a vista') ||
+      lowerLine.includes('à vista') ||
+      lowerLine.includes('a prazo') ||
       lowerLine.includes('m e s') ||
       lowerLine.includes('m ê s') ||
       lowerLine.includes('totais') ||
@@ -455,7 +459,11 @@ export const parseFaturamentoFromPdfDirect = (pdfContent: string, company: Compa
       lowerLine.includes('competência') ||
       lowerLine.includes('faturamento bruto') ||
       lowerLine.includes('vendas a vista') ||
+      lowerLine.includes('vendas à vista') ||
       lowerLine.includes('vendas a prazo') ||
+      lowerLine.includes('a vista') ||
+      lowerLine.includes('à vista') ||
+      lowerLine.includes('a prazo') ||
       lowerLine.includes('m e s') ||
       lowerLine.includes('m ê s') ||
       lowerLine.includes('totais') ||

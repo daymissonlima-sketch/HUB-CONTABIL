@@ -793,7 +793,7 @@ export function ConfiguracoesGerais() {
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
                       <th className="px-5 py-3">Razão Social / CNPJ</th>
-                      <th className="px-5 py-3">Divisão de Vendas</th>
+                      <th className="px-5 py-3">Divisão de Faturamento</th>
                       <th className="px-5 py-3">Regime Tributário</th>
                       <th className="px-5 py-3 text-right">Ações</th>
                     </tr>
@@ -985,7 +985,7 @@ export function ConfiguracoesGerais() {
                     </div>
 
                     <div className="space-y-1">
-                      <label className="text-xs font-bold text-slate-700">Vendas à Vista (%)</label>
+                      <label className="text-xs font-bold text-slate-700">À vista (%)</label>
                       <div className="relative">
                         <input
                           type="number"
@@ -1002,7 +1002,7 @@ export function ConfiguracoesGerais() {
                     </div>
 
                     <div className="space-y-1">
-                      <label className="text-xs font-bold text-slate-700">Vendas a Prazo (%)</label>
+                      <label className="text-xs font-bold text-slate-700">A prazo (%)</label>
                       <div className="relative">
                         <input
                           type="number"

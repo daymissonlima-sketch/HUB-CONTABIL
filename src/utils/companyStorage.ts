@@ -14,16 +14,18 @@ export function isBlacklistedCompany(_company?: { razaoSocial?: string; cnpj?: s
 
 /**
  * Identifica empresas cujo padrão é 100% à vista e 0% a prazo
- * (Ex: MARAPONGA POINT e NG SERVIÇOS)
+ * (Ex: MARAPONGA POINT, NG SERVIÇOS e JL CONSULTA MEDICA)
  */
 export function is100PercentVistaCompany(cleanDoc: string, name?: string): boolean {
   const n = (name || '').toUpperCase();
   return (
     cleanDoc === '15760237000148' || // MARAPONGA POINT COMERCIO DE ALIMENTOS LTDA
     cleanDoc === '24986737000193' || // NG SERVICOS DE APOIO ADMINISTRATIVO LTDA
+    cleanDoc === '40595095000158' || // JL CONSULTA MEDICA LTDA
     n.includes('MARAPONGA POINT') ||
     n.includes('NG SERVICOS') ||
-    n.includes('NG SERVIÇOS')
+    n.includes('NG SERVIÇOS') ||
+    n.includes('JL CONSULTA MEDICA')
   );
 }
 
@@ -81,8 +83,8 @@ export function loadStoredCompanies(): Company[] {
             const sVista = Math.min(100, Math.max(0, Number(storedItem.vendaVistaPercent)));
             const sPrazo = hasStoredPrazo ? Math.min(100, Math.max(0, Number(storedItem.vendaPrazoPercent))) : (100 - sVista);
 
-            // Se for empresa de regra 100% mas estava com o padrão genérico anterior de 10%/90%, atualiza para 100%/0%
-            if (isSpecial100 && sVista === 10 && sPrazo === 90) {
+            // Se for empresa de regra 100% (ex: JL CONSULTA MEDICA, MARAPONGA POINT, NG SERVIÇOS), assegura 100%/0%
+            if (isSpecial100) {
               resolvedVista = 100;
               resolvedPrazo = 0;
             } else {

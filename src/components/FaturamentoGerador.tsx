@@ -228,7 +228,14 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       let billingItems: FaturamentoItem[] = [];
       if (storedFat) {
         try {
-          billingItems = JSON.parse(storedFat);
+          const parsed = JSON.parse(storedFat);
+          billingItems = Array.isArray(parsed)
+            ? parsed.map((item: FaturamentoItem) => ({
+                ...item,
+                vendaVista: item.faturamentoTotal * (company.vendaVistaPercent / 100),
+                vendaPrazo: item.faturamentoTotal * (company.vendaPrazoPercent / 100)
+              }))
+            : [];
         } catch {}
       }
       return {
@@ -388,6 +395,17 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       if (storedFat) {
         try {
           const parsed = JSON.parse(storedFat);
+          const currentComp = companies.find(c => c.id === selectedCompanyId);
+          if (currentComp && Array.isArray(parsed)) {
+            const reconciled = parsed.map((item: FaturamentoItem) => ({
+              ...item,
+              vendaVista: item.faturamentoTotal * (currentComp.vendaVistaPercent / 100),
+              vendaPrazo: item.faturamentoTotal * (currentComp.vendaPrazoPercent / 100)
+            }));
+            setFaturamentoData(reconciled);
+            lastLoadedCompanyIdRef.current = selectedCompanyId;
+            return;
+          }
           setFaturamentoData(parsed);
           lastLoadedCompanyIdRef.current = selectedCompanyId;
           return;
@@ -396,7 +414,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     }
     setFaturamentoData([]);
     lastLoadedCompanyIdRef.current = selectedCompanyId;
-  }, [selectedCompanyId]);
+  }, [selectedCompanyId, companies]);
 
   // Load companies and accountants from localStorage on mount and when updated
   useEffect(() => {
@@ -2399,8 +2417,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     doc.setFontSize(8);
     doc.setTextColor(255, 255, 255);
     doc.text('Competência', premiumCols.comp, tableTop + 5.2, { align: 'center' });
-    doc.text('Vendas à Vista', premiumCols.vista, tableTop + 5.2, { align: 'center' });
-    doc.text('Vendas a Prazo', premiumCols.prazo, tableTop + 5.2, { align: 'center' });
+    doc.text('À vista', premiumCols.vista, tableTop + 5.2, { align: 'center' });
+    doc.text('A prazo', premiumCols.prazo, tableTop + 5.2, { align: 'center' });
     doc.text('Faturamento Bruto', premiumCols.total, tableTop + 5.2, { align: 'center' });
 
     // Table Row values
@@ -3011,8 +3029,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                     <tr className="bg-[#04243b] text-[#e4b35e] text-[9px] font-bold uppercase tracking-wider border-b border-[#e4b35e]/25">
                       <th className="py-2.5 px-3">Competência</th>
                       <th className="py-2.5 px-3 text-right">Faturamento Bruto</th>
-                      <th className="py-2.5 px-3 text-right">Vendas à Vista ({selectedCompany.vendaVistaPercent}%)</th>
-                      <th className="py-2.5 px-3 text-right">Vendas a Prazo ({selectedCompany.vendaPrazoPercent}%)</th>
+                      <th className="py-2.5 px-3 text-right">À vista ({selectedCompany.vendaVistaPercent}%)</th>
+                      <th className="py-2.5 px-3 text-right">A prazo ({selectedCompany.vendaPrazoPercent}%)</th>
                       <th className="py-2.5 px-3 text-center w-24">Ações</th>
                     </tr>
                   </thead>
