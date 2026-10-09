@@ -43,6 +43,9 @@ export interface Company {
   contadorNome?: string;
   contadorCrc?: string;
   quadroSocietario?: string[];
+  socioNome?: string;
+  socioCpf?: string;
+  socioQualificacao?: string;
   municipio?: string;
   estado?: string;
   uf?: string;

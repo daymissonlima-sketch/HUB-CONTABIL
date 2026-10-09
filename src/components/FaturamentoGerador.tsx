@@ -18,13 +18,19 @@ import {
   Sparkles,
   ChevronDown,
   Search,
-  ArrowLeft
+  ArrowLeft,
+  UserCheck,
+  Building2,
+  Building,
+  Award,
+  User
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import { Company, FaturamentoItem } from '../types_debits';
 import { loadStoredCompanies, saveStoredCompanies, COMPANIES_UPDATED_EVENT, getCleanDocument } from '../utils/companyStorage';
+import { getResolvedSocioAdmin, getAllCompanyPartners, updateCompanySocio, formatCpf, isFemalePartner, getSocioRoleTitle, ResolvedSocioAdmin } from '../utils/socioHelper';
 import { convertPdfToCsvString } from '../utils/pdfToCsv';
 import { extractTextFromPdf } from '../utils/pdfExtractor';
 import { fetchCnpjSafe, parseCnpjResponseData, isCaepf, isValidCNPJ } from '../utils/cnpjHelper';
@@ -90,6 +96,20 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
   // Accountants State
   const [accountants, setAccountants] = useState<Accountant[]>([]);
   const [selectedAccountantId, setSelectedAccountantId] = useState<string>('paulo');
+  
+  // Company / Representative Signature Type ('socio' | 'empresa')
+  const [companySignatureType, setCompanySignatureType] = useState<'socio' | 'empresa'>(() => {
+    return (localStorage.getItem('moreira_lima_company_signature_type') as 'socio' | 'empresa') || 'socio';
+  });
+
+  // Modal State for configuring company socio administrador
+  const [isSocioModalOpen, setIsSocioModalOpen] = useState(false);
+  const [targetSocioCompany, setTargetSocioCompany] = useState<Company | null>(null);
+  const [socioFormData, setSocioFormData] = useState({
+    nome: '',
+    cpf: '',
+    qualificacao: 'Sócio-Administrador'
+  });
   const [editingAccountantId, setEditingAccountantId] = useState<string | null>(null);
   const [newAccountant, setNewAccountant] = useState<Omit<Accountant, 'id'>>({
     nome: '',
@@ -219,15 +239,26 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     });
   }, [companies, faturamentoData, billingUpdateTrigger]);
 
+  // Filter mode: 'with_billing' (default: only show companies with imported billing) | 'all'
+  const [billingFilterMode, setBillingFilterMode] = useState<'with_billing' | 'all'>('with_billing');
+
+  const countWithBilling = useMemo(() => {
+    return companiesWithBilling.filter(c => c.hasBilling).length;
+  }, [companiesWithBilling]);
+
   const filteredCompaniesWithBilling = useMemo(() => {
+    const baseList = billingFilterMode === 'with_billing'
+      ? companiesWithBilling.filter(c => c.hasBilling)
+      : companiesWithBilling;
+
     const q = mainCompanySearchQuery.trim().toUpperCase();
-    if (!q) return companiesWithBilling;
-    return companiesWithBilling.filter(company => {
+    if (!q) return baseList;
+    return baseList.filter(company => {
       const razao = (company.razaoSocial || '').toUpperCase();
       const cnpj = (company.cnpj || '');
       return razao.startsWith(q) || razao.includes(q) || cnpj.includes(q);
     });
-  }, [companiesWithBilling, mainCompanySearchQuery]);
+  }, [companiesWithBilling, billingFilterMode, mainCompanySearchQuery]);
 
   const handleSelectAllBatch = (checked: boolean) => {
     if (checked) {
@@ -688,9 +719,52 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     localStorage.setItem('moreira_lima_selected_accountant', id);
   };
 
+  const selectCompanySignatureType = (type: 'socio' | 'empresa') => {
+    setCompanySignatureType(type);
+    localStorage.setItem('moreira_lima_company_signature_type', type);
+    // If selecting 'socio' and active company has no socio data or missing CPF, prompt open modal
+    if (type === 'socio' && selectedCompany) {
+      const socio = getResolvedSocioAdmin(selectedCompany);
+      if (!socio.hasSocio || !socio.cpf) {
+        openEditSocioModal(selectedCompany);
+      }
+    }
+  };
+
   const selectedCompany = useMemo(() => {
     return companies.find(c => c.id === selectedCompanyId);
   }, [companies, selectedCompanyId]);
+
+  const selectedCompanySocio = useMemo(() => {
+    return getResolvedSocioAdmin(selectedCompany);
+  }, [selectedCompany]);
+
+  const openEditSocioModal = (companyToEdit?: Company | null) => {
+    const comp = companyToEdit || selectedCompany;
+    if (!comp) return;
+    setTargetSocioCompany(comp);
+    const resolved = getResolvedSocioAdmin(comp);
+    setSocioFormData({
+      nome: resolved.nome || comp.socioNome || '',
+      cpf: resolved.cpf || comp.socioCpf || '',
+      qualificacao: resolved.qualificacao || comp.socioQualificacao || 'Sócio-Administrador'
+    });
+    setIsSocioModalOpen(true);
+  };
+
+  const handleSaveSocio = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!targetSocioCompany) return;
+
+    const updatedCompanies = updateCompanySocio(
+      targetSocioCompany.id,
+      socioFormData.nome,
+      socioFormData.cpf,
+      socioFormData.qualificacao
+    );
+    setCompanies(updatedCompanies);
+    setIsSocioModalOpen(false);
+  };
 
   // Adjust "vendaPrazoPercent" automatically to sum 100% when "vendaVistaPercent" changes
   const handleVistaChange = (val: number) => {
@@ -1552,6 +1626,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     });
 
     setShowBatchModal(false);
+    setBillingFilterMode('with_billing');
     setBillingUpdateTrigger(prev => prev + 1);
     setBatchFiles([]);
   };
@@ -2078,11 +2153,20 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     doc.line(margin + 2, sigY, margin + 82, sigY);
     doc.line(pageWidth - margin - 82, sigY, pageWidth - margin - 2, sigY);
 
+    // Resolve Company / Partner signature
+    const resolvedSocio = getResolvedSocioAdmin(selectedCompany);
+    const useSocio = companySignatureType === 'socio' && Boolean(resolvedSocio.nome);
+
+    const companySigTitle = useSocio ? resolvedSocio.nome.toUpperCase() : selectedCompany.razaoSocial.toUpperCase();
+    const companySigSubtitle = useSocio
+      ? (resolvedSocio.cpf ? `CPF: ${resolvedSocio.cpf} - ${resolvedSocio.roleTitle}` : resolvedSocio.roleTitle)
+      : `CNPJ ${selectedCompany.cnpj}`;
+
     // Left signature text
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
-    doc.text(selectedCompany.razaoSocial.toUpperCase(), margin + 42, sigY + 4, { align: 'center' });
-    doc.text(`CNPJ ${selectedCompany.cnpj}`, margin + 42, sigY + 8, { align: 'center' });
+    doc.text(companySigTitle, margin + 42, sigY + 4, { align: 'center' });
+    doc.text(companySigSubtitle, margin + 42, sigY + 8, { align: 'center' });
 
     // Right signature text
     const activeAccountant = accountants.find(a => a.id === selectedAccountantId) || accountants[0] || DEFAULT_ACCOUNTANTS[0];
@@ -2458,16 +2542,25 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     // Right line for accountant
     doc.line(rightCardX, sigLineY, rightCardX + cardWidth - 2, sigLineY);
 
+    // Resolve Company / Partner signature
+    const resolvedSocio = getResolvedSocioAdmin(selectedCompany);
+    const useSocio = companySignatureType === 'socio' && Boolean(resolvedSocio.nome);
+
+    const companySigTitle = useSocio ? resolvedSocio.nome.toUpperCase() : selectedCompany.razaoSocial.toUpperCase();
+    const companySigSubtitle = useSocio
+      ? (resolvedSocio.cpf ? `CPF: ${resolvedSocio.cpf} - ${resolvedSocio.roleTitle}` : resolvedSocio.roleTitle)
+      : `CNPJ ${selectedCompany.cnpj}`;
+
     // Left signature text (Representative)
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(primaryNavy[0], primaryNavy[1], primaryNavy[2]);
-    doc.text(selectedCompany.razaoSocial.toUpperCase(), margin + (cardWidth / 2), sigLineY + 4, { align: 'center' });
+    doc.text(companySigTitle, margin + (cardWidth / 2), sigLineY + 4, { align: 'center' });
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-    doc.text(`CNPJ ${selectedCompany.cnpj}`, margin + (cardWidth / 2), sigLineY + 8, { align: 'center' });
+    doc.text(companySigSubtitle, margin + (cardWidth / 2), sigLineY + 8, { align: 'center' });
 
     // Right signature text (Accountant)
     const activeAccountant = accountants.find(a => a.id === selectedAccountantId) || accountants[0] || DEFAULT_ACCOUNTANTS[0];
@@ -2524,12 +2617,100 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
         </div>
       )}
       
-      {/* Sleek, High-Contrast Header Section */}
-      <div className="flex justify-end pb-4 border-b border-slate-200">
-        <div className="flex flex-col sm:flex-row items-center gap-2.5">
-          {/* Accountant Toggle Buttons */}
+      {/* Sleek, High-Contrast Header Section with Signature Selection */}
+      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 pb-4 border-b border-slate-200">
+        {/* Left side: Context badge for Sócio / Empresa info */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {companySignatureType === 'socio' && selectedCompany && (
+            <div className="flex items-center gap-2 bg-amber-50/90 border border-amber-200/90 px-3 py-1.5 rounded-xl text-xs shadow-2xs">
+              <UserCheck className="h-3.5 w-3.5 text-amber-700 shrink-0" />
+              <div className="text-[11px] leading-tight text-slate-700">
+                <span className="font-extrabold text-slate-900 uppercase text-[9px] tracking-wider block">
+                  {selectedCompanySocio.isFemale ? 'Sócia Administradora' : 'Sócio Administrador'}
+                </span>
+                {selectedCompanySocio.hasSocio ? (
+                  <span className="flex items-center gap-1.5 flex-wrap">
+                    <strong className="text-amber-950 font-bold">{selectedCompanySocio.nome}</strong>
+                    {selectedCompanySocio.cpf ? (
+                      <span className="text-slate-600 font-mono text-[10px] bg-amber-100/80 px-1.5 py-0.5 rounded">CPF: {selectedCompanySocio.cpf}</span>
+                    ) : (
+                      <span className="text-amber-700 font-semibold text-[10px] italic">(CPF não preenchido)</span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="text-amber-700 italic">Nenhum sócio identificado no cadastro</span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => openEditSocioModal(selectedCompany)}
+                className="ml-1.5 px-2 py-0.5 text-[10px] font-extrabold uppercase bg-amber-200/70 hover:bg-amber-300 text-amber-950 rounded-lg transition-colors cursor-pointer"
+                title={selectedCompanySocio.isFemale ? "Editar Nome e CPF da Sócia Administradora" : "Editar Nome e CPF do Sócio Administrador"}
+              >
+                {selectedCompanySocio.hasSocio ? 'Alterar' : 'Cadastrar'}
+              </button>
+            </div>
+          )}
+          {companySignatureType === 'empresa' && selectedCompany && (
+            <div className="flex items-center gap-2 bg-slate-100/80 border border-slate-200/90 px-3 py-1.5 rounded-xl text-xs text-slate-700 shadow-2xs">
+              <Building2 className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+              <div className="text-[11px] leading-tight">
+                <span className="font-extrabold text-slate-500 uppercase text-[9px] tracking-wider block">Assinatura Empresa</span>
+                <strong className="text-slate-800 font-bold">{selectedCompany.razaoSocial}</strong>
+                <span className="text-slate-500 font-mono text-[10px] ml-1.5">CNPJ: {selectedCompany.cnpj}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right side: Dual Toggle Button Groups */}
+        <div className="flex flex-wrap items-center gap-2.5 justify-end">
+          {/* Assinatura da Empresa: Sócio Administrador vs Razão Social / CNPJ */}
           <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/80 shadow-xs">
-            <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider px-2">Assinatura:</span>
+            <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider px-2 flex items-center gap-1">
+              <Building2 className="h-3 w-3 text-slate-400" />
+              Empresa:
+            </span>
+            <button
+              type="button"
+              onClick={() => selectCompanySignatureType('socio')}
+              className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase transition-all flex items-center gap-1 cursor-pointer ${
+                companySignatureType === 'socio'
+                  ? 'bg-[#04243b] text-[#e4b35e] border border-[#e4b35e]/20 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+              title={
+                selectedCompanySocio.isFemale
+                  ? 'Assinar com Nome e CPF da Sócia Administradora'
+                  : 'Assinar com Nome e CPF do Sócio Administrador'
+              }
+            >
+              <Check className={`h-3 w-3 shrink-0 transition-opacity ${companySignatureType === 'socio' ? 'opacity-100' : 'opacity-0 w-0'}`} />
+              <UserCheck className="h-3 w-3" />
+              {selectedCompanySocio?.hasSocio && selectedCompanySocio?.isFemale ? 'SÓCIA ADMINISTRADORA' : 'SÓCIO ADMINISTRADOR'}
+            </button>
+            <button
+              type="button"
+              onClick={() => selectCompanySignatureType('empresa')}
+              className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase transition-all flex items-center gap-1 cursor-pointer ${
+                companySignatureType === 'empresa'
+                  ? 'bg-[#04243b] text-[#e4b35e] border border-[#e4b35e]/20 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+              title="Assinar com Razão Social e CNPJ da Empresa"
+            >
+              <Check className={`h-3 w-3 shrink-0 transition-opacity ${companySignatureType === 'empresa' ? 'opacity-100' : 'opacity-0 w-0'}`} />
+              <Building className="h-3 w-3" />
+              RAZÃO SOCIAL / CNPJ
+            </button>
+          </div>
+
+          {/* Assinatura do Contador: Paulo vs Daymisson */}
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/80 shadow-xs">
+            <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider px-2 flex items-center gap-1">
+              <Award className="h-3 w-3 text-slate-400" />
+              Contador:
+            </span>
             <button
               type="button"
               onClick={() => selectAccountant('paulo')}
@@ -2588,7 +2769,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                   type="text"
                   value={mainCompanySearchQuery}
                   onChange={(e) => setMainCompanySearchQuery(e.target.value)}
-                  placeholder="Pesquisar por razão social para alternar empresa..."
+                  placeholder="Pesquisar entre as empresas com faturamento importado..."
                   className="w-full pl-10 pr-8 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#04243b] focus:ring-1 focus:ring-[#04243b] text-slate-800 transition-all font-medium shadow-2xs"
                 />
                 {mainCompanySearchQuery && (
@@ -2605,12 +2786,24 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                 {/* Quick switcher dropdown when in Individual view */}
                 {mainCompanySearchQuery.trim().length > 0 && (
                   <div className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-64 overflow-y-auto divide-y divide-slate-100">
-                    {filteredCompaniesWithBilling.length === 0 ? (
-                      <div className="p-4 text-center text-xs text-slate-400 italic">
-                        Nenhuma empresa encontrada digitando as letras informadas.
-                      </div>
-                    ) : (
-                      filteredCompaniesWithBilling.map(company => (
+                    {(() => {
+                      const switcherList = companiesWithBilling.filter(company => {
+                        if (!company.hasBilling) return false;
+                        const q = mainCompanySearchQuery.trim().toUpperCase();
+                        const razao = (company.razaoSocial || '').toUpperCase();
+                        const cnpj = (company.cnpj || '');
+                        return razao.includes(q) || cnpj.includes(q);
+                      });
+
+                      if (switcherList.length === 0) {
+                        return (
+                          <div className="p-4 text-center text-xs text-slate-400 italic">
+                            Nenhuma empresa com faturamento importado encontrada para "{mainCompanySearchQuery}".
+                          </div>
+                        );
+                      }
+
+                      return switcherList.map(company => (
                         <button
                           key={company.id}
                           type="button"
@@ -2628,8 +2821,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                             Visualizar
                           </span>
                         </button>
-                      ))
-                    )}
+                      ));
+                    })()}
                   </div>
                 )}
               </div>
@@ -2941,26 +3134,62 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
           >
             {/* Lote Header Actions */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-              {/* Search Bar */}
-              <div className="relative flex-1 max-w-lg w-full">
-                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                <input
-                  type="text"
-                  value={mainCompanySearchQuery}
-                  onChange={(e) => setMainCompanySearchQuery(e.target.value)}
-                  placeholder="Pesquisar por razão social (digite as primeiras letras)..."
-                  className="w-full pl-10 pr-8 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#04243b] focus:ring-1 focus:ring-[#04243b] text-slate-800 transition-all font-medium shadow-2xs"
-                />
-                {mainCompanySearchQuery && (
+              {/* Search Bar + Filter Toggle */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1 max-w-2xl w-full">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={mainCompanySearchQuery}
+                    onChange={(e) => setMainCompanySearchQuery(e.target.value)}
+                    placeholder={
+                      billingFilterMode === 'with_billing'
+                        ? "Pesquisar empresas com faturamento importado..."
+                        : "Pesquisar por razão social ou CNPJ..."
+                    }
+                    className="w-full pl-10 pr-8 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#04243b] focus:ring-1 focus:ring-[#04243b] text-slate-800 transition-all font-medium shadow-2xs"
+                  />
+                  {mainCompanySearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setMainCompanySearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-sm cursor-pointer"
+                      title="Limpar pesquisa"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter toggle: With Billing vs All Companies */}
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/80 shadow-xs shrink-0">
                   <button
                     type="button"
-                    onClick={() => setMainCompanySearchQuery('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-sm cursor-pointer"
-                    title="Limpar pesquisa"
+                    onClick={() => setBillingFilterMode('with_billing')}
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase transition-all flex items-center gap-1.5 cursor-pointer ${
+                      billingFilterMode === 'with_billing'
+                        ? 'bg-[#04243b] text-[#e4b35e] border border-[#e4b35e]/20 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                    title="Exibir apenas empresas que possuem faturamento importado"
                   >
-                    ×
+                    <FileSpreadsheet className="h-3.5 w-3.5" />
+                    Com Faturamento ({countWithBilling})
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => setBillingFilterMode('all')}
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase transition-all flex items-center gap-1.5 cursor-pointer ${
+                      billingFilterMode === 'all'
+                        ? 'bg-[#04243b] text-[#e4b35e] border border-[#e4b35e]/20 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                    title="Exibir todas as empresas cadastradas"
+                  >
+                    <Building2 className="h-3.5 w-3.5" />
+                    Todas ({companies.length})
+                  </button>
+                </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
@@ -2975,7 +3204,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                 <button
                   type="button"
                   onClick={handleClearAllBillingData}
-                  className="flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-extrabold uppercase tracking-wider text-red-600 hover:text-white bg-red-50 hover:bg-red-600 border border-red-200 hover:border-red-600 rounded-xl shadow-xs transition-all cursor-pointer w-full sm:w-auto"
+                  disabled={countWithBilling === 0}
+                  className="flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-extrabold uppercase tracking-wider text-red-600 hover:text-white bg-red-50 hover:bg-red-600 border border-red-200 hover:border-red-600 rounded-xl shadow-xs transition-all cursor-pointer w-full sm:w-auto disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <Trash2 className="h-4 w-4" />
                   Limpar Tudo
@@ -2987,7 +3217,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
 
             {/* Batch Action Bar */}
             <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700">
                   <input
                     type="checkbox"
@@ -3000,6 +3230,9 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                   />
                   Selecionar Todas as Importadas
                 </label>
+                <span className="text-[11px] text-slate-400 font-medium">
+                  ({filteredCompaniesWithBilling.filter(c => c.hasBilling).length} com faturamento • {selectedBatchCompanies.length} selecionadas)
+                </span>
               </div>
 
               <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
@@ -3041,10 +3274,43 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                   <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
                     {filteredCompaniesWithBilling.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="py-12 text-center text-slate-400 italic">
-                          {companiesWithBilling.length === 0
-                            ? 'Nenhuma empresa cadastrada. Acesse as configurações no topo para adicionar empresas.'
-                            : `Nenhuma empresa encontrada digitando "${mainCompanySearchQuery}".`}
+                        <td colSpan={6} className="py-12 text-center">
+                          {billingFilterMode === 'with_billing' && countWithBilling === 0 ? (
+                            <div className="max-w-md mx-auto space-y-3">
+                              <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center mx-auto text-amber-700 shadow-2xs">
+                                <FileSpreadsheet className="h-6 w-6" />
+                              </div>
+                              <h4 className="text-sm font-extrabold uppercase tracking-wider text-[#04243b]">
+                                Nenhuma empresa com faturamento importado
+                              </h4>
+                              <p className="text-xs text-slate-500 leading-relaxed">
+                                Arraste e solte planilhas de faturamento (.xlsx ou .csv) em qualquer lugar da tela ou clique no botão abaixo para importar.
+                              </p>
+                              <div className="pt-2 flex flex-wrap items-center justify-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => fileInputRef.current?.click()}
+                                  className="px-4 py-2 text-xs font-extrabold uppercase tracking-wider bg-[#04243b] hover:bg-[#063354] text-[#e4b35e] rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                                >
+                                  <Upload className="h-4 w-4" />
+                                  Importar Planilha(s)
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setBillingFilterMode('all')}
+                                  className="px-3.5 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                                >
+                                  Ver todas as empresas ({companies.length})
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-slate-400 italic text-xs py-4">
+                              {mainCompanySearchQuery
+                                ? `Nenhuma empresa encontrada com faturamento importado para "${mainCompanySearchQuery}".`
+                                : 'Nenhuma empresa encontrada com os filtros selecionados.'}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ) : (
@@ -3428,6 +3694,232 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                   {confirmModal.confirmText}
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: CONFIGURAR SÓCIO ADMINISTRADOR */}
+      <AnimatePresence>
+        {isSocioModalOpen && targetSocioCompany && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[110] p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              transition={{ duration: 0.15 }}
+              className="bg-white w-full max-w-lg rounded-2xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col"
+            >
+              {/* Header */}
+              {(() => {
+                const isFormFemale = isFemalePartner(socioFormData.nome, socioFormData.qualificacao);
+                return (
+                  <div className="bg-[#04243b] px-6 py-4 flex items-center justify-between text-white">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 bg-[#e4b35e]/20 rounded-xl text-[#e4b35e]">
+                        <UserCheck className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-extrabold uppercase tracking-wider text-white">
+                          Assinatura: {isFormFemale ? 'Sócia Administradora' : 'Sócio Administrador'}
+                        </h3>
+                        <p className="text-[11px] text-[#e4b35e] font-semibold truncate max-w-xs sm:max-w-sm">
+                          {targetSocioCompany.razaoSocial}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsSocioModalOpen(false)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                    >
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {/* Form Content */}
+              {(() => {
+                const isFormFemale = isFemalePartner(socioFormData.nome, socioFormData.qualificacao);
+                return (
+                  <form onSubmit={handleSaveSocio} className="p-6 space-y-4">
+                    <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 text-xs flex items-center justify-between">
+                      <div>
+                        <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block">Empresa</span>
+                        <span className="font-bold text-slate-800">{targetSocioCompany.razaoSocial}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block">CNPJ</span>
+                        <span className="font-mono text-slate-700">{targetSocioCompany.cnpj}</span>
+                      </div>
+                    </div>
+
+                    {/* Quick Selection from Registered Partners / QSA */}
+                    {(() => {
+                      const partners = getAllCompanyPartners(targetSocioCompany);
+                      if (partners.length === 0) return null;
+                      return (
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 block">
+                            Sócios vinculados no cadastro / Receita Federal (Clique para auto-preencher):
+                          </label>
+                          <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                            {partners.map((p, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => {
+                                  setSocioFormData({
+                                    nome: p.nome,
+                                    cpf: p.cpf || socioFormData.cpf,
+                                    qualificacao: p.isFemale ? 'Sócia-Administradora' : 'Sócio-Administrador'
+                                  });
+                                }}
+                                className={`w-full text-left p-2.5 rounded-xl border text-xs transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                                  socioFormData.nome.toUpperCase() === p.nome.toUpperCase()
+                                    ? 'bg-[#04243b]/5 border-[#04243b] text-[#04243b] font-bold ring-1 ring-[#04243b]'
+                                    : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
+                                }`}
+                              >
+                                <div className="truncate">
+                                  <span className="font-bold block truncate flex items-center gap-1.5">
+                                    <span>{p.isFemale ? '👩' : '👨'}</span>
+                                    {p.nome}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500">{p.isFemale ? 'Sócia Administradora' : 'Sócio Administrador'}</span>
+                                </div>
+                                {p.cpf ? (
+                                  <span className="font-mono text-[10px] bg-slate-100 px-2 py-0.5 rounded text-slate-600 shrink-0">
+                                    {p.cpf}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] text-amber-600 font-medium shrink-0">
+                                    CPF não informado
+                                  </span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Gender / Role Selector */}
+                    <div>
+                      <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 block mb-1">
+                        Cargo na Assinatura (Gênero)
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSocioFormData(prev => ({ ...prev, qualificacao: 'Sócia-Administradora' }))}
+                          className={`px-3 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider border transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                            isFormFemale
+                              ? 'bg-[#e4b35e]/15 border-[#e4b35e] text-[#04243b] shadow-xs ring-1 ring-[#e4b35e]'
+                              : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                          }`}
+                        >
+                          <Check className={`h-3.5 w-3.5 ${isFormFemale ? 'opacity-100 text-[#04243b]' : 'opacity-0 w-0'}`} />
+                          👩 SÓCIA ADMINISTRADORA
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSocioFormData(prev => ({ ...prev, qualificacao: 'Sócio-Administrador' }))}
+                          className={`px-3 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider border transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                            !isFormFemale
+                              ? 'bg-[#04243b] border-[#04243b] text-[#e4b35e] shadow-xs'
+                              : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                          }`}
+                        >
+                          <Check className={`h-3.5 w-3.5 ${!isFormFemale ? 'opacity-100 text-[#e4b35e]' : 'opacity-0 w-0'}`} />
+                          👨 SÓCIO ADMINISTRADOR
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Inputs */}
+                    <div className="space-y-3 pt-1">
+                      <div>
+                        <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 block mb-1">
+                          Nome Completo {isFormFemale ? 'da Sócia Administradora' : 'do Sócio Administrador'} *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={socioFormData.nome}
+                          onChange={(e) => {
+                            const newName = e.target.value.toUpperCase();
+                            const autoFemale = isFemalePartner(newName);
+                            setSocioFormData(prev => ({
+                              ...prev,
+                              nome: newName,
+                              qualificacao: autoFemale ? 'Sócia-Administradora' : 'Sócio-Administrador'
+                            }));
+                          }}
+                          placeholder={isFormFemale ? "Ex: PATRICIA MOREIRA" : "Ex: JOÃO SILVA MOREIRA"}
+                          className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-xs font-semibold text-slate-800 uppercase focus:outline-none focus:ring-2 focus:ring-[#04243b]/20 focus:border-[#04243b]"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 block mb-1">
+                            CPF {isFormFemale ? 'da Sócia' : 'do Sócio'} *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={socioFormData.cpf}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSocioFormData(prev => ({ ...prev, cpf: formatCpf(val) }));
+                            }}
+                            placeholder="000.000.000-00"
+                            maxLength={14}
+                            className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#04243b]/20 focus:border-[#04243b]"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 block mb-1">
+                            Título na Assinatura
+                          </label>
+                          <input
+                            type="text"
+                            value={socioFormData.qualificacao}
+                            onChange={(e) => setSocioFormData(prev => ({ ...prev, qualificacao: e.target.value }))}
+                            placeholder={isFormFemale ? "Sócia-Administradora" : "Sócio-Administrador"}
+                            className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#04243b]/20 focus:border-[#04243b]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-slate-600 bg-amber-50/70 p-3 rounded-xl border border-amber-200/70 leading-relaxed">
+                      ℹ️ A declaração e o PDF serão emitidos com a assinatura de <strong>{isFormFemale ? 'SÓCIA ADMINISTRADORA' : 'SÓCIO ADMINISTRADOR'}</strong>, contendo o <strong>Nome</strong> e <strong>CPF</strong> configurados.
+                    </p>
+
+                    {/* Footer Buttons */}
+                    <div className="flex items-center justify-end gap-2.5 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsSocioModalOpen(false)}
+                        className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer uppercase"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-5 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider bg-[#04243b] hover:bg-[#063354] text-[#e4b35e] shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Check className="h-4 w-4" />
+                        Salvar e Definir
+                      </button>
+                    </div>
+                  </form>
+                );
+              })()}
             </motion.div>
           </div>
         )}
