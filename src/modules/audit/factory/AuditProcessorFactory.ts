@@ -26,7 +26,15 @@ export class AuditProcessorFactory {
 
     // Priority 1: Check Filename Hints
     const lowerFilename = (filename || '').toLowerCase();
-    if (lowerFilename.includes('siga')) return 'SIGA';
+    const lowerContent = (content || '').toLowerCase();
+    if (
+      lowerFilename.includes('siga') || 
+      lowerFilename.includes('nfc') || 
+      lowerFilename.includes('informações fiscais') || 
+      lowerFilename.includes('informacoes fiscais') ||
+      lowerContent.includes('informações fiscais - nfc-e') ||
+      lowerContent.includes('informacoes fiscais - nfc-e')
+    ) return 'SIGA';
     if (lowerFilename.includes('pis') || lowerFilename.includes('cofins')) return 'ERP_PIS_COFINS';
     if (lowerFilename.includes('icms')) return 'ERP_ICMS';
 

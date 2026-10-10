@@ -1752,8 +1752,21 @@ export function parseGenericSigaLine(line: string, forceType?: 'SAIDA' | 'ENTRAD
       // Extract CNPJ
       let cnpjVal = csvTokens[0] ? formatCnpjCpfHelper(csvTokens[0]) : '';
 
-      // Extract Value
-      const valToken = csvTokens[6] || csvTokens.find(t => /^\d{1,3}(\.\d{3})*,\d{2}$/.test(t) || /^\d+[\.,]\d{2}$/.test(t));
+      // Extract Value dynamically (do not assume column 6)
+      let valToken = '';
+      const numCandidates = csvTokens.filter((t, i) => {
+        if (t === chaveToken) return false;
+        if (/\d{2}\/\d{2}\/\d{4}/.test(t)) return false;
+        if (/AUTORIZADA|CANCELADA|INUTILIZADA|DENEGADA/i.test(t)) return false;
+        if (/^[A-Za-z]{2}$/.test(t)) return false;
+        if (i === 0 && (t.replace(/\D/g, '').length === 11 || t.replace(/\D/g, '').length === 14)) return false;
+        return /^-?\d{1,3}(\.\d{3})*,\d{2}$/.test(t) || /^-?\d+,\d{2}$/.test(t) || /^-?\d+\.\d{2}$/.test(t);
+      });
+      if (numCandidates.length > 0) {
+        valToken = numCandidates.find(t => t === csvTokens[6] || t === csvTokens[5] || t === csvTokens[7] || t === csvTokens[4]) || numCandidates[0];
+      } else {
+        valToken = csvTokens[6] || '0';
+      }
       const rawVal = parsePtBrFloatHelper(valToken || '0');
       const finalVal = isCanceled ? 0 : rawVal;
 
@@ -2201,6 +2214,385 @@ export function parseSigaSaidas(text: string): { items: SigaReportItem[]; metada
 }
 
 /**
+ * Advanced Dynamic Parser for SEFAZ NFC-e (Modelo 65) CSV Reports.
+ * Automatically adapts to changes in column layout, ordering, and delimiters.
+ * Uses dictionary matching across header titles and the 44-digit Chave de Acesso decomposition standard.
+ */
+export function parseSigaNfceCsv(
+  text: string,
+  forceType: 'SAIDA' | 'ENTRADA' = 'SAIDA'
+): { items: SigaReportItem[]; metadata: SigaReportMetadata; isValid: boolean } | null {
+  if (!text || !text.trim()) return null;
+
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  if (lines.length < 2) return null;
+
+  const lowerText = text.toLowerCase();
+  // Guarantee full preservation of traditional multi-section SIGA reports
+  if (
+    lowerText.includes('movimentação de entrada e saída') ||
+    lowerText.includes('movimentacao de entrada e saida') ||
+    (lowerText.includes('notas fiscais de entrada') && lowerText.includes('notas fiscais de saída')) ||
+    (lowerText.includes('notas fiscais de entrada') && lowerText.includes('notas fiscais de saida'))
+  ) {
+    return null;
+  }
+
+  const isLikelyNfce =
+    lowerText.includes('nfc-e') ||
+    lowerText.includes('nfce') ||
+    lowerText.includes('informações fiscais') ||
+    lowerText.includes('informacoes fiscais') ||
+    lowerText.includes('emissor - detalhamento') ||
+    /\b\d{20}65\d{22}\b/.test(text);
+
+  // If not NFC-e, return null to preserve traditional processing untouched
+  if (!isLikelyNfce) {
+    return null;
+  }
+
+  const normalize = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+  // Column Matchers based on SEFAZ vocabulary
+  const isChave = (h: string) => h.includes('chave') || h.includes('chv_aces');
+  const isNota = (h: string) =>
+    (h.includes('numero') || h.includes('nº') || h.includes('n°') || h.includes('num_doc') || h === 'nota' || h === 'nota fiscal' || h === 'num' || h === 'nro') &&
+    !h.includes('protocolo') && !h.includes('lote') && !h.includes('serie') && !h.includes('item');
+  const isSerie = (h: string) => h === 'serie' || h.includes('serie') || h === 'ser';
+  const isData = (h: string) =>
+    (h.includes('data') || h.includes('emissao') || h.includes('dtemit') || h === 'dt') && !h.includes('cancelamento');
+  const isValor = (h: string) =>
+    (h.includes('valor') || h.includes('vlr') || h.includes('total') || h.includes('r$')) &&
+    !h.includes('icms') && !h.includes('desconto') && !h.includes('pis') && !h.includes('cofins') &&
+    !h.includes('unit') && !h.includes('frete') && !h.includes('base') && !h.includes('bc');
+  const isSituacao = (h: string) => h.includes('situacao') || h.includes('status') || h.includes('estado');
+  const isCnpjEmit = (h: string) => (h.includes('cnpj') || h.includes('cpf')) && (h.includes('emit') || (!h.includes('dest') && !h.includes('cons')));
+  const isNomeEmit = (h: string) => (h.includes('razao') || h.includes('social') || h.includes('nome')) && (h.includes('emit') || (!h.includes('dest') && !h.includes('cons')));
+  const isUf = (h: string) => h === 'uf' || h.includes('estado') || h.includes('sigla');
+  const isCfop = (h: string) => h.includes('cfop');
+  const isBaseIcms = (h: string) => h.includes('base') || h.includes('bc');
+  const isValorIcms = (h: string) => h.includes('icms') && (h.includes('valor') || h.includes('vlr') || h.includes('r$') || h === 'icms') && !h.includes('base') && !h.includes('aliq');
+  const isDesconto = (h: string) => h.includes('desconto') || h.includes('desc');
+  const isModelo = (h: string) => h === 'modelo' || h === 'mod';
+
+  // Search for the header row in top 25 lines
+  let headerLineIdx = -1;
+  let delim = ';';
+  let headers: string[] = [];
+
+  for (let i = 0; i < Math.min(lines.length, 25); i++) {
+    const rawLine = lines[i];
+    const sc = (rawLine.match(/;/g) || []).length;
+    const cm = (rawLine.match(/,/g) || []).length;
+    const tb = (rawLine.match(/\t/g) || []).length;
+    const pp = (rawLine.match(/\|/g) || []).length;
+
+    let lineDelim = ';';
+    if (tb > sc && tb > cm && tb > pp) lineDelim = '\t';
+    else if (pp > sc && pp > tb && pp > cm) lineDelim = '|';
+    else if (cm > sc && cm > tb && cm > pp) lineDelim = ',';
+    else if (sc >= 2) lineDelim = ';';
+    else continue;
+
+    const tokens = parseCsvLineTokens(rawLine, lineDelim);
+    if (tokens.length < 3) continue;
+
+    const normTokens = tokens.map(normalize);
+    let matchCount = 0;
+    if (normTokens.some(isChave)) matchCount++;
+    if (normTokens.some(isNota)) matchCount++;
+    if (normTokens.some(isSerie)) matchCount++;
+    if (normTokens.some(isData)) matchCount++;
+    if (normTokens.some(isValor)) matchCount++;
+    if (normTokens.some(isSituacao)) matchCount++;
+    if (normTokens.some(isCnpjEmit)) matchCount++;
+
+    if (matchCount >= 2) {
+      headerLineIdx = i;
+      delim = lineDelim;
+      headers = normTokens;
+      break;
+    }
+  }
+
+  // If no header found and not NFC-e, return null to preserve traditional processing
+  if (headerLineIdx === -1 && !isLikelyNfce) {
+    return null;
+  }
+
+  const chaveIdx = headers.findIndex(isChave);
+  const notaIdx = headers.findIndex(isNota);
+  const serieIdx = headers.findIndex(isSerie);
+  const dataIdx = headers.findIndex(isData);
+  const valorIdx = headers.findIndex(isValor);
+  const situacaoIdx = headers.findIndex(isSituacao);
+  const cnpjEmitIdx = headers.findIndex(isCnpjEmit);
+  const nomeEmitIdx = headers.findIndex(isNomeEmit);
+  const ufIdx = headers.findIndex(isUf);
+  const cfopIdx = headers.findIndex(isCfop);
+  const baseIcmsIdx = headers.findIndex(isBaseIcms);
+  const valorIcmsIdx = headers.findIndex(isValorIcms);
+  const descontoIdx = headers.findIndex(isDesconto);
+  const modeloIdx = headers.findIndex(isModelo);
+
+  // Metadata extraction from pre-header lines
+  let detectedEmpresa = '';
+  let detectedPeriodo = '';
+  let detectedDataGeracao = '';
+
+  const preHeaderLimit = headerLineIdx >= 0 ? headerLineIdx : Math.min(lines.length, 10);
+  for (let i = 0; i < preHeaderLimit; i++) {
+    const l = lines[i];
+    const monthMatch = l.match(/(janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+(?:de\s+)?(\d{4})/i);
+    if (monthMatch && !detectedPeriodo) {
+      detectedPeriodo = `${monthMatch[1].charAt(0).toUpperCase() + monthMatch[1].slice(1).toLowerCase()} de ${monthMatch[2]}`;
+    }
+    const dateRangeMatch = l.match(/De:\s*(\d{2}\/\d{2}\/\d{4})\s*até:\s*(\d{2}\/\d{2}\/\d{4})/i);
+    if (dateRangeMatch && !detectedPeriodo) {
+      detectedPeriodo = `${dateRangeMatch[1]} a ${dateRangeMatch[2]}`;
+    }
+    if ((l.includes('LTDA') || l.includes('S.A') || l.includes('MEI') || l.toLowerCase().includes('empresa:') || l.toLowerCase().includes('emitente:')) && !detectedEmpresa) {
+      const cleanEmp = l.replace(/^(?:empresa|emitente):\s*/i, '').replace(/^[;,\s]+|[;,\s]+$/g, '').trim();
+      if (cleanEmp) detectedEmpresa = cleanEmp;
+    }
+    const genMatch = l.match(/Data:\s*(\d{2}\/\d{2}\/\d{4})/i);
+    if (genMatch && !detectedDataGeracao) {
+      detectedDataGeracao = genMatch[1];
+    }
+  }
+
+  const items: SigaReportItem[] = [];
+  const startRow = headerLineIdx >= 0 ? headerLineIdx + 1 : 0;
+
+  for (let i = startRow; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const lowerLine = line.toLowerCase();
+    if (
+      lowerLine.startsWith('total') ||
+      lowerLine.includes('total de notas') ||
+      lowerLine.includes('quantidade total') ||
+      lowerLine.includes('informações fiscais') ||
+      lowerLine.includes('informacoes fiscais')
+    ) {
+      continue;
+    }
+
+    const tokens = parseCsvLineTokens(line, delim);
+    if (tokens.length < 2) continue;
+
+    // 1. Chave de Acesso
+    let chaveToken = '';
+    if (chaveIdx >= 0 && tokens[chaveIdx]) {
+      const clean = tokens[chaveIdx].replace(/\D/g, '');
+      if (clean.length === 44) chaveToken = clean;
+    }
+    if (!chaveToken) {
+      const cand = tokens.find(t => t.replace(/\D/g, '').length === 44);
+      if (cand) chaveToken = cand.replace(/\D/g, '');
+    }
+
+    // 2. Chave de Acesso Decomposition (Standard 44-digit rule)
+    let modFromKey = '65';
+    let serieFromKey = '1';
+    let cnpjFromKey = '';
+    let nfFromKey = '';
+    let ufFromKey = 'CE';
+    let anoMesKey = '';
+
+    if (chaveToken && chaveToken.length === 44) {
+      const ufCode = chaveToken.substring(0, 2);
+      anoMesKey = chaveToken.substring(2, 6);
+      cnpjFromKey = formatCnpjCpfHelper(chaveToken.substring(6, 20));
+      modFromKey = chaveToken.substring(20, 22) || '65';
+      serieFromKey = chaveToken.substring(22, 25).replace(/^0+/, '') || '1';
+      nfFromKey = chaveToken.substring(25, 34).replace(/^0+/, '') || '';
+      if (UF_MAP[ufCode]) ufFromKey = UF_MAP[ufCode].sigla;
+    }
+
+    // 3. Modelo da Nota
+    let modeloVal = modFromKey;
+    if (modeloIdx >= 0 && tokens[modeloIdx]) {
+      modeloVal = tokens[modeloIdx].replace(/\D/g, '') || modFromKey;
+    }
+
+    // 4. Número da Nota Fiscal
+    let nfNum = '';
+    if (notaIdx >= 0 && tokens[notaIdx]) {
+      nfNum = tokens[notaIdx].replace(/\D/g, '').replace(/^0+/, '');
+    }
+    if (!nfNum || nfNum === '0') {
+      nfNum = nfFromKey;
+    }
+    if (!nfNum) {
+      const numCand = tokens.find((t, idx) => idx !== chaveIdx && idx !== dataIdx && /^\d{1,9}$/.test(t.trim()) && t.trim() !== '0');
+      if (numCand) nfNum = numCand.trim().replace(/^0+/, '');
+    }
+    if (!nfNum) continue;
+
+    // 5. Série
+    let serieVal = serieFromKey;
+    if (serieIdx >= 0 && tokens[serieIdx]) {
+      serieVal = tokens[serieIdx].replace(/\D/g, '').replace(/^0+/, '') || serieFromKey;
+    }
+
+    // 6. Data de Emissão
+    let dateVal = '';
+    if (dataIdx >= 0 && tokens[dataIdx]) {
+      const dMatch = tokens[dataIdx].match(/(\d{2})[/-](\d{2})[/-](\d{4})/);
+      if (dMatch) {
+        dateVal = `${dMatch[1]}/${dMatch[2]}/${dMatch[3]}`;
+      } else {
+        const isoMatch = tokens[dataIdx].match(/(\d{4})-(\d{2})-(\d{2})/);
+        if (isoMatch) dateVal = `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+      }
+    }
+    if (!dateVal) {
+      const dCand = tokens.find(t => /\b\d{2}[/-]\d{2}[/-]\d{4}\b/.test(t));
+      if (dCand) {
+        const m = dCand.match(/\b(\d{2})[/-](\d{2})[/-](\d{4})\b/);
+        if (m) dateVal = `${m[1]}/${m[2]}/${m[3]}`;
+      }
+    }
+    if (!dateVal && anoMesKey && anoMesKey.length === 4) {
+      dateVal = `01/${anoMesKey.substring(2, 4)}/20${anoMesKey.substring(0, 2)}`;
+    }
+    if (!dateVal) {
+      dateVal = new Date().toLocaleDateString('pt-BR');
+    }
+
+    // 7. Situação / Status
+    let situacao = 'AUTORIZADA';
+    let statusRaw = '';
+    if (situacaoIdx >= 0 && tokens[situacaoIdx]) {
+      statusRaw = tokens[situacaoIdx].toUpperCase();
+    } else {
+      const stCand = tokens.find(t => /AUTORIZADA|CANCELADA|INUTILIZADA|DENEGADA/i.test(t));
+      if (stCand) statusRaw = stCand.toUpperCase();
+    }
+    if (statusRaw.includes('CANCEL')) situacao = 'CANCELADA';
+    else if (statusRaw.includes('DENEG')) situacao = 'DENEGADA';
+    else if (statusRaw.includes('INUTIL')) situacao = 'INUTILIZADA';
+    else if (statusRaw.includes('AUTORIZ')) situacao = 'AUTORIZADA';
+    else if (statusRaw) situacao = statusRaw;
+
+    const isCanceled = situacao === 'CANCELADA';
+
+    // 8. Valor Total / Contábil
+    let rawVal = 0;
+    if (valorIdx >= 0 && tokens[valorIdx]) {
+      rawVal = parsePtBrFloatHelper(tokens[valorIdx]);
+    }
+    if (rawVal === 0) {
+      const cand = tokens.find((t, idx) => {
+        if (idx === chaveIdx || idx === notaIdx || idx === dataIdx || idx === situacaoIdx) return false;
+        if (/AUTORIZADA|CANCELADA|INUTILIZADA|DENEGADA/i.test(t)) return false;
+        if (/\d{2}\/\d{2}\/\d{4}/.test(t)) return false;
+        return /^-?\d{1,3}(\.\d{3})*,\d{2}$|^-?\d+,\d{2}$|^-?\d+\.\d{2}$/.test(t.trim());
+      });
+      if (cand) rawVal = parsePtBrFloatHelper(cand);
+    }
+    const finalVal = isCanceled ? 0 : rawVal;
+
+    // 9. CNPJ & Razão Social
+    let cnpjVal = cnpjFromKey;
+    if (cnpjEmitIdx >= 0 && tokens[cnpjEmitIdx]) {
+      const c = formatCnpjCpfHelper(tokens[cnpjEmitIdx]);
+      if (c) cnpjVal = c;
+    }
+    let nomeVal = '';
+    if (nomeEmitIdx >= 0 && tokens[nomeEmitIdx]) {
+      nomeVal = tokens[nomeEmitIdx].trim();
+    }
+    if (!detectedEmpresa && nomeVal) {
+      detectedEmpresa = nomeVal;
+    }
+
+    // 10. UF
+    let ufVal = ufFromKey;
+    if (ufIdx >= 0 && tokens[ufIdx] && /^[A-Za-z]{2}$/.test(tokens[ufIdx].trim())) {
+      ufVal = tokens[ufIdx].trim().toUpperCase();
+    }
+
+    // 11. CFOP
+    let cfopVal = '5102';
+    if (cfopIdx >= 0 && tokens[cfopIdx]) {
+      cfopVal = tokens[cfopIdx].trim();
+    }
+
+    // 12. ICMS Base & Valor
+    let baseIcms = finalVal;
+    if (baseIcmsIdx >= 0 && tokens[baseIcmsIdx]) {
+      baseIcms = isCanceled ? 0 : parsePtBrFloatHelper(tokens[baseIcmsIdx]);
+    }
+    let valorIcms = isCanceled ? 0 : Math.round(finalVal * 0.18 * 100) / 100;
+    if (valorIcmsIdx >= 0 && tokens[valorIcmsIdx]) {
+      valorIcms = isCanceled ? 0 : parsePtBrFloatHelper(tokens[valorIcmsIdx]);
+    }
+
+    // 13. Desconto
+    let descVal = 0;
+    if (descontoIdx >= 0 && tokens[descontoIdx]) {
+      descVal = parsePtBrFloatHelper(tokens[descontoIdx]);
+    }
+
+    const isNfceDoc = modeloVal === '65';
+
+    items.push({
+      id: `sai-nfce-${Math.random().toString(36).substring(2, 9)}`,
+      notaFiscal: nfNum,
+      modelo: modeloVal || '65',
+      serie: serieVal || '1',
+      data: dateVal,
+      vlrContabil: finalVal,
+      cnpj: isNfceDoc ? '' : (cnpjVal || '99.999.999/0001-99'),
+      razaoSocial: isNfceDoc ? '' : (nomeVal || 'CONSUMIDOR'),
+      uf: ufVal,
+      chaveDeAcesso: chaveToken || '',
+      situacaoNfe: situacao,
+      cfop: cfopVal,
+      codigoProduto: `NF-${nfNum}`,
+      nomeProduto: isCanceled ? 'VENDA NFC-E MODELO 65 [CANCELADA]' : 'VENDA NFC-E MODELO 65',
+      ncm: 'N/A',
+      un: 'UN',
+      qtde: 1,
+      rUnit: rawVal,
+      rProduto: finalVal,
+      desconto: descVal,
+      cst: isCanceled ? '900' : '000',
+      rBaseIcms: baseIcms,
+      pIcms: isCanceled ? 0 : 18,
+      rIcms: valorIcms,
+      pIpi: 0,
+      rIpi: 0,
+      tipoOperacao: 'SAIDA'
+    });
+  }
+
+  if (items.length === 0) return null;
+
+  if (!detectedPeriodo && items.length > 0) {
+    const dates = items.map(it => it.data).filter(Boolean);
+    if (dates.length > 0) {
+      const parts = dates[0].split('/');
+      if (parts.length === 3) {
+        detectedPeriodo = `${parts[1]}/${parts[2]}`;
+      }
+    }
+  }
+
+  return {
+    items,
+    metadata: {
+      empresa: detectedEmpresa || 'EMPRESA IDENTIFICADA NO RELATÓRIO NFC-E',
+      periodo: detectedPeriodo || 'Período Auditado',
+      dataGeracao: detectedDataGeracao || new Date().toLocaleDateString('pt-BR')
+    },
+    isValid: true
+  };
+}
+
+/**
  * Combined full report parser using dedicated readers for Entradas and Saídas.
  */
 export function parseSigaFullReport(text: string): {
@@ -2208,6 +2600,16 @@ export function parseSigaFullReport(text: string): {
   saidas: SigaReportItem[];
   metadata: SigaReportMetadata;
 } {
+  // If the uploaded file is an NFC-e CSV report (all items are outbound sales)
+  const nfceResult = parseSigaNfceCsv(text, 'SAIDA');
+  if (nfceResult && nfceResult.isValid && nfceResult.items.length > 0) {
+    return {
+      entradas: [],
+      saidas: nfceResult.items,
+      metadata: nfceResult.metadata
+    };
+  }
+
   const { items: entradas, metadata: metaEntradas } = parseSigaEntradas(text);
   const { items: saidas, metadata: metaSaidas } = parseSigaSaidas(text);
 
@@ -2237,6 +2639,13 @@ export function parseSigaChannelFile(
     return { items: [], metadata: { empresa: '', periodo: '', dataGeracao: '' }, isValid: false };
   }
 
+  // 1. Dynamic check for NFC-e / SEFAZ CSV reports
+  const nfceResult = parseSigaNfceCsv(text, forceType);
+  if (nfceResult && nfceResult.isValid && nfceResult.items.length > 0) {
+    return nfceResult;
+  }
+
+  // 2. Fallback to standard SIGA / TXT parsing
   const lines = text.split(/\r?\n/);
   const items: SigaReportItem[] = [];
   let empresa = '';

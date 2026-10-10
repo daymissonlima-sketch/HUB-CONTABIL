@@ -1588,6 +1588,12 @@ export function AuditoriaFiscalWorkspace() {
         updateDataLakeFilesList(file.name, file.size, 'erp', icmsResult.items?.length || text.split('\n').length - 1);
       }
       else if (
+        detectedReportType === 'SIGA' ||
+        file.name.toLowerCase().includes('nfc') ||
+        text.toLowerCase().includes('nfc-e') ||
+        text.toLowerCase().includes('nfce') ||
+        text.toLowerCase().includes('informações fiscais') ||
+        text.toLowerCase().includes('informacoes fiscais') ||
         text.toLowerCase().includes('notas fiscais de entrada') || 
         text.toLowerCase().includes('notas fiscais de saída') ||
         text.toLowerCase().includes('notas fiscais de saida') ||

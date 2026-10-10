@@ -34,7 +34,13 @@ export class SigaAuditAdapter implements IAuditStrategy {
     const lowerContent = content.toLowerCase();
     const lowerFilename = (filename || '').toLowerCase();
 
-    if (lowerFilename.includes('siga') || lowerFilename.includes('sefaz_siga')) {
+    if (
+      lowerFilename.includes('siga') || 
+      lowerFilename.includes('sefaz_siga') ||
+      lowerFilename.includes('nfc') ||
+      lowerFilename.includes('informações fiscais') ||
+      lowerFilename.includes('informacoes fiscais')
+    ) {
       return true;
     }
 
@@ -44,6 +50,10 @@ export class SigaAuditAdapter implements IAuditStrategy {
       lowerContent.includes('notas fiscais de saida') ||
       lowerContent.includes('sl distribuidora') ||
       lowerContent.includes('distribuidora de produtos alimenticio') ||
+      lowerContent.includes('nfc-e') ||
+      lowerContent.includes('nfce') ||
+      lowerContent.includes('informações fiscais') ||
+      lowerContent.includes('informacoes fiscais') ||
       (lowerContent.includes('cnpj') && lowerContent.includes('cfop') && lowerContent.includes('chave de acesso'))
     );
   }
