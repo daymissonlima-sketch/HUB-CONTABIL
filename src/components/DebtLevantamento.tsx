@@ -5,14 +5,12 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  FileText, 
   Plus, 
   Trash2, 
   Edit2, 
   Download, 
   Upload, 
   FileSpreadsheet, 
-  Briefcase, 
   Settings, 
   CheckCircle,
   FileCheck2,

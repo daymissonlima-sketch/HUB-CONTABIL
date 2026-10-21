@@ -140,7 +140,7 @@ export function splitProductCodeAndDesc(rawProduct: string | undefined | null): 
   if (!rawProduct) return { codigo: '', descricao: '' };
   const trimmed = rawProduct.trim();
 
-  // Match formats like: "11000 - ISQUEIRO CRICKET...", "11000 – ISQUEIRO...", "PROD_01 / ITEM..."
+  // Match formats like: "15.221 - DESC...", "11000 - ISQUEIRO CRICKET...", "11000 – ISQUEIRO...", "PROD_01 / ITEM..."
   const sepMatch = trimmed.match(/^([A-Za-z0-9_.\/]+)\s*[\-–—:\/]\s*(.+)$/);
   if (sepMatch && sepMatch[1] && sepMatch[2]) {
     return {
@@ -149,12 +149,20 @@ export function splitProductCodeAndDesc(rawProduct: string | undefined | null): 
     };
   }
 
-  // Match numeric code followed by space and description: "11000 ISQUEIRO..."
-  const numPrefixMatch = trimmed.match(/^(\d{1,12})\s+([^\d].*)$/);
+  // Match numeric or dotted code followed by space and description: "15.221 PRODUTO...", "11000 ISQUEIRO..."
+  const numPrefixMatch = trimmed.match(/^([A-Za-z0-9_.\/-]+)\s+([^\d].*)$/);
   if (numPrefixMatch && numPrefixMatch[1] && numPrefixMatch[2]) {
     return {
       codigo: numPrefixMatch[1].trim(),
       descricao: numPrefixMatch[2].trim()
+    };
+  }
+
+  // Match code only (e.g., "15.221")
+  if (/^[A-Za-z0-9_.\/-]{2,20}$/.test(trimmed) && /\d/.test(trimmed)) {
+    return {
+      codigo: trimmed,
+      descricao: trimmed
     };
   }
 

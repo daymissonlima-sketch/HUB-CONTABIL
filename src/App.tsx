@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { NfeXmlAuditor } from './components/NfeXmlAuditor';
@@ -14,7 +14,8 @@ import { AuditoriaFiscalWorkspace } from './components/AuditoriaFiscalWorkspace'
 import { Comunicados } from './components/Comunicados';
 import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
 import { ChaveSanitizer } from './components/ChaveSanitizer';
-import { FileSpreadsheet, Briefcase, Menu, Coins, Settings, Table, FileText, ShieldCheck, Sparkles } from 'lucide-react';
+import { CalculadoraWorkspace } from './components/CalculadoraWorkspace';
+import { FileSpreadsheet, Briefcase, Menu, Coins, Settings, Table, FileText, ShieldCheck, Sparkles, Calculator } from 'lucide-react';
 import { loadStoredCompanies } from './utils/companyStorage';
 
 // Synchronously ensure companies storage is reconciled with the official database
@@ -24,7 +25,7 @@ try {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'auditoria_fiscal' | 'xml_auditor' | 'debit_levantamento' | 'faturamento_gerador' | 'configuracoes_gerais' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
+    'auditoria_fiscal' | 'calculadora' | 'xml_auditor' | 'debit_levantamento' | 'faturamento_gerador' | 'configuracoes_gerais' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
   >('auditoria_fiscal');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
@@ -73,6 +74,20 @@ export default function App() {
               >
                 <Table className={`h-4.5 w-4.5 shrink-0 ${activeTab === 'auditoria_fiscal' ? 'text-[#04243b]' : 'text-[#e4b35e]'}`} />
                 <span className="hidden sm:inline md:inline">Auditoria Fiscal</span>
+              </button>
+
+              {/* Button: Calculadora Fiscal (DIFAL Ceará & Tributos) */}
+              <button
+                onClick={() => setActiveTab('calculadora')}
+                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
+                  activeTab === 'calculadora'
+                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
+                    : 'hover:bg-[#031d30] text-slate-300'
+                }`}
+                title="Módulo Calculadora de Tributos (Diferencial de Alíquota - DIFAL Ceará)"
+              >
+                <Calculator className={`h-4.5 w-4.5 shrink-0 ${activeTab === 'calculadora' ? 'text-[#04243b]' : 'text-[#e4b35e]'}`} />
+                <span className="hidden sm:inline md:inline">Calculadora</span>
               </button>
 
               {/* Button 1: XML Nfe Auditor (Existing module) */}
@@ -203,6 +218,8 @@ export default function App() {
 
           {activeTab === 'auditoria_fiscal' ? (
             <AuditoriaFiscalWorkspace />
+          ) : activeTab === 'calculadora' ? (
+            <CalculadoraWorkspace />
           ) : activeTab === 'xml_auditor' ? (
             <NfeXmlAuditor />
           ) : activeTab === 'debit_levantamento' ? (

@@ -28,8 +28,7 @@ import {
 import { DebtItem, DebtCategory, Company, DebtSimulationLink, DebtCustomGroup } from '../types_debits';
 import { 
   getSimulationResults, 
-  formatCurrency, 
-  SimulationCalculationResult 
+  formatCurrency 
 } from '../services/InstallmentService';
 import { sortDebtsByCompetencia } from '../utils/debtParser';
 import { getAdministrationOrgan } from './DebtLevantamento';

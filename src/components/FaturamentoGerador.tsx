@@ -22,15 +22,14 @@ import {
   UserCheck,
   Building2,
   Building,
-  Award,
-  User
+  Award
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import { Company, FaturamentoItem } from '../types_debits';
 import { loadStoredCompanies, saveStoredCompanies, COMPANIES_UPDATED_EVENT, getCleanDocument } from '../utils/companyStorage';
-import { getResolvedSocioAdmin, getAllCompanyPartners, updateCompanySocio, formatCpf, isFemalePartner, getSocioRoleTitle, ResolvedSocioAdmin } from '../utils/socioHelper';
+import { getResolvedSocioAdmin, getAllCompanyPartners, updateCompanySocio, formatCpf, isFemalePartner } from '../utils/socioHelper';
 import { convertPdfToCsvString } from '../utils/pdfToCsv';
 import { extractTextFromPdf } from '../utils/pdfExtractor';
 import { fetchCnpjSafe, parseCnpjResponseData, isCaepf, isValidCNPJ } from '../utils/cnpjHelper';

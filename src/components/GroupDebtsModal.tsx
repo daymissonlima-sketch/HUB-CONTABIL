@@ -14,9 +14,7 @@ import {
   Check, 
   AlertCircle, 
   Trash2, 
-  Calculator,
-  ShieldCheck,
-  TrendingUp
+  Calculator
 } from 'lucide-react';
 import { DebtItem, DebtCategory, DebtCustomGroup } from '../types_debits';
 import { formatCurrency } from '../services/InstallmentService';

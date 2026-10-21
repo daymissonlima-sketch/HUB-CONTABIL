@@ -14,56 +14,38 @@ import {
   Search, 
   RefreshCw, 
   FileText,
-  DollarSign,
-  Calendar,
   ShieldAlert,
   FileCheck2,
-  ArrowLeft,
-  ClipboardCheck,
   X,
   AlertCircle,
   Table,
   Database,
-  TrendingUp,
   Coins,
   Package,
-  Percent,
   Info,
-  Building2,
-  FileUp,
   ChevronLeft,
   ChevronRight,
-  Sparkles,
-  ClipboardType,
   ArrowUpRight,
   ArrowDownLeft,
   Combine,
   Trash2,
   ShieldCheck,
   Zap,
-  Layers,
   Sliders
 } from 'lucide-react';
 import { 
   executeDataAudit, 
   exportAuditExcel, 
-  parseSefazReport,
   AuditItem, 
   AuditSummary,
   InvoiceRow,
-  parseCurrencySafe,
   parseSefazReportAsync,
   parseErpReportAsync,
   executeDataAuditAsync,
-  SigaReportItem,
-  SigaReportMetadata,
-  parseSigaEntradas,
-  parseSigaSaidas,
   parseSigaFullReport,
   parseSigaChannelFile,
   identifySigaDuplicates,
   exportSigaAuditExcel,
-  getSigaDeduplicationKey,
   formatCnpjCpf,
   splitProductCodeAndDesc
 } from '../utils/auditHelper';
@@ -71,7 +53,6 @@ import {
   PisCofinsItem,
   PisCofinsMetadata,
   PisCofinsConsolidatedItem,
-  parsePisCofinsReport,
   parsePisCofinsReportAsync,
   consolidatePisCofinsRows,
   exportPisCofinsExcel,
@@ -80,7 +61,6 @@ import {
 } from '../utils/pisCofinsHelper';
 import { SAMPLE_RAW_REPORT } from '../data/sampleReport';
 import { AuditService } from '../modules/audit/AuditService';
-import { ReportType, AuditExecutionResult } from '../modules/audit/types/AuditTypes';
 import { ErpIcmsReportItem } from '../modules/audit/erpIcms/ErpIcmsProcessor';
 
 // Interface structures
@@ -516,8 +496,88 @@ export function AuditoriaFiscalWorkspace() {
   const [icmsCurrentPage, setIcmsCurrentPage] = useState<number>(1);
   const icmsItemsPerPage = 20;
 
+  // Seleção de Produto(s) para Geração do Relatório ICMS (Módulo 2)
+  const [selectedIcmsProductKeys, setSelectedIcmsProductKeys] = useState<string[]>([]);
+  const [isIcmsProductSelectorOpen, setIsIcmsProductSelectorOpen] = useState<boolean>(false);
+  const [icmsProductSearchQuery, setIcmsProductSearchQuery] = useState<string>('');
+
+  const getProductKeyFromItem = (item: ErpIcmsReportItem): string => {
+    const { codigo: splitCod, descricao: splitDesc } = splitProductCodeAndDesc(item.produto);
+    const cod = (item.codigoProduto || splitCod || '').trim();
+    const desc = (item.descricaoProduto || splitDesc || item.produto || '').trim();
+    return cod ? `COD:${cod}` : `DESC:${desc}`;
+  };
+
+  const availableIcmsProducts = useMemo(() => {
+    if (!erpIcmsItems || erpIcmsItems.length === 0) return [];
+    const map = new Map<string, {
+      key: string;
+      codigo: string;
+      descricao: string;
+      displayName: string;
+      totalItens: number;
+      totalValor: number;
+    }>();
+
+    erpIcmsItems.forEach(item => {
+      const { codigo: splitCod, descricao: splitDesc } = splitProductCodeAndDesc(item.produto);
+      const cod = (item.codigoProduto || splitCod || '').trim();
+      const desc = (item.descricaoProduto || splitDesc || item.produto || '').trim();
+      const key = cod ? `COD:${cod}` : `DESC:${desc}`;
+
+      const existing = map.get(key);
+      if (!existing) {
+        const displayName = cod && desc && !desc.startsWith(cod) ? `${cod} - ${desc}` : (desc || cod || 'Produto sem identificação');
+        map.set(key, {
+          key,
+          codigo: cod,
+          descricao: desc,
+          displayName,
+          totalItens: 1,
+          totalValor: item.valorContabil || 0
+        });
+      } else {
+        existing.totalItens += 1;
+        existing.totalValor += (item.valorContabil || 0);
+        if (!existing.descricao && desc) {
+          existing.descricao = desc;
+          existing.displayName = cod && desc && !desc.startsWith(cod) ? `${cod} - ${desc}` : desc;
+        }
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.codigo && b.codigo) {
+        return a.codigo.localeCompare(b.codigo, 'pt-BR', { numeric: true });
+      }
+      return a.displayName.localeCompare(b.displayName, 'pt-BR', { sensitivity: 'base' });
+    });
+  }, [erpIcmsItems]);
+
+  const filteredProductOptions = useMemo(() => {
+    const query = icmsProductSearchQuery.toLowerCase().trim();
+    if (!query) return availableIcmsProducts;
+    return availableIcmsProducts.filter(p => 
+      (p.codigo && p.codigo.toLowerCase().includes(query)) ||
+      (p.descricao && p.descricao.toLowerCase().includes(query)) ||
+      (p.displayName && p.displayName.toLowerCase().includes(query))
+    );
+  }, [availableIcmsProducts, icmsProductSearchQuery]);
+
+  // Itens efetivos considerados para geração do relatório ICMS (filtrados pelos produtos selecionados ou todos)
+  const effectiveIcmsItems = useMemo(() => {
+    if (selectedIcmsProductKeys.length === 0) {
+      return erpIcmsItems;
+    }
+    const keySet = new Set(selectedIcmsProductKeys);
+    return erpIcmsItems.filter(item => {
+      const key = getProductKeyFromItem(item);
+      return keySet.has(key);
+    });
+  }, [erpIcmsItems, selectedIcmsProductKeys]);
+
   const icmsEntradasCompleto = useMemo(() => {
-    return erpIcmsItems
+    return effectiveIcmsItems
       .filter(i => 
         i.tipoOperacao === 'ENTRADA' || 
         (i.cfop && (i.cfop.startsWith('1') || i.cfop.startsWith('2') || i.cfop.startsWith('3')))
@@ -528,10 +588,10 @@ export function AuditoriaFiscalWorkspace() {
         const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
         return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
       });
-  }, [erpIcmsItems]);
+  }, [effectiveIcmsItems]);
 
   const icmsSaidasCompleto = useMemo(() => {
-    return erpIcmsItems
+    return effectiveIcmsItems
       .filter(i => 
         i.tipoOperacao === 'SAIDA' || 
         (i.cfop && (i.cfop.startsWith('5') || i.cfop.startsWith('6') || i.cfop.startsWith('7')))
@@ -542,7 +602,7 @@ export function AuditoriaFiscalWorkspace() {
         const descB = b.descricaoProduto || splitProductCodeAndDesc(b.produto).descricao || b.produto || '';
         return descA.localeCompare(descB, 'pt-BR', { sensitivity: 'base' });
       });
-  }, [erpIcmsItems]);
+  }, [effectiveIcmsItems]);
 
   const activeFilteredIcmsList = useMemo(() => {
     const term = icmsSearchTerm.toLowerCase().trim();
@@ -2050,6 +2110,17 @@ export function AuditoriaFiscalWorkspace() {
         const vlrIcmsDeclared = isDivergent ? baseCalc * (aliq / 100) - 50.00 : baseCalc * (aliq / 100);
         const vlrIcmsRecalc = baseCalc * (aliq / 100);
 
+        const sampleCodes = ['15.221', '15.222', '10.104', '15.221', '22.090'];
+        const sampleDescs = [
+          'BEBIDA ISOTÔNICA CITRUS 500ML',
+          'REFRIGERANTE COLA 2L',
+          'BISCOITO CREAM CRACKER 400G',
+          'BEBIDA ISOTÔNICA CITRUS 500ML',
+          'AZEITE DE OLIVA EXTRA VIRGEM 500ML'
+        ];
+        const sCode = sampleCodes[idx % sampleCodes.length];
+        const sDesc = sampleDescs[idx % sampleDescs.length];
+
         return {
           id: `sample-icms-${idx}`,
           tipoOperacao: 'SAIDA',
@@ -2061,7 +2132,9 @@ export function AuditoriaFiscalWorkspace() {
           razaoSocialEmitente: 'SL DISTRIBUIDORA DE PRODUTOS ALIMENTICIO',
           uf: 'SP',
           cfop: '5.102',
-          produto: `PRODUTO ALIMENTÍCIO EXEMPLO ITEM ${idx + 1}`,
+          codigoProduto: sCode,
+          descricaoProduto: sDesc,
+          produto: `${sCode} - ${sDesc}`,
           ncm: '21069090',
           unidade: 'UN',
           quantidade: 10 + idx,
@@ -2111,6 +2184,9 @@ export function AuditoriaFiscalWorkspace() {
     setPisCofinsRows([]);
     setPisCofinsMetadata(null);
     setErpIcmsItems([]);
+    setSelectedIcmsProductKeys([]);
+    setIsIcmsProductSelectorOpen(false);
+    setIcmsProductSearchQuery('');
   };
 
   // --------------------------------------------------------
@@ -2588,11 +2664,17 @@ export function AuditoriaFiscalWorkspace() {
   const exportFormattedIcmsExcel = (itemsToExport: ErpIcmsReportItem[]) => {
     const list = itemsToExport && itemsToExport.length > 0 
       ? itemsToExport 
-      : generateIcmsItemsFromSefaz(sefazRows);
+      : (effectiveIcmsItems.length > 0 ? effectiveIcmsItems : generateIcmsItemsFromSefaz(sefazRows));
 
     if (!list || list.length === 0) return;
 
     const wb = XLSX.utils.book_new();
+
+    const productSubtitle = selectedIcmsProductKeys.length === 1
+      ? ` - PRODUTO: ${availableIcmsProducts.find(p => p.key === selectedIcmsProductKeys[0])?.displayName || selectedIcmsProductKeys[0]}`
+      : selectedIcmsProductKeys.length > 1
+      ? ` - (${selectedIcmsProductKeys.length} PRODUTOS SELECIONADOS)`
+      : '';
 
     const styleHeaderTitle = {
       fill: { fgColor: { rgb: "04243B" } },
@@ -2635,7 +2717,7 @@ export function AuditoriaFiscalWorkspace() {
       ];
 
       ws['A1'] = { v: BRAND_CONFIG.COMPANY_NAME, s: styleHeaderTitle };
-      ws['A2'] = { v: `RELATÓRIO DE MOVIMENTAÇÃO DE ICMS POR PRODUTO - ${sheetTitle.toUpperCase()}`, s: styleHeaderSub };
+      ws['A2'] = { v: `RELATÓRIO DE MOVIMENTAÇÃO DE ICMS POR PRODUTO - ${sheetTitle.toUpperCase()}${productSubtitle}`, s: styleHeaderSub };
       ws['A3'] = { v: `EXPORTADO EM: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}`, s: styleHeaderSub };
 
       const headers = [
@@ -2724,7 +2806,7 @@ export function AuditoriaFiscalWorkspace() {
       ];
 
       ws['A1'] = { v: BRAND_CONFIG.COMPANY_NAME, s: styleHeaderTitle };
-      ws['A2'] = { v: `RESUMO DE ICMS POR PRODUTO, CFOP E CST - ${sheetTitle.toUpperCase()}`, s: styleHeaderSub };
+      ws['A2'] = { v: `RESUMO DE ICMS POR PRODUTO, CFOP E CST - ${sheetTitle.toUpperCase()}${productSubtitle}`, s: styleHeaderSub };
       ws['A3'] = { v: `EXPORTADO EM: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}`, s: styleHeaderSub };
 
       const headers = [
@@ -2820,8 +2902,15 @@ export function AuditoriaFiscalWorkspace() {
     XLSX.utils.book_append_sheet(wb, createCompletoSheet('Saídas Completo', saidas), 'Saídas completo');
     // 4. Saídas resumo
     XLSX.utils.book_append_sheet(wb, createResumoSheet('Saídas Resumo', saidas), 'Saídas resumo');
-
-    XLSX.writeFile(wb, `Relatorio_ICMS_4_Abas_${Date.now()}.xlsx`);
+    let excelFileName = `Relatorio_ICMS_4_Abas_${Date.now()}.xlsx`;
+    if (selectedIcmsProductKeys.length === 1) {
+      const singleProd = availableIcmsProducts.find(p => p.key === selectedIcmsProductKeys[0]);
+      const safeCodeOrDesc = (singleProd?.codigo || singleProd?.descricao || 'Produto').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30);
+      excelFileName = `Relatorio_ICMS_Produto_${safeCodeOrDesc}_${Date.now()}.xlsx`;
+    } else if (selectedIcmsProductKeys.length > 1) {
+      excelFileName = `Relatorio_ICMS_${selectedIcmsProductKeys.length}_Produtos_${Date.now()}.xlsx`;
+    }
+    XLSX.writeFile(wb, excelFileName);
   };
 
   const exportIcmsAuditExcel = (list: ErpIcmsReportItem[]) => {
@@ -3662,12 +3751,24 @@ export function AuditoriaFiscalWorkspace() {
                 <div className="flex items-center gap-2 shrink-0 justify-end">
                   {icmsMainTab === 'relatorio' ? (
                     <button
-                      onClick={() => exportFormattedIcmsExcel(erpIcmsItems)}
+                      onClick={() => exportFormattedIcmsExcel(effectiveIcmsItems)}
                       className="px-5 py-2.5 bg-[#e4b35e] hover:bg-[#d8a34a] text-[#04243b] font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-md hover:shadow-lg flex items-center gap-2 cursor-pointer"
-                      title="Exportar Relatório Formatado Excel"
+                      title={
+                        selectedIcmsProductKeys.length === 1
+                          ? `Exportar Relatório Excel exclusivo do produto selecionado`
+                          : selectedIcmsProductKeys.length > 1
+                          ? `Exportar Relatório Excel dos ${selectedIcmsProductKeys.length} produtos selecionados`
+                          : "Exportar Relatório Formatado Excel (Todos os Produtos)"
+                      }
                     >
                       <Download className="w-4 h-4" />
-                      <span>Exportar Relatório Excel</span>
+                      <span>
+                        {selectedIcmsProductKeys.length === 1
+                          ? `Exportar Excel (${availableIcmsProducts.find(p => p.key === selectedIcmsProductKeys[0])?.codigo || 'Produto'})`
+                          : selectedIcmsProductKeys.length > 1
+                          ? `Exportar Excel (${selectedIcmsProductKeys.length} Produtos)`
+                          : 'Exportar Relatório Excel'}
+                      </span>
                     </button>
                   ) : (
                     <button
@@ -3686,6 +3787,239 @@ export function AuditoriaFiscalWorkspace() {
               {/* VIEW 1: RELATÓRIO */}
               {erpIcmsItems.length > 0 && icmsMainTab === 'relatorio' && (
                 <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs space-y-4 p-4">
+                  {/* SELETOR DE PRODUTOS PARA GERAÇÃO DO RELATÓRIO */}
+                  <div className="bg-slate-50/90 rounded-2xl border border-slate-200 p-3.5 space-y-3">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-[#04243b] text-[#e4b35e] flex items-center justify-center shrink-0 shadow-2xs">
+                          <Package className="w-4.5 h-4.5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-xs font-black uppercase text-[#04243b] tracking-wider">
+                              Seleção de Produto para o Relatório
+                            </h4>
+                            <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${
+                              selectedIcmsProductKeys.length === 0
+                                ? 'bg-slate-200/80 text-slate-700 border-slate-300'
+                                : 'bg-[#e4b35e]/25 text-[#04243b] border-[#e4b35e]'
+                            }`}>
+                              {selectedIcmsProductKeys.length === 0
+                                ? `Todos os produtos (${availableIcmsProducts.length})`
+                                : `${selectedIcmsProductKeys.length} produto(s) selecionado(s)`}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5 font-sans">
+                            Filtre por um ou mais produtos para gerar o relatório (ex: produto 15.221).
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setIsIcmsProductSelectorOpen(prev => !prev)}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-2xs ${
+                            isIcmsProductSelectorOpen
+                              ? 'bg-[#04243b] text-[#e4b35e] ring-2 ring-[#e4b35e]/40'
+                              : selectedIcmsProductKeys.length > 0
+                              ? 'bg-[#04243b] text-white hover:bg-[#083454]'
+                              : 'bg-white hover:bg-slate-100 text-[#04243b] border border-slate-200'
+                          }`}
+                        >
+                          <Sliders className="w-3.5 h-3.5 text-[#e4b35e]" />
+                          <span>{selectedIcmsProductKeys.length === 0 ? 'Selecionar Produto(s)' : `Alterar Seleção (${selectedIcmsProductKeys.length})`}</span>
+                        </button>
+
+                        {selectedIcmsProductKeys.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedIcmsProductKeys([]);
+                              setIcmsCurrentPage(1);
+                            }}
+                            className="px-3 py-2 rounded-xl text-xs font-bold bg-white hover:bg-red-50 text-slate-600 hover:text-red-700 border border-slate-200 transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                            title="Gerar relatório com todos os produtos"
+                          >
+                            <X className="w-3.5 h-3.5 text-red-500" />
+                            <span>Gerar Todos</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Chips com os produtos selecionados ativos */}
+                    {selectedIcmsProductKeys.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-200/70">
+                        <span className="text-[11px] font-bold text-slate-500 mr-1">Produtos no relatório:</span>
+                        {selectedIcmsProductKeys.map(key => {
+                          const prod = availableIcmsProducts.find(p => p.key === key);
+                          return (
+                            <span
+                              key={key}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-100/90 text-[#04243b] border border-amber-300 text-[11px] font-bold shadow-2xs"
+                            >
+                              {prod?.codigo ? (
+                                <span className="font-mono bg-[#04243b] text-[#e4b35e] px-1.5 py-0.5 rounded text-[10px]">
+                                  {prod.codigo}
+                                </span>
+                              ) : null}
+                              <span className="max-w-[220px] truncate" title={prod?.displayName}>
+                                {prod?.descricao || prod?.displayName || key}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedIcmsProductKeys(prev => prev.filter(k => k !== key));
+                                  setIcmsCurrentPage(1);
+                                }}
+                                className="hover:text-red-600 rounded p-0.5 cursor-pointer"
+                                title="Remover este produto do relatório"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Dropdown Box interativo para seleção de produtos */}
+                    {isIcmsProductSelectorOpen && (
+                      <div className="mt-2 p-3.5 bg-white rounded-xl border border-slate-200 shadow-md space-y-3">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 pb-2 border-b border-slate-150">
+                          <div className="relative flex-grow">
+                            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input
+                              type="text"
+                              value={icmsProductSearchQuery}
+                              onChange={(e) => setIcmsProductSearchQuery(e.target.value)}
+                              placeholder="Pesquisar produto pelo código (ex.: 15.221) ou descrição..."
+                              className="w-full pl-9 pr-8 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-[#04243b]"
+                              autoFocus
+                            />
+                            {icmsProductSearchQuery && (
+                              <button
+                                type="button"
+                                onClick={() => setIcmsProductSearchQuery('')}
+                                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedIcmsProductKeys(availableIcmsProducts.map(p => p.key));
+                                setIcmsCurrentPage(1);
+                              }}
+                              className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                            >
+                              Selecionar Todos
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedIcmsProductKeys([]);
+                                setIcmsCurrentPage(1);
+                              }}
+                              className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                            >
+                              Desmarcar Todos
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Lista rolável de produtos disponíveis */}
+                        <div className="max-h-60 overflow-y-auto divide-y divide-slate-100 border border-slate-150 rounded-xl pr-1">
+                          {filteredProductOptions.length === 0 ? (
+                            <div className="p-6 text-center text-xs text-slate-400">
+                              Nenhum produto localizado para a busca "{icmsProductSearchQuery}".
+                            </div>
+                          ) : (
+                            filteredProductOptions.map(p => {
+                              const isSelected = selectedIcmsProductKeys.includes(p.key);
+                              return (
+                                <div
+                                  key={p.key}
+                                  onClick={() => {
+                                    setSelectedIcmsProductKeys(prev => 
+                                      prev.includes(p.key) ? prev.filter(k => k !== p.key) : [...prev, p.key]
+                                    );
+                                    setIcmsCurrentPage(1);
+                                  }}
+                                  className={`flex items-center justify-between p-2.5 hover:bg-slate-50 transition-colors cursor-pointer select-none ${
+                                    isSelected ? 'bg-amber-50/70' : ''
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => {}}
+                                      className="w-4 h-4 rounded text-[#04243b] focus:ring-[#04243b] cursor-pointer"
+                                    />
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        {p.codigo && (
+                                          <span className="font-mono font-bold text-[11px] bg-[#04243b] text-[#e4b35e] px-2 py-0.5 rounded">
+                                            {p.codigo}
+                                          </span>
+                                        )}
+                                        <span className="text-xs font-bold text-slate-800 truncate" title={p.displayName}>
+                                          {p.descricao || p.displayName}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 shrink-0 ml-3">
+                                    <span className="text-[10px] text-slate-500 font-mono">
+                                      {p.totalItens} {p.totalItens === 1 ? 'item' : 'itens'}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedIcmsProductKeys([p.key]);
+                                        setIsIcmsProductSelectorOpen(false);
+                                        setIcmsCurrentPage(1);
+                                      }}
+                                      className="px-2 py-1 text-[10px] font-black uppercase rounded bg-slate-100 hover:bg-[#e4b35e] hover:text-[#04243b] text-slate-700 transition-colors cursor-pointer border border-slate-200"
+                                      title={`Gerar relatório somente para o produto ${p.codigo || p.descricao}`}
+                                    >
+                                      Gerar Somente Este
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+
+                        {/* Barra inferior */}
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-2 border-t border-slate-150">
+                          <span className="text-[11px] text-slate-600 font-bold">
+                            {selectedIcmsProductKeys.length === 0
+                              ? 'Todos os produtos incluídos no relatório.'
+                              : `${selectedIcmsProductKeys.length} de ${availableIcmsProducts.length} produtos selecionados (${effectiveIcmsItems.length} registros).`}
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => setIsIcmsProductSelectorOpen(false)}
+                            className="w-full sm:w-auto px-4 py-1.5 bg-[#04243b] hover:bg-[#083454] text-[#e4b35e] text-xs font-black uppercase tracking-wider rounded-xl transition-all shadow-2xs cursor-pointer"
+                          >
+                            Confirmar & Gerar Relatório
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Sub-tabs selector for ICMS (Entradas / Saídas) */}
                   <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center gap-3 border-b border-slate-150 pb-3">
                     <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl">
@@ -3864,6 +4198,24 @@ export function AuditoriaFiscalWorkspace() {
                       </button>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* EMPTY STATE PARA RELATÓRIO ICMS */}
+              {erpIcmsItems.length === 0 && icmsMainTab === 'relatorio' && (
+                <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 text-center space-y-3">
+                  <FileSpreadsheet className="w-10 h-10 text-[#04243b] mx-auto opacity-30" />
+                  <h4 className="font-extrabold text-slate-800 text-sm">Nenhum Relatório ICMS Carregado</h4>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto font-sans">
+                    Importe um arquivo de movimentação ICMS do ERP (CSV/TXT) no painel acima para auditar, selecionar produtos e gerar os relatórios.
+                  </p>
+                  <button
+                    onClick={handleLoadSampleDatabase}
+                    className="px-4 py-1.5 bg-[#04243b] text-[#e4b35e] font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-xs hover:bg-[#083454] cursor-pointer inline-flex items-center gap-2"
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>Carregar Dados de Exemplo</span>
+                  </button>
                 </div>
               )}
 
@@ -5912,6 +6264,9 @@ export function AuditoriaFiscalWorkspace() {
                           setLoadedFiles([]);
                           setSefazRows([]);
                           setErpIcmsItems([]);
+                          setSelectedIcmsProductKeys([]);
+                          setIsIcmsProductSelectorOpen(false);
+                          setIcmsProductSearchQuery('');
                           setOrganizadorEntradas([]);
                           setOrganizadorSaidas([]);
                           setPisCofinsRows([]);
