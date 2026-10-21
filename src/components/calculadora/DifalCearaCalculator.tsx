@@ -562,7 +562,7 @@ export function DifalCearaCalculator() {
           </div>
 
           {/* Síntese Técnica */}
-          <div className="grid grid-cols-2 gap-3 pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
             <div className="bg-[#031d30] p-3 rounded-xl border border-white/10">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">
                 Base Ceará ("Por Dentro")
@@ -580,7 +580,32 @@ export function DifalCearaCalculator() {
                 {formatarMoeda(resultadoAtual.icmsDestinoTotal)}
               </span>
             </div>
+
+            <div className="bg-[#031d30] p-3 rounded-xl border border-white/10">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">
+                {resultadoAtual.isOrigemSemCredito ? 'Abatimento Inter. (NE 01/24)' : 'Crédito ICMS Origem'}
+              </span>
+              <span className="text-sm font-black text-[#e4b35e] mt-0.5 block font-mono">
+                {formatarMoeda(resultadoAtual.deducaoInterestadual)}
+              </span>
+            </div>
           </div>
+
+          {/* Aviso contextual quando origem for Simples Nacional / Isenta */}
+          {resultadoAtual.isOrigemSemCredito && resultadoAtual.valorOperacao > 0 && (
+            <div className="bg-[#031d30]/90 border border-[#e4b35e]/40 p-3 rounded-xl flex items-start gap-2.5 text-xs">
+              <Info className="h-4 w-4 text-[#e4b35e] shrink-0 mt-0.5" />
+              <div className="space-y-0.5 text-slate-200">
+                <span className="font-bold text-[#e4b35e] block">
+                  Origem Simples Nacional / Sem Crédito (Art. 3º, § 3º da NE SEFAZ-CE nº 01/2024 e nº 04/2024)
+                </span>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  Base Ceará calculada sem dedução na origem (<span className="font-mono text-white">{formatarMoeda(resultadoAtual.baseCalculoDestino)}</span>). 
+                  Foi deduzido o abatimento legal de <strong className="text-[#e4b35e] font-mono">{formatarMoeda(resultadoAtual.deducaoInterestadual)}</strong> ({formatarPercentual(resultadoAtual.item.aliquotaInter)} sobre o valor da operação).
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Botão para ver Memória Auditável */}
           <div className="pt-2">

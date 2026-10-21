@@ -75,10 +75,12 @@ export interface ResultadoDifalItem {
   item: ParametrosDifalItem;
   valorOperacao: number;          // Vr_ope
   baseCalculoOrigem: number;      // BC Origem
-  icmsOrigem: number;             // ICMS Origem (crédito)
+  icmsOrigem: number;             // ICMS Origem (crédito destacado)
   valorSemIcmsOrigem: number;     // Vr_ope - ICMS Origem
   baseCalculoDestino: number;     // BC Ceará ("por dentro")
   icmsDestinoTotal: number;       // ICMS apurado no Ceará
+  deducaoInterestadual: number;   // Dedução interestadual autorizada (Crédito ou Art. 3º, § 3º NE 01/24)
+  isOrigemSemCredito: boolean;    // Indica se remetente é Simples Nacional / Isento (crédito = 0)
   totalDifalGeral: number;        // Total do DIFAL a pagar
   difalSemFecop?: number;         // Compatibilidade (igual a totalDifalGeral)
   valorFecop?: number;            // 0
@@ -114,7 +116,9 @@ export function formatarPercentual(valor: number, casas: number = 2): string {
 
 /**
  * Motor de Cálculo do ICMS DIFAL do Ceará (Base Dupla "Por Dentro" - SEFAZ-CE)
- * Modelo simplificado, limpo e direto baseado nas regras oficiais da SEFAZ-CE
+ * Modelo em conformidade com a Norma de Execução SEFAZ-CE nº 01/2024 e nº 04/2024
+ * Contempla tanto operações normais com destaque de ICMS na origem quanto
+ * aquisições de empresas do Simples Nacional / isentas de destaque (Art. 3º, § 3º)
  */
 export function calcularDifalCeara(item: ParametrosDifalItem): ResultadoDifalItem {
   // 1. Valor da Operação (Vr_ope)
@@ -123,71 +127,135 @@ export function calcularDifalCeara(item: ParametrosDifalItem): ResultadoDifalIte
   const alqInter = Math.max(0, item.aliquotaInter || 0);
   const alqIntra = Math.max(0, item.aliquotaIntra || 20);
 
-  // 2. Base de Origem e ICMS Origem (Crédito)
+  // 2. Base de Origem e ICMS Origem (Crédito destacado na NF-e)
   const bcOrigem = vOpe;
   const icmsOrigem = (item.icmsOrigemManual !== undefined && item.icmsOrigemManual !== null)
     ? Math.max(0, item.icmsOrigemManual)
     : bcOrigem * (alqInter / 100);
 
+  // Identifica se a operação de origem não possui crédito destacado (ex: Simples Nacional / Isenta)
+  const isOrigemSemCredito = icmsOrigem === 0;
+
   // 3. Exclusão do ICMS Origem (Valor Líquido da Operação)
+  // Quando icmsOrigem é 0 (Simples Nacional), nada é excluído (Vr_sem_ICMS_origem = Vr_ope)
   const vSemIcmsOrigem = Math.max(0, vOpe - icmsOrigem);
 
   // 4. Base de Cálculo Destino no Ceará ("Por Dentro" - Art. 4º-A da NE SEFAZ-CE nº 01/2024)
   // BC_CE = (Vr_ope - ICMS_origem) / (1 - ALQ_intra)
   const divisor = Math.max(0.0001, 1 - (alqIntra / 100));
-  const bcDestino = vSemIcmsOrigem / divisor;
+  const bcDestino = vOpe > 0 ? vSemIcmsOrigem / divisor : 0;
 
   // 5. ICMS Destino Total
   // ICMS_destino = BC_CE * ALQ_intra
   const icmsDestinoTotal = bcDestino * (alqIntra / 100);
 
-  // 6. DIFAL a Recolher (Ceará)
-  // DIFAL = ICMS_destino - ICMS_origem
-  const totalDifalGeral = Math.max(0, icmsDestinoTotal - icmsOrigem);
+  // 6. Dedução Interestadual e Total DIFAL a Recolher (Ceará)
+  // Se ICMS Origem == 0 (Simples Nacional / Isento): Art. 3º, § 3º da NE SEFAZ-CE nº 01/2024
+  // expressamente autoriza deduzir o montante correspondente à alíquota interestadual
+  // sobre o valor da operação: Dedução = Vr_ope * ALQ_inter
+  // Se ICMS Origem > 0: Dedução = ICMS destacado na origem
+  const deducaoInterestadual = isOrigemSemCredito
+    ? vOpe * (alqInter / 100)
+    : icmsOrigem;
 
+  const totalDifalGeral = Math.max(0, icmsDestinoTotal - deducaoInterestadual);
   const aliquotaEfetivaCeara = vOpe > 0 ? (totalDifalGeral / vOpe) * 100 : 0;
 
-  const fundamentacao = 'Norma de Execução SEFAZ-CE nº 01/2024 e nº 04/2024 (Art. 3º e Art. 4º-A); Decreto Estadual nº 33.327/2019 (RICMS-CE); Lei Estadual nº 18.665/2023.';
+  const fundamentacao = isOrigemSemCredito
+    ? 'Norma de Execução SEFAZ-CE nº 01/2024 e nº 04/2024 (Art. 3º, § 3º - Simples Nacional e Art. 4º-A); Decreto Estadual nº 33.327/2019 (RICMS-CE); Lei Estadual nº 18.665/2023.'
+    : 'Norma de Execução SEFAZ-CE nº 01/2024 e nº 04/2024 (Art. 3º e Art. 4º-A); Decreto Estadual nº 33.327/2019 (RICMS-CE); Lei Estadual nº 18.665/2023.';
 
-  const passos: PassoMemoriaCalculo[] = [
-    {
-      titulo: 'Passo 1: Valor da Operação (Vr_ope)',
-      descricao: 'Valor total da operação interestadual de entrada no Ceará.',
-      formula: 'Vr_ope = Valor da Operação',
-      substituicao: `${formatarMoeda(vOpe)}`,
-      resultadoFormatado: formatarMoeda(vOpe)
-    },
-    {
-      titulo: 'Passo 2: ICMS de Origem (Crédito Dedutível)',
-      descricao: `Crédito fiscal destacado na origem (${formatarPercentual(alqInter)}).`,
-      formula: 'ICMS_origem = Vr_ope × Alíquota_Inter',
-      substituicao: (item.icmsOrigemManual !== undefined && item.icmsOrigemManual !== null)
-        ? `Informado/destacado: ${formatarMoeda(icmsOrigem)} (${formatarPercentual(alqInter)} de ${formatarMoeda(vOpe)})`
-        : `${formatarMoeda(vOpe)} × ${formatarPercentual(alqInter)} = ${formatarMoeda(icmsOrigem)}`,
-      resultadoFormatado: formatarMoeda(icmsOrigem)
-    },
-    {
-      titulo: 'Passo 3: Exclusão do ICMS Origem (Valor Líquido)',
-      descricao: 'Dedução do ICMS da origem do valor da operação para formação da base interna do Ceará.',
-      formula: 'Vr_sem_ICMS_origem = Vr_ope - ICMS_origem',
-      substituicao: `${formatarMoeda(vOpe)} - ${formatarMoeda(icmsOrigem)}`,
-      resultadoFormatado: formatarMoeda(vSemIcmsOrigem)
-    },
-    {
-      titulo: 'Passo 4: Base de Cálculo Destino no Ceará ("Por Dentro")',
-      descricao: 'Inclusão do imposto na sua própria base conforme Art. 4º-A da NE SEFAZ-CE nº 01/2024.',
-      formula: 'BC_CE = (Vr_ope - ICMS_origem) / (1 - ALQ_interna)',
-      substituicao: `${formatarMoeda(vSemIcmsOrigem)} / (1 - ${formatarPercentual(alqIntra)}) = ${formatarMoeda(vSemIcmsOrigem)} / ${divisor.toFixed(4).replace('.', ',')}`,
-      resultadoFormatado: formatarMoeda(bcDestino)
-    },
-    {
-      titulo: 'Passo 5: Apuração do ICMS DIFAL a Recolher',
-      descricao: 'Aplicação da alíquota interna sobre a Base Ceará deduzindo o crédito do ICMS de origem.',
-      formula: 'DIFAL = (BC_CE × ALQ_interna) - ICMS_origem',
-      substituicao: `(${formatarMoeda(bcDestino)} × ${formatarPercentual(alqIntra)}) - ${formatarMoeda(icmsOrigem)} = ${formatarMoeda(icmsDestinoTotal)} - ${formatarMoeda(icmsOrigem)}`,
-      resultadoFormatado: formatarMoeda(totalDifalGeral)
-    }
-  ];
+  const passos: PassoMemoriaCalculo[] = isOrigemSemCredito
+    ? [
+        {
+          titulo: 'Passo 1: Valor da Operação (Vr_ope)',
+          descricao: 'Valor total da operação interestadual de entrada no Ceará.',
+          formula: 'Vr_ope = Valor da Operação',
+          substituicao: `${formatarMoeda(vOpe)}`,
+          resultadoFormatado: formatarMoeda(vOpe)
+        },
+        {
+          titulo: 'Passo 2: ICMS Destacado na Origem (Simples Nacional / Isento)',
+          descricao: 'Operação sem crédito fiscal destacado na origem pelo remetente.',
+          formula: 'ICMS_origem = R$ 0,00',
+          substituicao: 'NF-e emitida por optante do Simples Nacional ou sem destaque de ICMS na origem (R$ 0,00)',
+          resultadoFormatado: formatarMoeda(0)
+        },
+        {
+          titulo: 'Passo 3: Base Líquida de Entrada (Sem Exclusão de ICMS)',
+          descricao: 'Como não houve ICMS destacado na origem, a base líquida coincide integralmente com o valor da operação.',
+          formula: 'Vr_sem_ICMS = Vr_ope - 0,00 = Vr_ope',
+          substituicao: `${formatarMoeda(vOpe)} - R$ 0,00 = ${formatarMoeda(vSemIcmsOrigem)}`,
+          resultadoFormatado: formatarMoeda(vSemIcmsOrigem)
+        },
+        {
+          titulo: 'Passo 4: Base de Cálculo Destino no Ceará ("Por Dentro")',
+          descricao: 'Inclusão do imposto por dentro conforme Art. 4º-A da NE SEFAZ-CE nº 01/2024.',
+          formula: 'BC_CE = Vr_ope / (1 - ALQ_intra)',
+          substituicao: `${formatarMoeda(vOpe)} / (1 - ${formatarPercentual(alqIntra)}) = ${formatarMoeda(vOpe)} / ${divisor.toFixed(4).replace('.', ',')}`,
+          resultadoFormatado: formatarMoeda(bcDestino)
+        },
+        {
+          titulo: 'Passo 5: ICMS Destino Total Apurado no Ceará',
+          descricao: 'Aplicação da alíquota interna sobre a base recalculada "por dentro".',
+          formula: 'ICMS_destino = BC_CE × ALQ_intra',
+          substituicao: `${formatarMoeda(bcDestino)} × ${formatarPercentual(alqIntra)}`,
+          resultadoFormatado: formatarMoeda(icmsDestinoTotal)
+        },
+        {
+          titulo: 'Passo 6: Abatimento Interestadual Autorizado (Art. 3º, § 3º da NE 01/2024)',
+          descricao: `A SEFAZ-CE assegura a dedução da alíquota interestadual aplicável (${formatarPercentual(alqInter)}) sobre o valor da operação nas aquisições do Simples Nacional ou isentas na origem.`,
+          formula: 'Dedução_Interestadual = Vr_ope × ALQ_inter',
+          substituicao: `${formatarMoeda(vOpe)} × ${formatarPercentual(alqInter)}`,
+          resultadoFormatado: formatarMoeda(deducaoInterestadual)
+        },
+        {
+          titulo: 'Passo 7: ICMS DIFAL Líquido a Recolher',
+          descricao: 'Dedução da parcela interestadual autorizada do total apurado na alíquota interna.',
+          formula: 'DIFAL = ICMS_destino - Dedução_Interestadual',
+          substituicao: `${formatarMoeda(icmsDestinoTotal)} - ${formatarMoeda(deducaoInterestadual)}`,
+          resultadoFormatado: formatarMoeda(totalDifalGeral)
+        }
+      ]
+    : [
+        {
+          titulo: 'Passo 1: Valor da Operação (Vr_ope)',
+          descricao: 'Valor total da operação interestadual de entrada no Ceará.',
+          formula: 'Vr_ope = Valor da Operação',
+          substituicao: `${formatarMoeda(vOpe)}`,
+          resultadoFormatado: formatarMoeda(vOpe)
+        },
+        {
+          titulo: 'Passo 2: ICMS de Origem (Crédito Dedutível)',
+          descricao: `Crédito fiscal destacado na origem (${formatarPercentual(alqInter)}).`,
+          formula: 'ICMS_origem = Vr_ope × Alíquota_Inter',
+          substituicao: (item.icmsOrigemManual !== undefined && item.icmsOrigemManual !== null)
+            ? `Informado/destacado: ${formatarMoeda(icmsOrigem)} (${formatarPercentual(alqInter)} de ${formatarMoeda(vOpe)})`
+            : `${formatarMoeda(vOpe)} × ${formatarPercentual(alqInter)} = ${formatarMoeda(icmsOrigem)}`,
+          resultadoFormatado: formatarMoeda(icmsOrigem)
+        },
+        {
+          titulo: 'Passo 3: Exclusão do ICMS Origem (Valor Líquido)',
+          descricao: 'Dedução do ICMS da origem do valor da operação para formação da base interna do Ceará.',
+          formula: 'Vr_sem_ICMS_origem = Vr_ope - ICMS_origem',
+          substituicao: `${formatarMoeda(vOpe)} - ${formatarMoeda(icmsOrigem)}`,
+          resultadoFormatado: formatarMoeda(vSemIcmsOrigem)
+        },
+        {
+          titulo: 'Passo 4: Base de Cálculo Destino no Ceará ("Por Dentro")',
+          descricao: 'Inclusão do imposto na sua própria base conforme Art. 4º-A da NE SEFAZ-CE nº 01/2024.',
+          formula: 'BC_CE = (Vr_ope - ICMS_origem) / (1 - ALQ_interna)',
+          substituicao: `${formatarMoeda(vSemIcmsOrigem)} / (1 - ${formatarPercentual(alqIntra)}) = ${formatarMoeda(vSemIcmsOrigem)} / ${divisor.toFixed(4).replace('.', ',')}`,
+          resultadoFormatado: formatarMoeda(bcDestino)
+        },
+        {
+          titulo: 'Passo 5: Apuração do ICMS DIFAL a Recolher',
+          descricao: 'Aplicação da alíquota interna sobre a Base Ceará deduzindo o crédito do ICMS de origem.',
+          formula: 'DIFAL = (BC_CE × ALQ_interna) - ICMS_origem',
+          substituicao: `(${formatarMoeda(bcDestino)} × ${formatarPercentual(alqIntra)}) - ${formatarMoeda(icmsOrigem)} = ${formatarMoeda(icmsDestinoTotal)} - ${formatarMoeda(icmsOrigem)}`,
+          resultadoFormatado: formatarMoeda(totalDifalGeral)
+        }
+      ];
 
   return {
     item,
@@ -197,6 +265,8 @@ export function calcularDifalCeara(item: ParametrosDifalItem): ResultadoDifalIte
     valorSemIcmsOrigem: vSemIcmsOrigem,
     baseCalculoDestino: bcDestino,
     icmsDestinoTotal,
+    deducaoInterestadual,
+    isOrigemSemCredito,
     totalDifalGeral,
     difalSemFecop: totalDifalGeral,
     valorFecop: 0,

@@ -66,8 +66,8 @@ Legislação: ${res.fundamentacaoLegal}
 DADOS DA OPERAÇÃO:
 - Valor da Operação: ${formatarMoeda(res.valorOperacao)}
 - Alíquota Interestadual (Origem): ${formatarPercentual(res.item.aliquotaInter)}
-- ICMS de Origem (Crédito): ${formatarMoeda(res.icmsOrigem)}
-- Alíquota Interna Ceará: ${formatarPercentual(res.item.aliquotaIntra)}
+- ICMS de Origem (Destacado): ${formatarMoeda(res.icmsOrigem)}
+${res.isOrigemSemCredito ? `- Regime de Origem: Simples Nacional / Sem Crédito Destacado\n- Abatimento Interestadual Autorizado (Art. 3º, § 3º NE 01/24): ${formatarMoeda(res.deducaoInterestadual)}\n` : ''}- Alíquota Interna Ceará: ${formatarPercentual(res.item.aliquotaIntra)}
 
 PASSOS DA APURAÇÃO:
 ${res.memoriaPassos.map((p, idx) => `
@@ -247,7 +247,9 @@ Gerado pelo Sistema My Hub Moreira & Lima
                 Total Apurado a Recolher no Ceará
               </span>
               <p className="text-xs text-slate-300">
-                Carga tributária final após dedução do crédito da origem
+                {dadosModal.resultado.isOrigemSemCredito
+                  ? `Com abatimento legal de ${formatarMoeda(dadosModal.resultado.deducaoInterestadual)} (${formatarPercentual(dadosModal.resultado.item.aliquotaInter)} s/ operação)`
+                  : 'Carga tributária final após dedução do crédito da origem'}
               </p>
             </div>
             <div className="text-right">

@@ -98,7 +98,7 @@ export function exportarDifalParaExcel(resultadoLote: ResultadoDifalLote, nomeEm
     'UF Origem',
     'Vr. Operação',
     'Alq. Inter',
-    'ICMS Origem',
+    'Crédito / Abatimento',
     'Alq. CE',
     'BC Ceará (Por Dentro)',
     'ICMS Destino',
@@ -116,7 +116,7 @@ export function exportarDifalParaExcel(resultadoLote: ResultadoDifalLote, nomeEm
     writeCell(currentRow, 1, res.item.ufOrigem, 's', styleTdText);
     writeCell(currentRow, 2, res.valorOperacao, 'n', styleTdNum, 'R$ #,##0.00');
     writeCell(currentRow, 3, res.item.aliquotaInter / 100, 'n', styleTdNum, '0.00%');
-    writeCell(currentRow, 4, res.icmsOrigem, 'n', styleTdNum, 'R$ #,##0.00');
+    writeCell(currentRow, 4, res.deducaoInterestadual, 'n', styleTdNum, 'R$ #,##0.00');
     writeCell(currentRow, 5, res.item.aliquotaIntra / 100, 'n', styleTdNum, '0.00%');
     writeCell(currentRow, 6, res.baseCalculoDestino, 'n', styleTdNum, 'R$ #,##0.00');
     writeCell(currentRow, 7, res.icmsDestinoTotal, 'n', styleTdNum, 'R$ #,##0.00');
@@ -125,11 +125,12 @@ export function exportarDifalParaExcel(resultadoLote: ResultadoDifalLote, nomeEm
   });
 
   // 5. LINHA DE TOTAIS
+  const totalDeducoes = resultadoLote.itens.reduce((acc, r) => acc + (r.deducaoInterestadual ?? r.icmsOrigem), 0);
   writeCell(currentRow, 0, 'TOTAIS CONSOLIDADOS', 's', { ...styleTotal, alignment: { horizontal: 'left' } });
   writeCell(currentRow, 1, '', 's', styleTotal);
   writeCell(currentRow, 2, resultadoLote.totalOperacao, 'n', styleTotal, 'R$ #,##0.00');
   writeCell(currentRow, 3, '', 's', styleTotal);
-  writeCell(currentRow, 4, resultadoLote.totalIcmsOrigem, 'n', styleTotal, 'R$ #,##0.00');
+  writeCell(currentRow, 4, totalDeducoes, 'n', styleTotal, 'R$ #,##0.00');
   writeCell(currentRow, 5, '', 's', styleTotal);
   writeCell(currentRow, 6, resultadoLote.totalBaseCalculoDestino, 'n', styleTotal, 'R$ #,##0.00');
   writeCell(currentRow, 7, resultadoLote.totalIcmsDestino, 'n', styleTotal, 'R$ #,##0.00');
