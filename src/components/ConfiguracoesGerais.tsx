@@ -52,8 +52,8 @@ const DEFAULT_NEW_COMPANY: Omit<Company, 'id' | 'createdAt'> = {
   razaoSocial: '',
   cnpj: '',
   regimeTributario: 'LUCRO_REAL',
-  vendaVistaPercent: 10,
-  vendaPrazoPercent: 90,
+  vendaVistaPercent: 100,
+  vendaPrazoPercent: 0,
   endereco: '',
   cidade: 'Fortaleza (CE)',
   cep: '',
@@ -252,7 +252,7 @@ export function ConfiguracoesGerais() {
   };
 
   const handleQuickSetPercent = (companyId: string, vistaVal: number) => {
-    const safeVista = Math.min(100, Math.max(0, isNaN(vistaVal) ? 10 : vistaVal));
+    const safeVista = Math.min(100, Math.max(0, isNaN(vistaVal) ? 100 : vistaVal));
     const safePrazo = 100 - safeVista;
     const updated = updateCompanyFaturamentoPercent(companyId, safeVista);
     setCompanies(updated);
@@ -262,7 +262,7 @@ export function ConfiguracoesGerais() {
   const handleBackToList = () => {
     if (editingCompanyId && newCompany.razaoSocial && newCompany.cnpj) {
       const original = companies.find(c => c.id === editingCompanyId);
-      const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 10 : Number(newCompany.vendaVistaPercent)));
+      const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 100 : Number(newCompany.vendaVistaPercent)));
       const safePrazo = 100 - safeVista;
 
       if (!original || original.vendaVistaPercent !== safeVista || original.vendaPrazoPercent !== safePrazo) {
@@ -332,7 +332,10 @@ export function ConfiguracoesGerais() {
         opcaoMei: parsed.opcaoMei,
         inscEst: parsed.inscEst || prev.inscEst,
         situacaoInscEst: parsed.situacaoInscEst,
-        inscMun: parsed.inscMun || prev.inscMun
+        inscMun: parsed.inscMun || prev.inscMun,
+        // Regra 1: Não permitir alterar esse percentual automaticamente via consulta do Simples Nacional / RFB
+        vendaVistaPercent: prev.vendaVistaPercent,
+        vendaPrazoPercent: prev.vendaPrazoPercent
       }));
 
       showNotification("Dados do CNPJ importados com todos os campos complementares preenchidos!");
@@ -429,7 +432,10 @@ export function ConfiguracoesGerais() {
             opcaoMei: parsed.opcaoMei ?? company.opcaoMei,
             inscEst: parsed.inscEst || company.inscEst,
             situacaoInscEst: parsed.situacaoInscEst || company.situacaoInscEst,
-            inscMun: parsed.inscMun || company.inscMun
+            inscMun: parsed.inscMun || company.inscMun,
+            // Regra 1: Não permitir alterar esse percentual automaticamente via consulta do Simples Nacional / RFB
+            vendaVistaPercent: company.vendaVistaPercent,
+            vendaPrazoPercent: company.vendaPrazoPercent
           };
           successCount++;
           setBatchItemsStatus(prev => prev.map(item => 
@@ -473,7 +479,7 @@ export function ConfiguracoesGerais() {
       return;
     }
 
-    const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 10 : Number(newCompany.vendaVistaPercent)));
+    const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 100 : Number(newCompany.vendaVistaPercent)));
     const safePrazo = 100 - safeVista;
 
     const cleanCnpj = getCleanDocument(newCompany.cnpj);

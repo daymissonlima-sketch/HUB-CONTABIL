@@ -122,7 +122,10 @@ export const OpcaoSimplesNacional: React.FC = () => {
             dataExclusaoSimples: parsed.dataExclusaoSimples,
             motivoExclusaoSimples: parsed.motivoExclusaoSimples || (parsed.dataExclusaoSimples ? 'Ato Administrativo / Desenquadramento RFB' : ''),
             opcaoMei: parsed.opcaoMei,
-            situacaoCadastral: parsed.situacaoCadastral || c.situacaoCadastral
+            situacaoCadastral: parsed.situacaoCadastral || c.situacaoCadastral,
+            // Regra 1: Não permitir alterar esse percentual automaticamente via consulta do Simples Nacional
+            vendaVistaPercent: c.vendaVistaPercent,
+            vendaPrazoPercent: c.vendaPrazoPercent
           };
         }
         return c;
@@ -200,7 +203,10 @@ export const OpcaoSimplesNacional: React.FC = () => {
             dataExclusaoSimples: parsed.dataExclusaoSimples || company.dataExclusaoSimples,
             motivoExclusaoSimples: parsed.motivoExclusaoSimples || company.motivoExclusaoSimples || (parsed.dataExclusaoSimples ? 'Ato Administrativo / Desenquadramento RFB' : ''),
             opcaoMei: parsed.opcaoMei ?? company.opcaoMei,
-            situacaoCadastral: parsed.situacaoCadastral || company.situacaoCadastral
+            situacaoCadastral: parsed.situacaoCadastral || company.situacaoCadastral,
+            // Regra 1: Não permitir alterar esse percentual automaticamente via consulta do Simples Nacional
+            vendaVistaPercent: company.vendaVistaPercent,
+            vendaPrazoPercent: company.vendaPrazoPercent
           };
           successCount++;
           const msg = parsed.opcaoSimples

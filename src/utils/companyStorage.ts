@@ -3,6 +3,8 @@ import importedCompaniesJson from '../data/imported_companies.json';
 
 export const COMPANIES_STORAGE_KEY = 'moreira_lima_companies';
 export const COMPANIES_UPDATED_EVENT = 'moreira_lima_companies_updated';
+export const COMPANIES_MIGRATION_VERSION_KEY = 'moreira_lima_faturamento_version';
+export const CURRENT_FATURAMENTO_VERSION = 'v2_default_100_vista';
 
 export function getCleanDocument(doc: string | undefined | null): string {
   return (doc || '').replace(/\D/g, '');
@@ -13,42 +15,74 @@ export function isBlacklistedCompany(_company?: { razaoSocial?: string; cnpj?: s
 }
 
 /**
- * Identifica empresas cujo padrão é 100% à vista e 0% a prazo
- * (Ex: MARAPONGA POINT, NG SERVIÇOS e JL CONSULTA MEDICA)
+ * Relação oficial das 11 empresas com percentuais de faturamento excepcionais preservados:
+ * - 10% à Vista / 90% a Prazo:
+ *   - 10.599.113/0001-09: AR DISTRIBUIDORA DE PRODUTOS ALIMENTICIOS LTDA
+ *   - 09.662.119/0001-02: CEARA DISTRIBUIDORA DE PRODUTOS ALIMENTICIOS LTDA
+ *   - 09.662.119/0004-47: CEARA DISTRIBUIDORA DE PRODUTOS ALIMENTICIOS LTDA
+ *   - 08.470.032/0005-96: MENDES E PARENTE LTDA
+ *   - 08.470.032/0008-39: MENDES E PARENTE LTDA
+ *   - 08.470.032/0001-62: MENDES E PARENTE LTDA ME
+ *   - 36.647.797/0001-60: MENDES E PARENTE REPRESENTACAO COMERCIAL LTDA
+ *   - 14.488.773/0001-73: MENDES PARENTE CONSULTORIA EMPRESARIAL LTDA
+ * - 40% à Vista / 60% a Prazo:
+ *   - 07.368.386/0003-08: SL DISTRIBUIDORA DE PRODUTOS ALIMENTICIOS LTDA
+ *   - 07.368.386/0001-38: SL DISTRIBUIDORA DE PRODUTOS ALIMENTICIOS LTDA
+ * - 100% à Vista / 0% a Prazo:
+ *   - 09.447.072/0001-56: SERSIL EMPREENDIMENTOS IMOBILIARIOS LTDA
+ * 
+ * Todas as DEMAIS empresas do sistema possuem como padrão 100% à Vista e 0% a Prazo.
  */
-export function is100PercentVistaCompany(cleanDoc: string, name?: string): boolean {
-  const n = (name || '').toUpperCase();
-  return (
-    cleanDoc === '15760237000148' || // MARAPONGA POINT COMERCIO DE ALIMENTOS LTDA
-    cleanDoc === '24986737000193' || // NG SERVICOS DE APOIO ADMINISTRATIVO LTDA
-    cleanDoc === '40595095000158' || // JL CONSULTA MEDICA LTDA
-    n.includes('MARAPONGA POINT') ||
-    n.includes('NG SERVICOS') ||
-    n.includes('NG SERVIÇOS') ||
-    n.includes('JL CONSULTA MEDICA')
-  );
+export const CNPJ_EXCEPTIONS_FATURAMENTO: Record<string, { vista: number; prazo: number; razao: string }> = {
+  '10599113000109': { vista: 10, prazo: 90, razao: 'AR DISTRIBUIDORA DE PRODUTOS ALIMENTICIOS LTDA' },
+  '09662119000102': { vista: 10, prazo: 90, razao: 'CEARA DISTRIBUIDORA DE PRODUTOS ALIMENTICIOS LTDA' },
+  '09662119000447': { vista: 10, prazo: 90, razao: 'CEARA DISTRIBUIDORA DE PRODUTOS ALIMENTICIOS LTDA' },
+  '08470032000596': { vista: 10, prazo: 90, razao: 'MENDES E PARENTE LTDA' },
+  '08470032000839': { vista: 10, prazo: 90, razao: 'MENDES E PARENTE LTDA' },
+  '08470032000162': { vista: 10, prazo: 90, razao: 'MENDES E PARENTE LTDA ME' },
+  '07368386000308': { vista: 40, prazo: 60, razao: 'SL DISTRIBUIDORA DE PRODUTOS ALIMENTICIOS LTDA' },
+  '07368386000138': { vista: 40, prazo: 60, razao: 'SL DISTRIBUIDORA DE PRODUTOS ALIMENTICIOS LTDA' },
+  '09447072000156': { vista: 100, prazo: 0, razao: 'SERSIL EMPREENDIMENTOS IMOBILIARIOS LTDA' },
+  '36647797000160': { vista: 10, prazo: 90, razao: 'MENDES E PARENTE REPRESENTACAO COMERCIAL LTDA' },
+  '14488773000173': { vista: 10, prazo: 90, razao: 'MENDES PARENTE CONSULTORIA EMPRESARIAL LTDA' },
+};
+
+export function isExceptionCompany(cleanDoc: string): boolean {
+  return Boolean(CNPJ_EXCEPTIONS_FATURAMENTO[cleanDoc]);
+}
+
+/**
+ * Retorna os percentuais padrão de faturamento de uma empresa:
+ * - 100% à vista e 0% a prazo para a regra geral;
+ * - Percentuais específicos preservados para as 11 empresas de exceção.
+ */
+export function getDefaultFaturamentoPercent(cleanDoc: string): { vista: number; prazo: number } {
+  const exception = CNPJ_EXCEPTIONS_FATURAMENTO[cleanDoc];
+  if (exception) {
+    return { vista: exception.vista, prazo: exception.prazo };
+  }
+  return { vista: 100, prazo: 0 };
+}
+
+/**
+ * Função de compatibilidade: por padrão, todas as empresas não excepcionadas são 100% à vista
+ */
+export function is100PercentVistaCompany(cleanDoc: string): boolean {
+  return !isExceptionCompany(cleanDoc);
 }
 
 /**
  * Carrega a lista consolidada e sincronizada de empresas.
- * Garante que a base do sistema em todas as ferramentas (Opção do Simples Nacional,
- * Configurações Gerais, Levantamento de Débitos, Gerador de Faturamento, etc.)
- * tenha estritamente as empresas da planilha oficial atualizada (imported_companies.json),
- * eliminando cadastros excluídos e incorporando novos, ao mesmo tempo em que preserva
- * dados enriquecidos (consultas de situação, histórico do Simples, regimes personalizados, etc.).
+ * Garante que a base do sistema em todas as ferramentas tenha estritamente as empresas
+ * da base oficial atualizada (imported_companies.json), aplicando o padrão 100% à vista
+ * e 0% a prazo para todas as empresas, exceto as 11 exceções especificadas pelo usuário.
  */
 export function loadStoredCompanies(): Company[] {
   const importedList = (importedCompaniesJson as unknown) as Company[];
   const stored = typeof window !== 'undefined' ? localStorage.getItem(COMPANIES_STORAGE_KEY) : null;
-
-  // Mapa de empresas oficiais da planilha indexadas pelo CNPJ limpo
-  const officialMap = new Map<string, Company>();
-  importedList.forEach(c => {
-    const clean = getCleanDocument(c.cnpj);
-    if (clean) {
-      officialMap.set(clean, c);
-    }
-  });
+  const migrationDone = typeof window !== 'undefined'
+    ? localStorage.getItem(COMPANIES_MIGRATION_VERSION_KEY) === CURRENT_FATURAMENTO_VERSION
+    : false;
 
   let reconciledCompanies: Company[] = [];
 
@@ -64,32 +98,30 @@ export function loadStoredCompanies(): Company[] {
         }
       });
 
-      // Itera estritamente sobre a base oficial da planilha:
-      // Remove qualquer empresa excluída da planilha e adiciona as novas
+      // Itera estritamente sobre a base oficial da planilha
       reconciledCompanies = importedList.map(official => {
         const clean = getCleanDocument(official.cnpj);
         const storedItem = parsedMap.get(clean);
 
-        // Define percentual padrão com base na regra de negócio
-        const isSpecial100 = is100PercentVistaCompany(clean, official.razaoSocial);
-        let resolvedVista = isSpecial100 ? 100 : (official.vendaVistaPercent ?? 10);
-        let resolvedPrazo = isSpecial100 ? 0 : (official.vendaPrazoPercent ?? 90);
+        // Percentual padrão conforme regras: 100% à vista / 0% a prazo, exceto para as 11 exceções
+        const defaultPercents = getDefaultFaturamentoPercent(clean);
+        let resolvedVista = defaultPercents.vista;
+        let resolvedPrazo = defaultPercents.prazo;
 
         if (storedItem) {
-          const hasStoredVista = storedItem.vendaVistaPercent !== undefined && storedItem.vendaVistaPercent !== null && !isNaN(Number(storedItem.vendaVistaPercent));
-          const hasStoredPrazo = storedItem.vendaPrazoPercent !== undefined && storedItem.vendaPrazoPercent !== null && !isNaN(Number(storedItem.vendaPrazoPercent));
+          if (!migrationDone) {
+            // Durante a migração da nova regra: todas as empresas assumem o novo padrão (100%/0%),
+            // exceto as 11 exceções preservadas exatamente com seus valores.
+            resolvedVista = defaultPercents.vista;
+            resolvedPrazo = defaultPercents.prazo;
+          } else {
+            // Após a migração, preserva alterações manuais realizadas pelo usuário
+            const hasStoredVista = storedItem.vendaVistaPercent !== undefined && storedItem.vendaVistaPercent !== null && !isNaN(Number(storedItem.vendaVistaPercent));
+            const hasStoredPrazo = storedItem.vendaPrazoPercent !== undefined && storedItem.vendaPrazoPercent !== null && !isNaN(Number(storedItem.vendaPrazoPercent));
 
-          if (hasStoredVista) {
-            const sVista = Math.min(100, Math.max(0, Number(storedItem.vendaVistaPercent)));
-            const sPrazo = hasStoredPrazo ? Math.min(100, Math.max(0, Number(storedItem.vendaPrazoPercent))) : (100 - sVista);
-
-            // Se for empresa de regra 100% (ex: JL CONSULTA MEDICA, MARAPONGA POINT, NG SERVIÇOS), assegura 100%/0%
-            if (isSpecial100) {
-              resolvedVista = 100;
-              resolvedPrazo = 0;
-            } else {
-              resolvedVista = sVista;
-              resolvedPrazo = sPrazo;
+            if (hasStoredVista) {
+              resolvedVista = Math.min(100, Math.max(0, Number(storedItem.vendaVistaPercent)));
+              resolvedPrazo = hasStoredPrazo ? Math.min(100, Math.max(0, Number(storedItem.vendaPrazoPercent))) : (100 - resolvedVista);
             }
           }
 
@@ -99,7 +131,6 @@ export function loadStoredCompanies(): Company[] {
             id: storedItem.id || official.id,
             razaoSocial: storedItem.razaoSocial || official.razaoSocial,
             cnpj: storedItem.cnpj || official.cnpj,
-            // Preserva dados enriquecidos pelo usuário ou pela API da Receita Federal
             regimeTributario: storedItem.regimeTributario || official.regimeTributario || 'SIMPLES_NACIONAL',
             vendaVistaPercent: resolvedVista,
             vendaPrazoPercent: resolvedPrazo,
@@ -156,7 +187,7 @@ export function loadStoredCompanies(): Company[] {
         };
       });
 
-      // Inclui empresas cadastradas manualmente que não estejam na planilha oficial
+      // Inclui empresas cadastradas manualmente pelo usuário
       const officialCleanSet = new Set(importedList.map(o => getCleanDocument(o.cnpj)).filter(Boolean));
       const customCompanies = parsed.filter(p => {
         if (!p || (!p.razaoSocial && !p.cnpj)) return false;
@@ -173,7 +204,28 @@ export function loadStoredCompanies(): Company[] {
         const key = getCleanDocument(c.cnpj) || c.id;
         if (key && !seenCustomKeys.has(key)) {
           seenCustomKeys.add(key);
-          reconciledCompanies.push(c);
+          const clean = getCleanDocument(c.cnpj);
+          const defaultPercents = getDefaultFaturamentoPercent(clean);
+          let resolvedVista = defaultPercents.vista;
+          let resolvedPrazo = defaultPercents.prazo;
+
+          if (!migrationDone) {
+            resolvedVista = defaultPercents.vista;
+            resolvedPrazo = defaultPercents.prazo;
+          } else {
+            const hasStoredVista = c.vendaVistaPercent !== undefined && c.vendaVistaPercent !== null && !isNaN(Number(c.vendaVistaPercent));
+            const hasStoredPrazo = c.vendaPrazoPercent !== undefined && c.vendaPrazoPercent !== null && !isNaN(Number(c.vendaPrazoPercent));
+            if (hasStoredVista) {
+              resolvedVista = Math.min(100, Math.max(0, Number(c.vendaVistaPercent)));
+              resolvedPrazo = hasStoredPrazo ? Math.min(100, Math.max(0, Number(c.vendaPrazoPercent))) : (100 - resolvedVista);
+            }
+          }
+
+          reconciledCompanies.push({
+            ...c,
+            vendaVistaPercent: resolvedVista,
+            vendaPrazoPercent: resolvedPrazo
+          });
         }
       });
     } catch (e) {
@@ -183,11 +235,11 @@ export function loadStoredCompanies(): Company[] {
   } else {
     reconciledCompanies = importedList.map(c => {
       const clean = getCleanDocument(c.cnpj);
-      const isSpecial100 = is100PercentVistaCompany(clean, c.razaoSocial);
+      const defaultPercents = getDefaultFaturamentoPercent(clean);
       return {
         ...c,
-        vendaVistaPercent: isSpecial100 ? 100 : (c.vendaVistaPercent ?? 10),
-        vendaPrazoPercent: isSpecial100 ? 0 : (c.vendaPrazoPercent ?? 90),
+        vendaVistaPercent: defaultPercents.vista,
+        vendaPrazoPercent: defaultPercents.prazo,
         opcaoSimples: c.opcaoSimples ?? (c.regimeTributario === 'SIMPLES_NACIONAL'),
         dataOpcaoSimples: c.dataOpcaoSimples || '',
         dataExclusaoSimples: c.dataExclusaoSimples || '',
@@ -202,10 +254,11 @@ export function loadStoredCompanies(): Company[] {
     .filter(c => c && (c.razaoSocial || c.cnpj))
     .sort((a, b) => (a.razaoSocial || '').localeCompare(b.razaoSocial || '', 'pt-BR', { sensitivity: 'base' }));
 
-  // Atualiza no localStorage para garantir consistência imediata
+  // Atualiza no localStorage para garantir persistência e marca a migração
   if (typeof window !== 'undefined') {
     try {
       localStorage.setItem(COMPANIES_STORAGE_KEY, JSON.stringify(cleanedList));
+      localStorage.setItem(COMPANIES_MIGRATION_VERSION_KEY, CURRENT_FATURAMENTO_VERSION);
     } catch (e) {
       console.error('Erro ao persistir base reconciliada:', e);
     }
@@ -257,12 +310,12 @@ export function saveStoredCompanies(list: Company[]): Company[] {
 }
 
 /**
- * Atualiza rapidamente o percentual de faturamento (à vista e a prazo) de uma empresa
+ * Atualiza manualmente o percentual de faturamento (à vista e a prazo) de uma empresa
  * e persiste imediatamente no localStorage, disparando o evento global de sincronização.
  */
 export function updateCompanyFaturamentoPercent(companyIdOrCnpj: string, vistaPercent: number): Company[] {
   const cleanTarget = getCleanDocument(companyIdOrCnpj);
-  const safeVista = Math.min(100, Math.max(0, isNaN(Number(vistaPercent)) ? 10 : Number(vistaPercent)));
+  const safeVista = Math.min(100, Math.max(0, isNaN(Number(vistaPercent)) ? 100 : Number(vistaPercent)));
   const safePrazo = 100 - safeVista;
 
   const currentList = loadStoredCompanies();
@@ -280,4 +333,3 @@ export function updateCompanyFaturamentoPercent(companyIdOrCnpj: string, vistaPe
 
   return saveStoredCompanies(updated);
 }
-

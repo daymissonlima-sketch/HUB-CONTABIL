@@ -158,8 +158,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     razaoSocial: '',
     cnpj: '',
     regimeTributario: 'LUCRO_REAL',
-    vendaVistaPercent: 10,
-    vendaPrazoPercent: 90,
+    vendaVistaPercent: 100,
+    vendaPrazoPercent: 0,
     endereco: '',
     cidade: 'Fortaleza (CE)',
     cep: '',
@@ -917,7 +917,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       return;
     }
 
-    const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 10 : Number(newCompany.vendaVistaPercent)));
+    const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 100 : Number(newCompany.vendaVistaPercent)));
     const safePrazo = 100 - safeVista;
 
     const cleanCnpj = getCleanDocument(newCompany.cnpj);
@@ -969,8 +969,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       razaoSocial: '',
       cnpj: '',
       regimeTributario: 'LUCRO_REAL',
-      vendaVistaPercent: 10,
-      vendaPrazoPercent: 90,
+      vendaVistaPercent: 100,
+      vendaPrazoPercent: 0,
       endereco: '',
       cidade: 'Fortaleza (CE)',
       cep: '',
@@ -1150,8 +1150,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
             razaoSocial: razaoSocial,
             cnpj: formatCNPJ(cleanCnpj),
             regimeTributario: regime,
-            vendaVistaPercent: parseFloat(parts[3]) || 10,
-            vendaPrazoPercent: parseFloat(parts[4]) || 90,
+            vendaVistaPercent: parseFloat(parts[3]) || 100,
+            vendaPrazoPercent: parts[4] !== undefined ? parseFloat(parts[4]) : 0,
             endereco: (parsed && parsed.enderecoFormatted) || parts[5] || '',
             cidade: (parsed && parsed.cidadeFormatted) || parts[6] || 'Fortaleza (CE)',
             cep: (parsed && parsed.cep) || parts[7] || '',
@@ -1184,8 +1184,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
             razaoSocial: parts[0] || 'Empresa Sem Nome',
             cnpj: formatCNPJ(cleanCnpj),
             regimeTributario: (parts[2] as any) || 'LUCRO_REAL',
-            vendaVistaPercent: parseFloat(parts[3]) || 10,
-            vendaPrazoPercent: parseFloat(parts[4]) || 90,
+            vendaVistaPercent: parseFloat(parts[3]) || 100,
+            vendaPrazoPercent: parts[4] !== undefined ? parseFloat(parts[4]) : 0,
             endereco: parts[5] || '',
             cidade: parts[6] || 'Fortaleza (CE)',
             cep: parts[7] || '',
@@ -1400,8 +1400,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
               razaoSocial: parsed.razaoSocial,
               cnpj: formatCNPJ(identifiedCnpj),
               regimeTributario: parsed.regime as any,
-              vendaVistaPercent: 10,
-              vendaPrazoPercent: 90,
+              vendaVistaPercent: 100,
+              vendaPrazoPercent: 0,
               endereco: parsed.enderecoFormatted || '',
               cidade: parsed.cidadeFormatted || 'Fortaleza (CE)',
               cep: parsed.cep || '',
@@ -1435,8 +1435,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
             razaoSocial: `Empresa CNPJ ${formatCNPJ(identifiedCnpj)}`,
             cnpj: formatCNPJ(identifiedCnpj),
             regimeTributario: 'SIMPLES_NACIONAL',
-            vendaVistaPercent: 10,
-            vendaPrazoPercent: 90,
+            vendaVistaPercent: 100,
+            vendaPrazoPercent: 0,
             createdAt: new Date().toISOString()
           };
           currentCompanies = [newComp, ...currentCompanies];
@@ -1530,8 +1530,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                 razaoSocial: parsed.razaoSocial,
                 cnpj: formatCNPJ(identifiedCnpj),
                 regimeTributario: parsed.regime as any,
-                vendaVistaPercent: 10,
-                vendaPrazoPercent: 90,
+                vendaVistaPercent: 100,
+                vendaPrazoPercent: 0,
                 endereco: parsed.enderecoFormatted || '',
                 cidade: parsed.cidadeFormatted || 'Fortaleza (CE)',
                 cep: parsed.cep || '',
@@ -1564,8 +1564,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
           razaoSocial: 'Temporária',
           cnpj: identifiedCnpj ? formatCNPJ(identifiedCnpj) : '',
           regimeTributario: 'LUCRO_REAL',
-          vendaVistaPercent: 10,
-          vendaPrazoPercent: 90,
+          vendaVistaPercent: 100,
+          vendaPrazoPercent: 0,
           createdAt: ''
         };
 
@@ -1778,8 +1778,8 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
   // Helper to calculate totals for any dataset
   const calculateTotalsForData = (data: FaturamentoItem[], companyToUse?: Company) => {
     const currentComp = companyToUse || companies.find(c => c.id === selectedCompanyId) || {
-      vendaVistaPercent: 10,
-      vendaPrazoPercent: 90
+      vendaVistaPercent: 100,
+      vendaPrazoPercent: 0
     };
 
     let faturamentoTotal = 0;
