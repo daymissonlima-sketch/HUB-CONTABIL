@@ -60,8 +60,7 @@ import {
   auditPisCofinsReport
 } from '../utils/pisCofinsHelper';
 import { SAMPLE_RAW_REPORT } from '../data/sampleReport';
-import { AuditService } from '../modules/audit/AuditService';
-import { ErpIcmsReportItem } from '../modules/audit/erpIcms/ErpIcmsProcessor';
+import { AuditService, ErpIcmsReportItem } from '../modules/audit';
 
 // Interface structures
 export interface ReportItem {
@@ -3236,119 +3235,7 @@ export function AuditoriaFiscalWorkspace() {
         </div>
       </div>
 
-      {/* 2. SUBDIVISIONS SUB-BLOCKS GRID ON INITIAL VIEW */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Module 1: SIGA */}
-        <button
-          onClick={() => {
-            setActiveMainModule('siga');
-            setActiveOutputTab('organizador');
-          }}
-          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between gap-3 cursor-pointer ${
-            activeMainModule === 'siga'
-              ? 'bg-gradient-to-br from-[#04243b] to-[#083454] border-[#e4b35e] text-white shadow-md ring-2 ring-[#e4b35e]/30'
-              : 'bg-white border-slate-200 text-[#04243b] hover:border-slate-300 hover:bg-slate-50/50 shadow-2xs'
-          }`}
-        >
-          <div className="absolute right-0 bottom-0 translate-x-3 translate-y-3 opacity-5 pointer-events-none">
-            <FileSpreadsheet className="w-24 h-24 text-white" />
-          </div>
-          
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className={`text-[10px] uppercase font-black px-2.5 py-0.5 rounded-full ${
-                activeMainModule === 'siga' ? 'bg-[#e4b35e]/10 text-[#e4b35e]' : 'bg-slate-100 text-slate-500'
-              }`}>
-                Módulo 1
-              </span>
-              <FileSpreadsheet className={`w-4.5 h-4.5 ${activeMainModule === 'siga' ? 'text-[#e4b35e]' : 'text-slate-400'}`} />
-            </div>
-            <h3 className="font-extrabold text-sm tracking-tight leading-snug">
-              Módulo 1: Auditor de relatórios SIGA
-            </h3>
-          </div>
 
-          <div className="border-t border-dashed border-slate-200/20 pt-2 w-full flex items-center justify-between text-[10px] font-bold">
-            <span className={activeMainModule === 'siga' ? 'text-[#e4b35e]' : 'text-slate-500'}>
-              {organizadorEntradas.length > 0 || organizadorSaidas.length > 0 ? '✓ Ativo & Analisado' : '⚡ Toque para carregar'}
-            </span>
-          </div>
-        </button>
-
-        {/* Module 2: ICMS */}
-        <button
-          onClick={() => {
-            setActiveMainModule('icms');
-            setActiveOutputTab('confronto');
-          }}
-          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between gap-3 cursor-pointer ${
-            activeMainModule === 'icms'
-              ? 'bg-gradient-to-br from-[#04243b] to-[#083454] border-[#e4b35e] text-white shadow-md ring-2 ring-[#e4b35e]/30'
-              : 'bg-white border-slate-200 text-[#04243b] hover:border-slate-300 hover:bg-slate-50/50 shadow-2xs'
-          }`}
-        >
-          <div className="absolute right-0 bottom-0 translate-x-3 translate-y-3 opacity-5 pointer-events-none">
-            <Table className="w-24 h-24 text-white" />
-          </div>
-
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className={`text-[10px] uppercase font-black px-2.5 py-0.5 rounded-full ${
-                activeMainModule === 'icms' ? 'bg-[#e4b35e]/10 text-[#e4b35e]' : 'bg-slate-100 text-slate-500'
-              }`}>
-                Módulo 2
-              </span>
-              <Table className={`w-4.5 h-4.5 ${activeMainModule === 'icms' ? 'text-[#e4b35e]' : 'text-slate-400'}`} />
-            </div>
-            <h3 className="font-extrabold text-sm tracking-tight leading-snug">
-              Módulo 2: Auditor de relatórios ICMS
-            </h3>
-          </div>
-
-          <div className="border-t border-dashed border-slate-200/20 pt-2 w-full flex items-center justify-between text-[10px] font-bold">
-            <span className={activeMainModule === 'icms' ? 'text-[#e4b35e]' : 'text-slate-500'}>
-              {auditSummary ? '✓ Confronto executado' : '⚡ Toque para carregar'}
-            </span>
-          </div>
-        </button>
-
-        {/* Module 3: PIS & COFINS */}
-        <button
-          onClick={() => {
-            setActiveMainModule('pis_cofins');
-            setActiveOutputTab('pis_cofins');
-          }}
-          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between gap-3 cursor-pointer ${
-            activeMainModule === 'pis_cofins'
-              ? 'bg-gradient-to-br from-[#04243b] to-[#083454] border-[#e4b35e] text-white shadow-md ring-2 ring-[#e4b35e]/30'
-              : 'bg-white border-slate-200 text-[#04243b] hover:border-slate-300 hover:bg-slate-50/50 shadow-2xs'
-          }`}
-        >
-          <div className="absolute right-0 bottom-0 translate-x-3 translate-y-3 opacity-5 pointer-events-none">
-            <Coins className="w-24 h-24 text-white" />
-          </div>
-
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className={`text-[10px] uppercase font-black px-2.5 py-0.5 rounded-full ${
-                activeMainModule === 'pis_cofins' ? 'bg-[#e4b35e]/10 text-[#e4b35e]' : 'bg-slate-100 text-slate-500'
-              }`}>
-                Módulo 3
-              </span>
-              <Coins className={`w-4.5 h-4.5 ${activeMainModule === 'pis_cofins' ? 'text-[#e4b35e]' : 'text-slate-400'}`} />
-            </div>
-            <h3 className="font-extrabold text-sm tracking-tight leading-snug">
-              Módulo 3: Auditor de relatórios PIS & COFINS
-            </h3>
-          </div>
-
-          <div className="border-t border-dashed border-slate-200/20 pt-2 w-full flex items-center justify-between text-[10px] font-bold">
-            <span className={activeMainModule === 'pis_cofins' ? 'text-[#e4b35e]' : 'text-slate-500'}>
-              {pisCofinsRows.length > 0 ? '✓ Auditoria ativa' : '⚡ Toque para carregar'}
-            </span>
-          </div>
-        </button>
-      </div>
 
       {/* 3. THE INGESTION & COCKPIT SECTION (TAILORED PER MAIN MODULE) */}
       {activeMainModule === 'siga' ? (

@@ -3,14 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { UploadZone } from './UploadZone';
 import { StatsBanner } from './StatsBanner';
 import { NfeGrid } from './NfeGrid';
 import { NFeItemRow } from '../types';
 import { parseNfeXml } from '../utils/xmlParser';
 import { exportToExcel } from '../utils/excelExporter';
-import { MOCK_NFES } from '../utils/mockNfes';
 import { 
   FileCheck2, 
   Trash2, 
@@ -18,7 +17,11 @@ import {
   FileUp
 } from 'lucide-react';
 
-export function NfeXmlAuditor() {
+interface NfeXmlAuditorProps {
+  initialXmls?: string[];
+}
+
+export function NfeXmlAuditor({ initialXmls }: NfeXmlAuditorProps = {}) {
   const [parsedRows, setParsedRows] = useState<NFeItemRow[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -30,6 +33,13 @@ export function NfeXmlAuditor() {
   // Default simulation rates to use for new parses
   const ibsRate = 17.7;
   const cbsRate = 8.8;
+
+  // Process initial XMLs if received from other modules (e.g. Consulta NF-e)
+  useEffect(() => {
+    if (initialXmls && initialXmls.length > 0) {
+      handleFilesParsed(initialXmls);
+    }
+  }, [initialXmls]);
 
   const triggerSuccessNotification = (msg: string) => {
     setSuccessMessage(msg);
@@ -67,24 +77,6 @@ export function NfeXmlAuditor() {
       triggerSuccessNotification(`${xmlTexts.length} arquivo(s) XML processado(s) com sucesso!`);
     } catch (err: any) {
       triggerErrorNotification(err.message || 'Erro ao processar um ou mais arquivos XML.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Load sample XMLs for immediate visual demonstration
-  const handleLoadExampleData = async () => {
-    setIsLoading(true);
-    try {
-      const allRows: NFeItemRow[] = [];
-      for (const xml of MOCK_NFES) {
-        const rows = await parseNfeXml(xml, true, ibsRate, cbsRate);
-        allRows.push(...rows);
-      }
-      setParsedRows(allRows);
-      triggerSuccessNotification('Notas Fiscais de exemplo carregadas com sucesso!');
-    } catch (err: any) {
-      triggerErrorNotification('Erro ao carregar notas de exemplo.');
     } finally {
       setIsLoading(false);
     }
@@ -218,7 +210,6 @@ export function NfeXmlAuditor() {
           <UploadZone 
             onFilesParsed={handleFilesParsed} 
             isLoading={isLoading} 
-            onLoadExampleData={handleLoadExampleData} 
           />
         </div>
       ) : (

@@ -1,0 +1,300 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Default-Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() && (
+        request.auth.uid == 'cQNrcS8yObVRBT2OhtVXkVz7yc72' ||
+        request.auth.token.email == 'daymisson.lima@hotmail.com' ||
+        request.auth.token.email == 'daymisson@moreiraelima.com.br' ||
+        request.auth.token.email == 'daymisson.lima@gmail.com'
+      );
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // 3. Validation Blueprints (Anti-Update-Gap)
+    function isValidCompanyRecord(data) {
+      return data.keys().hasAll([
+        'orgId',
+        'cnpj',
+        'razaoSocial',
+        'details',
+        'updatedByUid',
+        'updatedByEmail',
+        'updatedAtIso'
+      ]) &&
+      data.keys().hasOnly([
+        'orgId',
+        'cnpj',
+        'razaoSocial',
+        'details',
+        'updatedByUid',
+        'updatedByEmail',
+        'updatedAtIso'
+      ]) &&
+      data.orgId is string && data.orgId == 'moreira_lima' &&
+      data.cnpj is string && data.cnpj.size() >= 11 && data.cnpj.size() <= 20 &&
+      data.razaoSocial is string && data.razaoSocial.size() >= 1 && data.razaoSocial.size() <= 300 &&
+      data.details is map && data.details.size() <= 100 &&
+      data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+      data.updatedByUid == request.auth.uid &&
+      data.updatedByEmail is string && data.updatedByEmail.size() >= 3 && data.updatedByEmail.size() <= 254 &&
+      data.updatedAtIso is string && data.updatedAtIso.size() >= 10 && data.updatedAtIso.size() <= 40;
+    }
+
+    function isValidSefazDocumentRecord(data) {
+      return data.keys().hasAll([
+        'orgId',
+        'chave',
+        'empresaCnpj',
+        'situacao',
+        'dataEmissao',
+        'docMetadata',
+        'xmlContent',
+        'updatedByUid',
+        'updatedAtIso'
+      ]) &&
+      data.keys().hasOnly([
+        'orgId',
+        'chave',
+        'empresaCnpj',
+        'situacao',
+        'dataEmissao',
+        'docMetadata',
+        'xmlContent',
+        'updatedByUid',
+        'updatedAtIso'
+      ]) &&
+      data.orgId is string && data.orgId == 'moreira_lima' &&
+      data.chave is string && data.chave.size() == 44 &&
+      data.empresaCnpj is string && data.empresaCnpj.size() >= 11 && data.empresaCnpj.size() <= 20 &&
+      data.situacao is string &&
+      data.situacao in ['AUTORIZADA', 'CANCELADA', 'DENEGADA', 'CARTA_CORRECAO', 'RESUMO'] &&
+      data.dataEmissao is string && data.dataEmissao.size() >= 1 && data.dataEmissao.size() <= 40 &&
+      data.docMetadata is map && data.docMetadata.size() <= 60 &&
+      data.xmlContent is string && data.xmlContent.size() <= 850000 &&
+      data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+      data.updatedByUid == request.auth.uid &&
+      data.updatedAtIso is string && data.updatedAtIso.size() >= 10 && data.updatedAtIso.size() <= 40;
+    }
+
+    function isValidPendingKeysRecord(data) {
+      return data.keys().hasAll([
+        'orgId',
+        'empresaCnpj',
+        'pendingKeys',
+        'updatedByUid',
+        'updatedAtIso'
+      ]) &&
+      data.keys().hasOnly([
+        'orgId',
+        'empresaCnpj',
+        'pendingKeys',
+        'updatedByUid',
+        'updatedAtIso'
+      ]) &&
+      data.orgId is string && data.orgId == 'moreira_lima' &&
+      data.empresaCnpj is string && data.empresaCnpj.size() >= 11 && data.empresaCnpj.size() <= 20 &&
+      data.pendingKeys is list && data.pendingKeys.size() <= 500 &&
+      (data.pendingKeys.size() == 0 || (data.pendingKeys[0] is string && data.pendingKeys[0].size() == 44)) &&
+      data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+      data.updatedByUid == request.auth.uid &&
+      data.updatedAtIso is string && data.updatedAtIso.size() >= 10 && data.updatedAtIso.size() <= 40;
+    }
+
+    function isValidOfficeUserRecord(data) {
+      return data.keys().hasAll([
+        'orgId',
+        'emailKey',
+        'email',
+        'nome',
+        'cargo',
+        'status',
+        'passwordHash',
+        'deveAlterarSenha',
+        'updatedByUid',
+        'updatedAtIso'
+      ]) &&
+      data.keys().hasOnly([
+        'orgId',
+        'emailKey',
+        'email',
+        'nome',
+        'cargo',
+        'status',
+        'passwordHash',
+        'deveAlterarSenha',
+        'updatedByUid',
+        'updatedAtIso'
+      ]) &&
+      data.orgId is string && data.orgId == 'moreira_lima' &&
+      data.emailKey is string && data.emailKey.size() >= 3 && data.emailKey.size() <= 128 &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+      data.nome is string && data.nome.size() >= 2 && data.nome.size() <= 150 &&
+      data.cargo is string && data.cargo in ['ADMIN', 'FUNCIONARIO'] &&
+      data.status is string && data.status in ['ATIVO', 'BLOQUEADO'] &&
+      data.passwordHash is string && data.passwordHash.size() >= 4 && data.passwordHash.size() <= 128 &&
+      data.deveAlterarSenha is bool &&
+      data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+      data.updatedByUid == request.auth.uid &&
+      data.updatedAtIso is string && data.updatedAtIso.size() >= 10 && data.updatedAtIso.size() <= 40;
+    }
+
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll([
+        'uid',
+        'email',
+        'addedByUid',
+        'createdAtIso'
+      ]) &&
+      data.keys().hasOnly([
+        'uid',
+        'email',
+        'addedByUid',
+        'createdAtIso'
+      ]) &&
+      data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+      data.addedByUid is string && data.addedByUid.size() >= 1 && data.addedByUid.size() <= 128 &&
+      data.addedByUid == request.auth.uid &&
+      data.createdAtIso is string && data.createdAtIso.size() >= 10 && data.createdAtIso.size() <= 40;
+    }
+
+    // Collection: /companies/{companyId}
+    match /companies/{companyId} {
+      allow get: if isSignedIn() && isValidId(companyId) && (resource == null || existing().orgId == 'moreira_lima');
+      allow list: if isSignedIn() && existing().orgId == 'moreira_lima';
+      allow create: if isSignedIn() && isValidId(companyId) && isValidCompanyRecord(incoming());
+      allow update: if isSignedIn() && isValidId(companyId) && isValidCompanyRecord(incoming()) &&
+        incoming().orgId == existing().orgId &&
+        incoming().cnpj == existing().cnpj && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'razaoSocial',
+            'details',
+            'updatedByUid',
+            'updatedByEmail',
+            'updatedAtIso'
+          ])
+        );
+      allow delete: if isSignedIn() && isValidId(companyId) && isAdmin();
+    }
+
+    // Collection: /sefaz_documents/{docId}
+    match /sefaz_documents/{docId} {
+      allow get: if isSignedIn() && isValidId(docId) && (resource == null || existing().orgId == 'moreira_lima');
+      allow list: if isSignedIn() && existing().orgId == 'moreira_lima';
+      allow create: if isSignedIn() && isValidId(docId) && isValidSefazDocumentRecord(incoming());
+      allow update: if isSignedIn() && isValidId(docId) && isValidSefazDocumentRecord(incoming()) &&
+        incoming().orgId == existing().orgId &&
+        incoming().chave == existing().chave &&
+        incoming().empresaCnpj == existing().empresaCnpj && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'situacao',
+            'dataEmissao',
+            'docMetadata',
+            'xmlContent',
+            'updatedByUid',
+            'updatedAtIso'
+          ])
+        );
+      allow delete: if isSignedIn() && isValidId(docId) && existing().orgId == 'moreira_lima';
+    }
+
+    // Collection: /sefaz_pending_keys/{cnpjId}
+    match /sefaz_pending_keys/{cnpjId} {
+      allow get: if isSignedIn() && isValidId(cnpjId) && (resource == null || existing().orgId == 'moreira_lima');
+      allow list: if isSignedIn() && existing().orgId == 'moreira_lima';
+      allow create: if isSignedIn() && isValidId(cnpjId) && isValidPendingKeysRecord(incoming());
+      allow update: if isSignedIn() && isValidId(cnpjId) && isValidPendingKeysRecord(incoming()) &&
+        incoming().orgId == existing().orgId &&
+        incoming().empresaCnpj == existing().empresaCnpj && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'pendingKeys',
+            'updatedByUid',
+            'updatedAtIso'
+          ])
+        );
+      allow delete: if isSignedIn() && isValidId(cnpjId) && existing().orgId == 'moreira_lima';
+    }
+
+    // Collection: /office_users/{emailKey} (PII Isolated - Only Admin can create/delete; Admin or Self can read/update)
+    match /office_users/{emailKey} {
+      allow get: if isSignedIn() && isValidId(emailKey) && (
+        resource == null || (
+          existing().orgId == 'moreira_lima' && (
+            isAdmin() || existing().email == request.auth.token.email
+          )
+        )
+      );
+      allow list: if isSignedIn() && (
+        isAdmin() || (
+          existing().orgId == 'moreira_lima' && existing().email == request.auth.token.email
+        )
+      );
+      allow create: if isSignedIn() && isValidId(emailKey) && isValidOfficeUserRecord(incoming()) &&
+        incoming().emailKey == emailKey && isAdmin();
+      allow update: if isSignedIn() && isValidId(emailKey) && isValidOfficeUserRecord(incoming()) &&
+        incoming().orgId == existing().orgId &&
+        incoming().emailKey == existing().emailKey &&
+        incoming().email == existing().email && (
+          isAdmin() || (
+            existing().email == request.auth.token.email &&
+            incoming().cargo == existing().cargo &&
+            incoming().status == existing().status &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'nome',
+              'passwordHash',
+              'deveAlterarSenha',
+              'updatedByUid',
+              'updatedAtIso'
+            ])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(emailKey) && isAdmin();
+    }
+
+    // Collection: /admins/{adminUid} (PII Isolated - Only Self or Admin can read)
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
+      allow list: if isBootstrappedAdmin() && existing().uid == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(adminUid) && isValidAdminRecord(incoming()) && incoming().uid == adminUid && isAdmin();
+      allow update: if isSignedIn() && isValidId(adminUid) && isValidAdminRecord(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAtIso == existing().createdAtIso &&
+        isAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['email', 'addedByUid']);
+      allow delete: if isSignedIn() && isValidId(adminUid) && isBootstrappedAdmin();
+    }
+  }
+}

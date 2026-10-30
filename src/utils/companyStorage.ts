@@ -1,5 +1,6 @@
 import { Company } from '../types_debits';
 import importedCompaniesJson from '../data/imported_companies.json';
+import { syncCompaniesToCloud, isApplyingCloudSnapshot } from '../services/firebaseSyncService';
 
 export const COMPANIES_STORAGE_KEY = 'moreira_lima_companies';
 export const COMPANIES_UPDATED_EVENT = 'moreira_lima_companies_updated';
@@ -166,12 +167,22 @@ export function loadStoredCompanies(): Company[] {
             inscEst: storedItem.inscEst || official.inscEst || '',
             inscMun: storedItem.inscMun || official.inscMun || '',
             situacaoInscEst: storedItem.situacaoInscEst || official.situacaoInscEst || '',
-            certificateFile: storedItem.certificateFile || official.certificateFile,
-            certificatePassword: storedItem.certificatePassword || official.certificatePassword,
-            certificateName: storedItem.certificateName || official.certificateName,
-            certificateValidTo: storedItem.certificateValidTo || official.certificateValidTo,
-            certificateIssuer: storedItem.certificateIssuer || official.certificateIssuer,
-            certificateSerialNumber: storedItem.certificateSerialNumber || official.certificateSerialNumber,
+            certificateFile: storedItem.certificateFile !== undefined ? storedItem.certificateFile : official.certificateFile,
+            certificatePassword: storedItem.certificatePassword !== undefined ? storedItem.certificatePassword : official.certificatePassword,
+            certificateName: storedItem.certificateName !== undefined ? storedItem.certificateName : official.certificateName,
+            certificateValidTo: storedItem.certificateValidTo !== undefined ? storedItem.certificateValidTo : official.certificateValidTo,
+            certificateIssuer: storedItem.certificateIssuer !== undefined ? storedItem.certificateIssuer : official.certificateIssuer,
+            certificateSerialNumber: storedItem.certificateSerialNumber !== undefined ? storedItem.certificateSerialNumber : official.certificateSerialNumber,
+            certificateTitular: storedItem.certificateTitular,
+            certificateCnpj: storedItem.certificateCnpj,
+            ultimoNSU: storedItem.ultimoNSU,
+            maxNSU: storedItem.maxNSU,
+            autoPollEnabled: storedItem.autoPollEnabled ?? storedItem.consultaNfeHabilitada,
+            consultaNfeHabilitada: storedItem.consultaNfeHabilitada ?? storedItem.autoPollEnabled,
+            varredura90DiasConcluida: storedItem.varredura90DiasConcluida,
+            lastPolledAt: storedItem.lastPolledAt,
+            nextAllowedPollAt: storedItem.nextAllowedPollAt,
+            lastPollStatus: storedItem.lastPollStatus,
           };
         }
 
@@ -270,7 +281,10 @@ export function loadStoredCompanies(): Company[] {
 /**
  * Salva a lista de empresas e dispara evento global de sincronização
  */
-export function saveStoredCompanies(list: Company[]): Company[] {
+export function saveStoredCompanies(
+  list: Company[],
+  options?: { skipCloudSync?: boolean; changedCompanies?: Company[] }
+): Company[] {
   // Deduplicar e filtrar empresas válidas
   const seenDocs = new Set<string>();
   const seenIds = new Set<string>();
@@ -301,6 +315,12 @@ export function saveStoredCompanies(list: Company[]): Company[] {
     try {
       localStorage.setItem(COMPANIES_STORAGE_KEY, JSON.stringify(sorted));
       window.dispatchEvent(new Event(COMPANIES_UPDATED_EVENT));
+      if (!isApplyingCloudSnapshot() && !options?.skipCloudSync) {
+        const toSync = options?.changedCompanies && options.changedCompanies.length > 0
+          ? options.changedCompanies
+          : sorted;
+        syncCompaniesToCloud(toSync).catch(() => {});
+      }
     } catch (e) {
       console.error('Erro ao salvar empresas:', e);
     }
@@ -333,3 +353,44 @@ export function updateCompanyFaturamentoPercent(companyIdOrCnpj: string, vistaPe
 
   return saveStoredCompanies(updated);
 }
+
+/**
+ * Atualiza exclusivamente os campos de telemetria/cursor do Robô SEFAZ em uma única empresa,
+ * lendo o estado mais recente do localStorage no momento da gravação para jamais sobrescrever
+ * exclusões de certificado ou desativações feitas pelo usuário no Cadastro de Clientes.
+ */
+export function updateSingleCompanyFromRobot(
+  companyId: string,
+  patch: Pick<
+    Partial<Company>,
+    | 'ultimoNSU'
+    | 'maxNSU'
+    | 'lastPolledAt'
+    | 'nextAllowedPollAt'
+    | 'lastPollStatus'
+    | 'varredura90DiasConcluida'
+  >,
+  syncToCloud = false
+): Company | null {
+  const currentList = loadStoredCompanies();
+  let updatedCompany: Company | null = null;
+
+  const updatedList = currentList.map(comp => {
+    if (comp.id !== companyId) return comp;
+    updatedCompany = {
+      ...comp,
+      ...patch,
+    };
+    return updatedCompany;
+  });
+
+  if (updatedCompany) {
+    saveStoredCompanies(updatedList, {
+      skipCloudSync: !syncToCloud,
+      changedCompanies: syncToCloud ? [updatedCompany] : [],
+    });
+  }
+
+  return updatedCompany;
+}
+

@@ -6,16 +6,12 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Upload, 
+  Upload,
   Trash2, 
-  Image as ImageIcon,
   CheckCircle, 
   AlertCircle, 
   Building2, 
   ShieldCheck,
-  ZoomIn,
-  ZoomOut,
-  Sliders,
   Users,
   Plus,
   Edit,
@@ -29,11 +25,13 @@ import {
   FileText,
   Clock,
   Play,
-  X,
-  Save
+  X, 
+  Save,
+  KeyRound,
+  Lock,
+  Unlock,
+  FileKey
 } from 'lucide-react';
-import { Logo } from './Logo';
-import { setAppLogoPath, resetAppLogoPath, getAppLogoScale, setAppLogoScale } from '../utils/logoHelper';
 import { Company, Accountant } from '../types_debits';
 import { loadStoredCompanies, saveStoredCompanies, updateCompanyFaturamentoPercent, COMPANIES_UPDATED_EVENT, getCleanDocument } from '../utils/companyStorage';
 import { fetchCnpjSafe, parseCnpjResponseData, isCaepf, isValidCNPJ } from '../utils/cnpjHelper';
@@ -45,8 +43,6 @@ interface BatchUpdateItemStatus {
   status: 'waiting' | 'updating' | 'success' | 'error';
   message?: string;
 }
-
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 
 const DEFAULT_NEW_COMPANY: Omit<Company, 'id' | 'createdAt'> = {
   razaoSocial: '',
@@ -90,7 +86,15 @@ const DEFAULT_NEW_COMPANY: Omit<Company, 'id' | 'createdAt'> = {
   dataExclusaoSimples: '',
   opcaoMei: false,
   situacaoInscEst: '',
-  inscMun: ''
+  inscMun: '',
+  certificateFile: '',
+  certificatePassword: '',
+  certificateName: '',
+  certificateValidTo: '',
+  certificateIssuer: '',
+  certificateSerialNumber: '',
+  consultaNfeHabilitada: true,
+  autoPollEnabled: true
 };
 
 const DEFAULT_ACCOUNTANTS: Accountant[] = [
@@ -109,10 +113,8 @@ const DEFAULT_ACCOUNTANTS: Accountant[] = [
 ];
 
 export function ConfiguracoesGerais() {
-  const [activeTab, setActiveTab] = useState<'empresas' | 'assinaturas' | 'identidade'>('empresas');
+  const [activeTab, setActiveTab] = useState<'empresas' | 'assinaturas'>('empresas');
 
-  // Identidade Visual & Logo states
-  const [logoScale, setLogoScaleState] = useState<number>(getAppLogoScale());
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -129,6 +131,19 @@ export function ConfiguracoesGerais() {
   const [batchFinished, setBatchFinished] = useState(false);
   const [viewingCompanyDetails, setViewingCompanyDetails] = useState<Company | null>(null);
   const [newCompany, setNewCompany] = useState<Omit<Company, 'id' | 'createdAt'>>({ ...DEFAULT_NEW_COMPANY });
+  const [showCertPassword, setShowCertPassword] = useState(false);
+  const [certFilter, setCertFilter] = useState<'ALL' | 'WITH_CERT' | 'NO_CERT'>('ALL');
+  const [isValidatingCert, setIsValidatingCert] = useState(false);
+  const [certValidationResult, setCertValidationResult] = useState<{
+    valido: boolean;
+    titular: string;
+    cnpjCertificado: string;
+    emissor: string;
+    validoDe: string;
+    validoAte: string;
+    expirado: boolean;
+  } | null>(null);
+  const certSectionRef = useRef<HTMLDivElement>(null);
 
   // Assinaturas / Contadores state
   const [accountants, setAccountants] = useState<Accountant[]>([]);
@@ -142,13 +157,27 @@ export function ConfiguracoesGerais() {
     crc: ''
   });
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   // Carregar dados iniciais de Empresas e Assinaturas
   useEffect(() => {
     const loadCompanies = () => {
       const mergedCompanies = loadStoredCompanies();
       setCompanies(mergedCompanies);
+
+      const openCompId = localStorage.getItem('moreira_lima_open_company_cert');
+      if (openCompId) {
+        localStorage.removeItem('moreira_lima_open_company_cert');
+        const target = mergedCompanies.find(c => c.id === openCompId);
+        if (target) {
+          setActiveTab('empresas');
+          setEditingCompanyId(target.id);
+          setNewCompany({ ...DEFAULT_NEW_COMPANY, ...target });
+          setCertValidationResult(null);
+          setCompanyScreen('form');
+          setTimeout(() => {
+            certSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 250);
+        }
+      }
     };
 
     loadCompanies();
@@ -178,13 +207,126 @@ export function ConfiguracoesGerais() {
     };
   }, []);
 
+  const handleValidateCertificate = async () => {
+    if (!newCompany.certificateFile) {
+      showNotification('Selecione o arquivo do Certificado Digital A1 (.pfx / .p12) primeiro.', true);
+      return;
+    }
+    if (!newCompany.certificatePassword) {
+      showNotification('Digite a senha de proteção do Certificado Digital A1 para testar e validar.', true);
+      return;
+    }
+
+    setIsValidatingCert(true);
+    setCertValidationResult(null);
+    try {
+      const resp = await fetch('/api/sefaz/validar-certificado', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pfxBase64: newCompany.certificateFile,
+          passphrase: newCompany.certificatePassword
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data.error || 'Senha incorreta ou certificado inválido.');
+      }
+
+      setCertValidationResult(data);
+      const validToFormatted = data.validoAte ? new Date(data.validoAte).toLocaleDateString('pt-BR') : '';
+      const resolvedCnpjClean = getCleanDocument(newCompany.cnpj || data.cnpjCertificado || '');
+      const resolvedCnpjFormatted =
+        resolvedCnpjClean.length === 14
+          ? formatCNPJ(resolvedCnpjClean)
+          : (newCompany.cnpj || data.cnpjCertificado || '').trim();
+      const resolvedRazao = (newCompany.razaoSocial || data.titular || '').replace(/:\d{14}$/, '').trim();
+
+      const updatedFields = {
+        razaoSocial: resolvedRazao || newCompany.razaoSocial,
+        cnpj: resolvedCnpjFormatted || newCompany.cnpj,
+        certificateValidTo: validToFormatted,
+        certificateIssuer: data.emissor || 'ICP-Brasil',
+        certificateTitular: data.titular || '',
+        certificateCnpj: data.cnpjCertificado || resolvedCnpjClean,
+        consultaNfeHabilitada: newCompany.consultaNfeHabilitada !== false,
+        autoPollEnabled: newCompany.consultaNfeHabilitada !== false
+      };
+      setNewCompany(prev => ({ ...prev, ...updatedFields }));
+
+      // Salva automaticamente o certificado validado (tanto para empresa em edição quanto para nova empresa!)
+      let targetCompanyId = editingCompanyId;
+      let updatedList: Company[] = [];
+
+      if (targetCompanyId) {
+        updatedList = companies.map(c =>
+          c.id === targetCompanyId
+            ? {
+                ...c,
+                ...newCompany,
+                ...updatedFields
+              }
+            : c
+        );
+      } else if (resolvedCnpjClean.length === 14 || resolvedRazao) {
+        const existingByCnpj = resolvedCnpjClean
+          ? companies.find(c => getCleanDocument(c.cnpj) === resolvedCnpjClean)
+          : undefined;
+
+        if (existingByCnpj) {
+          targetCompanyId = existingByCnpj.id;
+          setEditingCompanyId(existingByCnpj.id);
+          updatedList = companies.map(c =>
+            c.id === existingByCnpj.id
+              ? {
+                  ...c,
+                  ...newCompany,
+                  ...updatedFields,
+                  id: existingByCnpj.id
+                }
+              : c
+          );
+        } else {
+          targetCompanyId = 'comp_' + Date.now();
+          setEditingCompanyId(targetCompanyId);
+          const newEntry: Company = {
+            ...newCompany,
+            ...updatedFields,
+            id: targetCompanyId,
+            createdAt: new Date().toISOString()
+          } as Company;
+          updatedList = [newEntry, ...companies];
+        }
+      }
+
+      if (targetCompanyId && updatedList.length > 0) {
+        saveCompaniesToStorage(updatedList);
+        if (updatedFields.consultaNfeHabilitada) {
+          window.dispatchEvent(new CustomEvent('sefaz_certificate_connected', { detail: { companyId: targetCompanyId, resetSweep: true } }));
+          showNotification(`Certificado Digital A1 validado (${data.titular}) e salvo! A varredura automática dos XMLs dos últimos 90 dias foi iniciada em segundo plano.`);
+        } else {
+          showNotification(`Certificado Digital A1 validado (${data.titular}) e salvo! (A busca automática de XMLs está desabilitada para este cliente).`);
+        }
+      } else {
+        showNotification(`Certificado Digital A1 validado com sucesso (${data.titular})! Preencha os dados restantes e clique em Salvar Empresa.`);
+      }
+    } catch (err: any) {
+      showNotification(err.message || 'Falha ao validar certificado digital.', true);
+    } finally {
+      setIsValidatingCert(false);
+    }
+  };
+
   const filteredCompanies = useMemo(() => {
     const q = companySearchQuery.trim();
-    if (!q) return companies;
-    const normQ = q.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    const normQ = q ? q.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase() : '';
     const cleanQ = q.replace(/\D/g, '');
 
     return companies.filter(c => {
+      if (certFilter === 'WITH_CERT' && !c.certificateFile) return false;
+      if (certFilter === 'NO_CERT' && c.certificateFile) return false;
+
+      if (!q) return true;
       const normRazao = (c.razaoSocial || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
       const normFantasia = ((c as any).nomeFantasia || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
       const cleanCnpj = getCleanDocument(c.cnpj);
@@ -198,7 +340,7 @@ export function ConfiguracoesGerais() {
         normCidade.includes(normQ)
       );
     });
-  }, [companies, companySearchQuery]);
+  }, [companies, companySearchQuery, certFilter]);
 
   const showNotification = (msg: string, isError = false) => {
     if (isError) {
@@ -261,21 +403,22 @@ export function ConfiguracoesGerais() {
 
   const handleBackToList = () => {
     if (editingCompanyId && newCompany.razaoSocial && newCompany.cnpj) {
-      const original = companies.find(c => c.id === editingCompanyId);
       const safeVista = Math.min(100, Math.max(0, isNaN(Number(newCompany.vendaVistaPercent)) ? 100 : Number(newCompany.vendaVistaPercent)));
       const safePrazo = 100 - safeVista;
+      const temCert = Boolean(newCompany.certificateFile && newCompany.certificatePassword);
+      const consultaHabilitada = temCert ? (newCompany.consultaNfeHabilitada ?? true) : false;
 
-      if (!original || original.vendaVistaPercent !== safeVista || original.vendaPrazoPercent !== safePrazo) {
-        const updated = companies.map(c => c.id === editingCompanyId ? {
-          ...newCompany,
-          vendaVistaPercent: safeVista,
-          vendaPrazoPercent: safePrazo,
-          id: c.id,
-          createdAt: c.createdAt
-        } as Company : c);
-        saveCompaniesToStorage(updated);
-        showNotification('Alterações salvas com sucesso!');
-      }
+      const updated = companies.map(c => c.id === editingCompanyId ? {
+        ...c,
+        ...newCompany,
+        vendaVistaPercent: safeVista,
+        vendaPrazoPercent: safePrazo,
+        consultaNfeHabilitada: consultaHabilitada,
+        autoPollEnabled: consultaHabilitada,
+        id: c.id,
+        createdAt: c.createdAt
+      } as Company : c);
+      saveCompaniesToStorage(updated);
     }
     setEditingCompanyId(null);
     setCompanyScreen('list');
@@ -485,15 +628,19 @@ export function ConfiguracoesGerais() {
     const cleanCnpj = getCleanDocument(newCompany.cnpj);
     const formattedCnpj = cleanCnpj.length === 14 ? formatCNPJ(cleanCnpj) : newCompany.cnpj.trim();
 
+    const isNfeEnabled = newCompany.consultaNfeHabilitada !== false;
     const companyToSave = {
       ...newCompany,
       razaoSocial: newCompany.razaoSocial.trim(),
       cnpj: formattedCnpj,
       vendaVistaPercent: safeVista,
-      vendaPrazoPercent: safePrazo
+      vendaPrazoPercent: safePrazo,
+      consultaNfeHabilitada: isNfeEnabled,
+      autoPollEnabled: isNfeEnabled
     };
 
     let updated: Company[];
+    let savedCompId = editingCompanyId || '';
     if (editingCompanyId) {
       updated = companies.map(c => c.id === editingCompanyId ? {
         ...c,
@@ -506,6 +653,7 @@ export function ConfiguracoesGerais() {
       const existingIdx = cleanCnpj ? companies.findIndex(c => getCleanDocument(c.cnpj) === cleanCnpj) : -1;
       if (existingIdx >= 0) {
         const existing = companies[existingIdx];
+        savedCompId = existing.id;
         updated = companies.map((c, idx) => idx === existingIdx ? {
           ...c,
           ...companyToSave,
@@ -513,9 +661,10 @@ export function ConfiguracoesGerais() {
           createdAt: existing.createdAt || new Date().toISOString()
         } as Company : c);
       } else {
+        savedCompId = 'comp_' + Date.now();
         const companyToAdd: Company = {
           ...companyToSave,
-          id: 'comp_' + Date.now(),
+          id: savedCompId,
           createdAt: new Date().toISOString()
         };
         updated = [companyToAdd, ...companies];
@@ -523,9 +672,16 @@ export function ConfiguracoesGerais() {
     }
 
     saveCompaniesToStorage(updated);
+    
+    if (companyToSave.certificateFile && companyToSave.certificatePassword && isNfeEnabled) {
+      window.dispatchEvent(new CustomEvent('sefaz_certificate_connected', { detail: { companyId: savedCompId, resetSweep: true } }));
+      showNotification('Cadastro salvo com sucesso! A varredura automática dos XMLs dos últimos 90 dias foi iniciada em segundo plano.');
+    } else {
+      showNotification('Empresa salva com sucesso no cadastro central!');
+    }
+
     setNewCompany({ ...DEFAULT_NEW_COMPANY });
     setCompanyScreen('list');
-    showNotification('Empresa salva com sucesso no cadastro central!');
   };
 
   const handleDeleteCompany = (id: string, e: React.MouseEvent) => {
@@ -598,47 +754,6 @@ export function ConfiguracoesGerais() {
     showNotification('Responsável técnico ativo selecionado.');
   };
 
-  // Funções de Gestão de Identidade Visual / Logotipo
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > MAX_FILE_SIZE) {
-      showNotification(`O arquivo selecionado (${(file.size / 1024 / 1024).toFixed(2)} MB) excede o limite máximo permitido de 5 MB.`, true);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    if (!file.type.startsWith('image/')) {
-      showNotification('Por favor, selecione um arquivo de imagem válido (PNG, JPG, SVG ou WEBP).', true);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      if (typeof reader.result === 'string') {
-        setAppLogoPath(reader.result);
-        showNotification('Logotipo importado e salvo com sucesso! Todas as barras e relatórios foram atualizados.');
-      }
-    };
-    reader.onerror = () => {
-      showNotification('Erro ao processar a imagem do logotipo.', true);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleResetLogo = () => {
-    resetAppLogoPath();
-    showNotification('Logotipo restaurado para o padrão do escritório Moreira & Lima.');
-  };
-
-  const handleScaleChange = (val: number) => {
-    const clamped = parseFloat(Math.min(2.0, Math.max(0.5, val)).toFixed(2));
-    setLogoScaleState(clamped);
-    setAppLogoScale(clamped);
-  };
-
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       
@@ -650,11 +765,8 @@ export function ConfiguracoesGerais() {
             Configurações Gerais e Cadastros Centralizados
           </h1>
           <p className="text-xs text-slate-300 mt-1 max-w-2xl">
-            Centralize os cadastros de Empresas Clientes, Assinaturas Técnicas de Contadores e a Identidade Visual corporativa para todo o sistema.
+            Centralize os cadastros de Empresas Clientes e Assinaturas Técnicas de Contadores para todo o sistema.
           </p>
-        </div>
-        <div className="shrink-0">
-          <Logo origin="right center" />
         </div>
       </div>
 
@@ -708,22 +820,6 @@ export function ConfiguracoesGerais() {
           <Users className="h-4 w-4" />
           Assinaturas de Contadores ({accountants.length})
         </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            if (companyScreen === 'form') handleBackToList();
-            setActiveTab('identidade');
-          }}
-          className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-            activeTab === 'identidade'
-              ? 'bg-[#04243b] text-[#e4b35e] shadow-md'
-              : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-          }`}
-        >
-          <ImageIcon className="h-4 w-4" />
-          Logotipo & Padronização de Relatórios
-        </button>
       </div>
 
       {/* ABA 1: GESTÃO DE EMPRESAS */}
@@ -731,18 +827,51 @@ export function ConfiguracoesGerais() {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
           {companyScreen === 'list' ? (
             <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row gap-3 items-center justify-between pb-4 border-b border-slate-200">
-                <div className="relative w-full sm:max-w-md">
-                  <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
-                    <Search className="h-4 w-4" />
-                  </span>
-                  <input
-                    type="text"
-                    value={companySearchQuery}
-                    onChange={(e) => setCompanySearchQuery(e.target.value)}
-                    placeholder="Pesquisar por razão social ou CNPJ..."
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
-                  />
+              <div className="flex flex-col lg:flex-row gap-3 items-center justify-between pb-4 border-b border-slate-200">
+                <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full lg:w-auto flex-1">
+                  <div className="relative w-full sm:max-w-md flex-1">
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
+                      <Search className="h-4 w-4" />
+                    </span>
+                    <input
+                      type="text"
+                      value={companySearchQuery}
+                      onChange={(e) => setCompanySearchQuery(e.target.value)}
+                      placeholder={`Pesquisar nas ${companies.length} empresas por razão social ou CNPJ...`}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs focus:outline-none focus:border-[#04243b] focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  {/* Filtro rápido por Certificado Digital A1 */}
+                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-[11px] shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setCertFilter('ALL')}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                        certFilter === 'ALL' ? 'bg-[#04243b] text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Todas ({companies.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCertFilter('WITH_CERT')}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                        certFilter === 'WITH_CERT' ? 'bg-emerald-700 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Com Certificado A1 ({companies.filter(c => Boolean(c.certificateFile)).length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCertFilter('NO_CERT')}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                        certFilter === 'NO_CERT' ? 'bg-amber-700 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Sem Certificado ({companies.filter(c => !c.certificateFile).length})
+                    </button>
+                  </div>
                 </div>
                 
                 <div className="flex items-center gap-2.5 flex-wrap justify-end">
@@ -761,6 +890,7 @@ export function ConfiguracoesGerais() {
                     onClick={() => {
                       setEditingCompanyId(null);
                       setNewCompany({ ...DEFAULT_NEW_COMPANY });
+                      setCertValidationResult(null);
                       setCompanyScreen('form');
                     }}
                     className="w-full sm:w-auto px-4 py-2.5 bg-[#04243b] hover:bg-[#031d30] text-white font-bold rounded-xl text-xs uppercase flex items-center justify-center gap-2 transition-colors shadow-sm cursor-pointer shrink-0"
@@ -801,13 +931,14 @@ export function ConfiguracoesGerais() {
                       <th className="px-5 py-3">Razão Social / CNPJ</th>
                       <th className="px-5 py-3">Divisão de Faturamento</th>
                       <th className="px-5 py-3">Regime Tributário</th>
+                      <th className="px-5 py-3">Certificado A1</th>
                       <th className="px-5 py-3 text-right">Ações</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
                     {filteredCompanies.length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="px-5 py-10 text-center text-slate-400 italic">
+                        <td colSpan={5} className="px-5 py-10 text-center text-slate-400 italic">
                           Nenhuma empresa encontrada na busca.
                         </td>
                       </tr>
@@ -857,6 +988,82 @@ export function ConfiguracoesGerais() {
                             <span className="px-2 py-1 bg-slate-100 text-[#04243b] text-[10px] font-bold rounded uppercase">
                               {company.regimeTributario.replace('_', ' ')}
                             </span>
+                          </td>
+                           <td className="px-5 py-3.5">
+                            <div className="flex flex-col items-start gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingCompanyId(company.id);
+                                  setNewCompany({ ...DEFAULT_NEW_COMPANY, ...company, consultaNfeHabilitada: company.consultaNfeHabilitada !== false });
+                                  setCertValidationResult(null);
+                                  setCompanyScreen('form');
+                                  setTimeout(() => {
+                                    certSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                  }, 200);
+                                }}
+                                className="cursor-pointer text-left group"
+                                title="Clique para configurar ou atualizar o Certificado Digital A1 desta empresa"
+                              >
+                                {company.certificateFile ? (
+                                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 group-hover:bg-emerald-100 border border-emerald-200 text-emerald-800 rounded-lg text-[10px] font-bold transition-colors">
+                                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+                                    <div>
+                                      <div>A1 Vinculado</div>
+                                      {company.certificateValidTo && (
+                                        <div className="text-[9px] text-emerald-700 font-normal">Válido até {company.certificateValidTo}</div>
+                                      )}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 group-hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-lg text-[10px] font-bold transition-colors">
+                                    <KeyRound className="h-3.5 w-3.5 text-amber-600" />
+                                    <span>+ Vincular Certificado A1</span>
+                                  </div>
+                                )}
+                              </button>
+
+                              {company.certificateFile && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const currentlyEnabled = company.consultaNfeHabilitada !== false && company.autoPollEnabled !== false;
+                                    const nextEnabled = !currentlyEnabled;
+                                    const updatedList = companies.map(c =>
+                                      c.id === company.id
+                                        ? {
+                                            ...c,
+                                            consultaNfeHabilitada: nextEnabled,
+                                            autoPollEnabled: nextEnabled,
+                                            ultimoNSU: nextEnabled ? '0' : c.ultimoNSU,
+                                            varredura90DiasConcluida: nextEnabled ? false : c.varredura90DiasConcluida,
+                                            nextAllowedPollAt: undefined
+                                          }
+                                        : c
+                                    );
+                                    saveCompaniesToStorage(updatedList);
+                                    if (nextEnabled) {
+                                      window.dispatchEvent(new CustomEvent('sefaz_certificate_connected', { detail: { companyId: company.id, resetSweep: true } }));
+                                      showNotification(`Consulta NF-e habilitada para ${company.razaoSocial}! Iniciando varredura dos últimos 90 dias...`);
+                                    } else {
+                                      showNotification(`Busca automática de XMLs desabilitada para ${company.razaoSocial}.`);
+                                    }
+                                  }}
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border transition-colors cursor-pointer ${
+                                    company.consultaNfeHabilitada !== false && company.autoPollEnabled !== false
+                                      ? 'bg-blue-50 text-blue-800 border-blue-200 hover:bg-blue-100'
+                                      : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                                  }`}
+                                  title="Habilitar ou desabilitar a busca automática de XMLs (Consulta NF-e) para este cliente"
+                                >
+                                  <span>
+                                    {company.consultaNfeHabilitada !== false && company.autoPollEnabled !== false
+                                      ? '● Consulta NF-e: Habilitada'
+                                      : '○ Consulta NF-e: Desabilitada'}
+                                  </span>
+                                </button>
+                              )}
+                            </div>
                           </td>
                           <td className="px-5 py-3.5 text-right">
                             <div className="flex justify-end gap-1.5">
@@ -1363,6 +1570,298 @@ export function ConfiguracoesGerais() {
                   </div>
                 </div>
 
+                {/* 6. Certificado Digital A1 (.pfx / .p12) - WebService SEFAZ */}
+                <div ref={certSectionRef} className="bg-slate-50/60 p-4 rounded-2xl border-2 border-[#e4b35e]/50 space-y-4 shadow-xs">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                    <h4 className="text-xs font-extrabold text-[#04243b] uppercase tracking-wider flex items-center gap-2">
+                      <KeyRound className="h-4 w-4 text-[#e4b35e]" />
+                      6. Certificado Digital A1 (.pfx / .p12) & WebService SEFAZ
+                    </h4>
+                    {newCompany.certificateFile ? (
+                      <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full flex items-center gap-1">
+                        <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+                        A1 Configurado {newCompany.certificateValidTo ? `(Válido até ${newCompany.certificateValidTo})` : ''}
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-bold rounded-full">
+                        Necessário para Consulta NF-e SEFAZ
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    Vincule aqui o <strong>Certificado Digital A1 (.pfx ou .p12)</strong> e a senha desta empresa para habilitar a <strong>Consulta, Ciência da Operação e Download Automático de XMLs Oficiais na SEFAZ Nacional</strong>.
+                  </p>
+
+                  {newCompany.certificateFile ? (
+                    <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-700">
+                            <FileKey className="h-5 w-5" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-slate-800">{newCompany.certificateName || 'certificado_digital_a1.pfx'}</p>
+                            <p className="text-[10px] text-emerald-700 font-semibold">
+                              {newCompany.certificateIssuer
+                                ? `Emissor: ${newCompany.certificateIssuer} ${newCompany.certificateValidTo ? `• Validade: ${newCompany.certificateValidTo}` : ''}`
+                                : 'Arquivo .pfx carregado — Digite a senha e clique em Testar e Validar abaixo'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <label
+                            htmlFor="cert-file-replace-input"
+                            className="px-2.5 py-1 bg-white text-slate-700 hover:bg-slate-100 rounded-lg text-[10px] font-bold border border-slate-300 transition-colors cursor-pointer"
+                          >
+                            Trocar Arquivo
+                          </label>
+                          <input
+                            type="file"
+                            id="cert-file-replace-input"
+                            accept=".pfx,.p12"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              const reader = new FileReader();
+                              reader.onload = (ev) => {
+                                const result = ev.target?.result as string;
+                                const base64 = result.includes(',') ? result.split(',')[1] : result;
+                                setNewCompany(prev => ({
+                                  ...prev,
+                                  certificateFile: base64,
+                                  certificateName: file.name
+                                }));
+                                setCertValidationResult(null);
+                                showNotification(`Novo arquivo ${file.name} carregado. Digite a senha e clique em Testar e Validar.`);
+                              };
+                              reader.readAsDataURL(file);
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const clearedFields = {
+                                certificateFile: '',
+                                certificateName: '',
+                                certificatePassword: '',
+                                certificateValidTo: '',
+                                certificateIssuer: '',
+                                consultaNfeHabilitada: false,
+                                autoPollEnabled: false,
+                              };
+                              setNewCompany(prev => ({
+                                ...prev,
+                                ...clearedFields,
+                              }));
+                              setCertValidationResult(null);
+                              if (editingCompanyId) {
+                                const updated = companies.map(c =>
+                                  c.id === editingCompanyId
+                                    ? ({ ...c, ...newCompany, ...clearedFields } as Company)
+                                    : c
+                                );
+                                saveCompaniesToStorage(updated);
+                                showNotification('Certificado removido e Consulta NF-e desabilitada para esta empresa.');
+                              }
+                            }}
+                            className="px-2.5 py-1 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-[10px] font-bold border border-red-200 transition-colors cursor-pointer"
+                          >
+                            Remover
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 pt-2 border-t border-emerald-200/60">
+                        <label className="text-[11px] font-bold text-slate-700 block">Senha do Certificado Digital A1</label>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <div className="relative flex-1">
+                            <input
+                              type={showCertPassword ? "text" : "password"}
+                              value={newCompany.certificatePassword || ''}
+                              onChange={(e) => setNewCompany(prev => ({ ...prev, certificatePassword: e.target.value }))}
+                              className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 pr-10 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-[#04243b]/30"
+                              placeholder="Digite a senha de proteção do certificado (.pfx)"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowCertPassword(!showCertPassword)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                              tabIndex={-1}
+                            >
+                              {showCertPassword ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleValidateCertificate}
+                            disabled={isValidatingCert}
+                            className="px-4 py-2 bg-[#04243b] hover:bg-[#031d30] disabled:opacity-50 text-[#e4b35e] font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                          >
+                            <ShieldCheck className="h-4 w-4" />
+                            <span>{isValidatingCert ? 'Validando...' : 'Testar, Validar e Salvar Certificado'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {certValidationResult && (
+                        <div className={`p-3 rounded-xl border text-xs space-y-1 ${
+                          certValidationResult.expirado
+                            ? 'bg-amber-50 border-amber-300 text-amber-900'
+                            : 'bg-white border-emerald-300 text-emerald-900'
+                        }`}>
+                          <div className="font-bold flex items-center gap-1.5">
+                            <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
+                            <span>Certificado ICP-Brasil Validado com Sucesso!</span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] pt-1">
+                            <div><strong>Titular:</strong> {certValidationResult.titular}</div>
+                            <div><strong>CNPJ no Certificado:</strong> {certValidationResult.cnpjCertificado || 'Extraído do Titular'}</div>
+                            <div><strong>Autoridade Emissora:</strong> {certValidationResult.emissor}</div>
+                            <div>
+                              <strong>Validade:</strong>{' '}
+                              {new Date(certValidationResult.validoDe).toLocaleDateString('pt-BR')} até{' '}
+                              {new Date(certValidationResult.validoAte).toLocaleDateString('pt-BR')}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="border-2 border-dashed border-slate-300 hover:border-[#e4b35e] rounded-xl p-4 text-center transition-colors bg-white">
+                        <input
+                          type="file"
+                          id="cert-file-input"
+                          accept=".pfx,.p12"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = (ev) => {
+                              const result = ev.target?.result as string;
+                              const base64 = result.includes(',') ? result.split(',')[1] : result;
+                              setNewCompany(prev => ({
+                                ...prev,
+                                certificateFile: base64,
+                                certificateName: file.name
+                              }));
+                              setCertValidationResult(null);
+                              showNotification(`Certificado ${file.name} carregado! Digite a senha abaixo e clique em "Testar, Validar e Salvar Certificado".`);
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
+                        <label htmlFor="cert-file-input" className="cursor-pointer flex flex-col items-center justify-center space-y-1.5">
+                          <div className="p-2 bg-slate-100 rounded-full text-slate-600">
+                            <Upload className="h-5 w-5 text-[#04243b]" />
+                          </div>
+                          <span className="text-xs font-bold text-[#04243b]">Selecionar Certificado Digital A1 (.pfx / .p12)</span>
+                          <span className="text-[10px] text-slate-400">Clique para escolher o arquivo .pfx ou .p12 desta empresa no seu computador</span>
+                        </label>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-700">Senha do Certificado</label>
+                        <div className="relative">
+                          <input
+                            type={showCertPassword ? "text" : "password"}
+                            value={newCompany.certificatePassword || ''}
+                            onChange={(e) => setNewCompany(prev => ({ ...prev, certificatePassword: e.target.value }))}
+                            className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 pr-10 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-[#04243b]/30"
+                            placeholder="Senha de exportação do .pfx"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowCertPassword(!showCertPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                            tabIndex={-1}
+                          >
+                            {showCertPassword ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Campo / Botão para Habilitar ou Desabilitar a Função Consulta NF-e (Busca Automática de XMLs) */}
+                  <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200">
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-bold text-[#04243b] flex items-center gap-2">
+                        <span>Função Consulta NF-e (Busca Automática de XMLs na SEFAZ)</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          newCompany.consultaNfeHabilitada !== false
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-slate-200 text-slate-600'
+                        }`}>
+                          {newCompany.consultaNfeHabilitada !== false ? 'HABILITADA' : 'DESABILITADA'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Quando habilitada, ao salvar o cadastro o sistema inicia automaticamente a varredura dos XMLs emitidos contra o CNPJ dos últimos 90 dias e segue verificando novos XMLs em segundo plano.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextVal = newCompany.consultaNfeHabilitada === false ? true : false;
+                        setNewCompany(prev => ({
+                          ...prev,
+                          consultaNfeHabilitada: nextVal,
+                          autoPollEnabled: nextVal
+                        }));
+                        if (editingCompanyId) {
+                          const updated = companies.map(c =>
+                            c.id === editingCompanyId
+                              ? ({
+                                  ...c,
+                                  ...newCompany,
+                                  consultaNfeHabilitada: nextVal,
+                                  autoPollEnabled: nextVal
+                                } as Company)
+                              : c
+                          );
+                          saveCompaniesToStorage(updated);
+                          showNotification(
+                            nextVal
+                              ? 'Consulta NF-e habilitada para esta empresa!'
+                              : 'Consulta NF-e desabilitada para esta empresa!'
+                          );
+                          if (nextVal && newCompany.certificateFile && newCompany.certificatePassword) {
+                            window.dispatchEvent(
+                              new CustomEvent('sefaz_certificate_connected', {
+                                detail: { companyId: editingCompanyId, resetSweep: true }
+                              })
+                            );
+                          }
+                        }
+                      }}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0 shadow-xs ${
+                        newCompany.consultaNfeHabilitada !== false
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                      }`}
+                    >
+                      {newCompany.consultaNfeHabilitada !== false ? (
+                        <>
+                          <Check className="h-4 w-4" />
+                          <span>Consulta NF-e Habilitada</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="h-4 w-4" />
+                          <span>Habilitar Função Consulta NF-e</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
                 <div className="pt-4 flex justify-end gap-3 border-t border-slate-100">
                   <button
                     type="button"
@@ -1437,6 +1936,13 @@ export function ConfiguracoesGerais() {
                     <p><strong>Inscrição Municipal (IM):</strong> {viewingCompanyDetails.inscMun || 'N/D'}</p>
                     <p><strong>Opção Simples Nacional:</strong> {viewingCompanyDetails.opcaoSimples ? `SIM (Opção: ${viewingCompanyDetails.dataOpcaoSimples || 'N/D'})` : 'NÃO'}</p>
                     <p><strong>Opção MEI:</strong> {viewingCompanyDetails.opcaoMei ? 'SIM' : 'NÃO'}</p>
+                  </div>
+
+                  <div>
+                    <h4 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2">Certificado Digital A1 (SEFAZ)</h4>
+                    <p><strong>Status:</strong> {viewingCompanyDetails.certificateFile ? 'Cadastrado e Ativo (.pfx / .p12)' : 'Não cadastrado'}</p>
+                    {viewingCompanyDetails.certificateName && <p><strong>Arquivo:</strong> {viewingCompanyDetails.certificateName}</p>}
+                    {viewingCompanyDetails.certificateValidTo && <p><strong>Validade:</strong> {viewingCompanyDetails.certificateValidTo}</p>}
                   </div>
 
                   <div>
@@ -1683,114 +2189,6 @@ export function ConfiguracoesGerais() {
               </form>
             </div>
           )}
-        </div>
-      )}
-
-      {/* ABA 3: LOGOTIPO E DADOS CORPORATIVOS DO ESCRITÓRIO */}
-      {activeTab === 'identidade' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          
-          {/* Card 1: Logo Management */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-6 space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-[#e4b35e]/15 text-[#04243b]">
-                  <ImageIcon className="h-5 w-5 text-[#04243b]" />
-                </div>
-                <div>
-                  <h2 className="text-sm font-bold text-slate-800">Logotipo do Sistema.</h2>
-                  <p className="text-[11px] text-slate-500">Substituição externa e gerenciamento visual (limite 5 MB)</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Current Preview Box */}
-            <div className="p-6 rounded-xl bg-slate-900 border border-slate-800 flex flex-col items-center justify-center gap-4 text-center shadow-inner">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Preview Ativo no Topo e Relatórios</span>
-              <div
-                className="p-4 rounded-xl border border-dashed border-slate-700/60 flex items-center justify-center min-h-[90px] w-full"
-                style={{ backgroundColor: 'transparent' }}
-              >
-                <Logo origin="center" />
-              </div>
-            </div>
-
-            {/* Zoom Control Slider */}
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-                <span className="flex items-center gap-1.5">
-                  <Sliders className="h-4 w-4 text-[#04243b]" />
-                  Zoom do Logotipo (Escala Dinâmica)
-                </span>
-                <span className="font-mono text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md font-bold">
-                  {(logoScale * 100).toFixed(0)}%
-                </span>
-              </div>
-              
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => handleScaleChange(logoScale - 0.1)}
-                  className="p-1.5 rounded-lg border border-slate-300 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
-                  title="Diminuir Zoom"
-                >
-                  <ZoomOut className="h-4 w-4" />
-                </button>
-                
-                <input
-                  type="range"
-                  min="0.5"
-                  max="2.0"
-                  step="0.05"
-                  value={logoScale}
-                  onChange={(e) => handleScaleChange(parseFloat(e.target.value))}
-                  className="w-full accent-[#04243b] cursor-pointer"
-                />
-                
-                <button
-                  type="button"
-                  onClick={() => handleScaleChange(logoScale + 0.1)}
-                  className="p-1.5 rounded-lg border border-slate-300 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
-                  title="Aumentar Zoom"
-                >
-                  <ZoomIn className="h-4 w-4" />
-                </button>
-              </div>
-              <p className="text-[10px] text-slate-500">
-                Ajusta o tamanho visual dinâmico em todo o sistema (navbar e relatórios) mantendo transparência.
-              </p>
-            </div>
-
-            {/* File Upload Zone */}
-            <div className="space-y-3">
-              <label className="block text-xs font-bold text-slate-700">
-                Incluir ou Alterar Logotipo (Arquivo de Imagem até 5 MB)
-              </label>
-              
-              <div className="border-2 border-dashed border-slate-300 rounded-xl p-5 text-center hover:border-[#e4b35e] hover:bg-slate-50/50 transition-all cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/svg+xml,image/webp"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
-                <Upload className="h-8 w-8 text-[#e4b35e] mx-auto mb-2" />
-                <p className="text-xs font-bold text-slate-700">Clique para enviar um arquivo do computador</p>
-                <p className="text-[10px] text-slate-500 mt-1">Suporta PNG, JPG, WEBP e SVG • Tamanho máximo permitido: 5.00 MB</p>
-              </div>
-
-              <div className="mt-4 flex justify-end">
-                <button
-                  type="button"
-                  onClick={handleResetLogo}
-                  className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-xl transition-colors flex items-center gap-2 cursor-pointer"
-                >
-                  Restaurar Logotipo Padrão
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
       )}
 

@@ -10,7 +10,7 @@ import { motion } from 'motion/react';
 interface UploadZoneProps {
   onFilesParsed: (xmlTexts: string[]) => void;
   isLoading: boolean;
-  onLoadExampleData: () => void;
+  onLoadExampleData?: () => void;
 }
 
 export function UploadZone({ onFilesParsed, isLoading, onLoadExampleData }: UploadZoneProps) {
@@ -142,23 +142,25 @@ export function UploadZone({ onFilesParsed, isLoading, onLoadExampleData }: Uplo
         </div>
       )}
 
-      {/* Auxiliary testing triggers */}
-      <div className="mt-6 pt-5 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center space-x-2 text-xs text-slate-500">
-          <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
-          <span>Não possui arquivos XML de teste à disposição no momento?</span>
+      {/* Auxiliary testing triggers if provided */}
+      {onLoadExampleData && (
+        <div className="mt-6 pt-5 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center space-x-2 text-xs text-slate-500">
+            <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
+            <span>Não possui arquivos XML de teste à disposição no momento?</span>
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onLoadExampleData();
+            }}
+            className="w-full sm:w-auto inline-flex items-center justify-center space-x-2 bg-[#042838] hover:bg-[#031d29] text-white hover:text-[#dfb25e] font-bold text-xs py-2.5 px-4 rounded-lg border border-[#dfb25e]/25 shadow-sm transition-all duration-300 font-sans cursor-pointer shrink-0"
+          >
+            <FileCode className="h-4 w-4 text-[#dfb25e]" />
+            <span>Carregar Notas Fiscais de Exemplo</span>
+          </button>
         </div>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onLoadExampleData();
-          }}
-          className="w-full sm:w-auto inline-flex items-center justify-center space-x-2 bg-[#042838] hover:bg-[#031d29] text-white hover:text-[#dfb25e] font-bold text-xs py-2.5 px-4 rounded-lg border border-[#dfb25e]/25 shadow-sm transition-all duration-300 font-sans cursor-pointer shrink-0"
-        >
-          <FileCode className="h-4 w-4 text-[#dfb25e]" />
-          <span>Carregar Notas Fiscais de Exemplo</span>
-        </button>
-      </div>
+      )}
     </div>
   );
 }

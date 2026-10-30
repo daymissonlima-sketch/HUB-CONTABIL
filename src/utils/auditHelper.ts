@@ -119,22 +119,8 @@ function validateAndCleanDate(dateStr: string): string {
   return dateStr;
 }
 
-export function formatCnpjCpf(doc: string | undefined | null): string {
-  if (!doc) return '';
-  const clean = doc.trim();
-  const digits = clean.replace(/\D/g, '');
-  if (digits.length === 11) {
-    return digits.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
-  }
-  if (digits.length === 14) {
-    return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
-  }
-  return clean.replace(/[\s\-\/]+$/, '');
-}
-
-export function formatCNPJ(cnpj: string): string {
-  return formatCnpjCpf(cnpj);
-}
+import { formatCnpjCpf, formatCnpj as formatCNPJ } from '../shared/utils/formatters';
+export { formatCnpjCpf, formatCNPJ };
 
 export function splitProductCodeAndDesc(rawProduct: string | undefined | null): { codigo: string; descricao: string } {
   if (!rawProduct) return { codigo: '', descricao: '' };
