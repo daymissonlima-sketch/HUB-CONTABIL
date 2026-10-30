@@ -3,46 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { Header, Footer } from './shared/components';
-import {
-  AuditoriaFiscalWorkspace,
-  CalculadoraWorkspace,
-  NfeXmlAuditor,
-  ConsultaNfeWorkspace,
-  DebtLevantamento,
-  FaturamentoGerador,
-  Comunicados,
-  OpcaoSimplesNacional,
-  ConfiguracoesGerais,
-  ChaveSanitizer,
-  LoginScreen,
-  EmployeeManagerModal,
-  clearUnlockedSession
-} from './features';
-import { 
-  FileSpreadsheet, 
-  Briefcase, 
-  Menu, 
-  Coins, 
-  Settings, 
-  Table, 
-  FileText, 
-  ShieldCheck, 
-  Sparkles, 
-  Calculator, 
-  DownloadCloud, 
-  Users, 
-  LogOut 
-} from 'lucide-react';
-import { loadStoredCompanies } from './shared/utils';
-import {
-  getFirebaseSyncStatus,
-  FIREBASE_SYNC_STATUS_EVENT,
-  isMasterAdminEmail,
-  useSefazRobot
-} from './services';
-import { signOutFirebase } from './firebase';
+import React, { useState } from 'react';
+import { Header } from './components/Header';
+import { Footer } from './components/Footer';
+import { NfeXmlAuditor } from './components/NfeXmlAuditor';
+import { DebtLevantamento } from './components/DebtLevantamento';
+import { FaturamentoGerador } from './components/FaturamentoGerador';
+import { ConfiguracoesGerais } from './components/ConfiguracoesGerais';
+import { AuditoriaFiscalWorkspace } from './components/AuditoriaFiscalWorkspace';
+import { Comunicados } from './components/Comunicados';
+import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
+import { ChaveSanitizer } from './components/ChaveSanitizer';
+import { CalculadoraWorkspace } from './components/CalculadoraWorkspace';
+import { FileSpreadsheet, Briefcase, Menu, Coins, Settings, Table, FileText, ShieldCheck, Sparkles, Calculator } from 'lucide-react';
+import { loadStoredCompanies } from './utils/companyStorage';
 
 // Synchronously ensure companies storage is reconciled with the official database
 try {
@@ -51,41 +25,9 @@ try {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'auditoria_fiscal' | 'calculadora' | 'xml_auditor' | 'consulta_nfe' | 'debit_levantamento' | 'faturamento_gerador' | 'configuracoes_gerais' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
+    'auditoria_fiscal' | 'calculadora' | 'xml_auditor' | 'debit_levantamento' | 'faturamento_gerador' | 'configuracoes_gerais' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
   >('auditoria_fiscal');
-  const [importedXmlsForAuditor, setImportedXmlsForAuditor] = useState<string[]>([]);
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
-  const [syncStatus, setSyncStatus] = useState(() => getFirebaseSyncStatus());
-  const [isSessionUnlocked, setIsSessionUnlocked] = useState(false);
-  const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
-
-  // Mantém o robô SEFAZ em execução contínua em segundo plano em todas as abas do sistema
-  useSefazRobot(loadStoredCompanies(), '');
-
-  useEffect(() => {
-    const handleSyncChange = () => {
-      const next = getFirebaseSyncStatus();
-      setSyncStatus(next);
-      if (!next.user) {
-        setIsSessionUnlocked(false);
-      }
-    };
-    window.addEventListener(FIREBASE_SYNC_STATUS_EVENT, handleSyncChange);
-    return () => window.removeEventListener(FIREBASE_SYNC_STATUS_EVENT, handleSyncChange);
-  }, []);
-
-  const isUserAdmin =
-    isMasterAdminEmail(syncStatus.user?.email) ||
-    syncStatus.officeProfile?.cargo === 'ADMIN';
-
-  if (!syncStatus.user || !isSessionUnlocked) {
-    return (
-      <LoginScreen
-        syncStatus={syncStatus}
-        onAuthenticated={() => setIsSessionUnlocked(true)}
-      />
-    );
-  }
 
   return (
     <div 
@@ -162,20 +104,6 @@ export default function App() {
                 <span className="hidden sm:inline md:inline">Auditor XML NF-e</span>
               </button>
 
-              {/* Button: Consulta NF-e (Módulo Exclusivo SEFAZ DFe) */}
-              <button
-                onClick={() => setActiveTab('consulta_nfe')}
-                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
-                  activeTab === 'consulta_nfe'
-                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
-                    : 'hover:bg-[#031d30] text-slate-300'
-                }`}
-                title="Consulta e Download de NF-e na SEFAZ Nacional (DFe / PyNFe)"
-              >
-                <DownloadCloud className="h-4.5 w-4.5 shrink-0" />
-                <span className="hidden sm:inline md:inline">Consulta NF-e</span>
-              </button>
-
               {/* Button: Saneador de Chaves */}
               <button
                 onClick={() => setActiveTab('chave_sanitizer')}
@@ -246,7 +174,7 @@ export default function App() {
                 <span className="hidden sm:inline md:inline">Opção Simples</span>
               </button>
 
-              {/* Button 6: Configurações Gerais */}
+              {/* Button 6: Configurações Gerais (Logotipo up to 5MB and Reports) */}
               <button
                 onClick={() => setActiveTab('configuracoes_gerais')}
                 className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer mt-2 border-t border-[#e4b35e]/20 pt-2.5 ${
@@ -254,60 +182,27 @@ export default function App() {
                     ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
                     : 'hover:bg-[#031d30] text-slate-300'
                 }`}
-                title="Configurações Gerais (Empresas e Assinaturas)"
+                title="Configurações Gerais e Logotipo"
               >
                 <Settings className="h-4.5 w-4.5 shrink-0" />
                 <span className="hidden sm:inline md:inline">Configurações Gerais</span>
               </button>
 
-              {/* Botão Exclusivo Admin: Gestão de Funcionários */}
-              {isUserAdmin && (
-                <button
-                  onClick={() => setIsEmployeeModalOpen(true)}
-                  className="flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer hover:bg-[#031d30] text-[#e4b35e]"
-                  title="Criar e Gerenciar Usuários dos Funcionários (Administrador)"
-                >
-                  <Users className="h-4.5 w-4.5 shrink-0 text-[#e4b35e]" />
-                  <span className="hidden sm:inline md:inline">Usuários / Funcionários</span>
-                </button>
-              )}
-
             </nav>
 
-            {/* Rodapé do Menu Lateral: Usuário Logado + Sair */}
-            <div className="mt-auto p-3 border-t border-[#e4b35e]/20 bg-[#031d30]/70 space-y-2">
-              <div className="px-1">
-                <p className="text-[11px] font-bold text-white truncate">
-                  {syncStatus.officeProfile?.nome || syncStatus.user?.displayName || 'Usuário'}
-                </p>
-                <p className="text-[10px] text-[#e4b35e] truncate">
-                  {isUserAdmin ? 'Administrador' : 'Funcionário'} • {syncStatus.user?.email}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  clearUnlockedSession();
-                  setIsSessionUnlocked(false);
-                  signOutFirebase();
-                }}
-                className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-200 border border-red-400/25 text-[11px] font-bold transition-colors cursor-pointer"
-                title="Encerrar sessão no sistema"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-                <span>Sair da Conta</span>
-              </button>
-            </div>
+
 
           </aside>
         )}
 
-        {/* Right Main content stage - Full Width */}
-        <main className="flex-1 min-w-0 w-full max-w-none px-2 sm:px-3 py-2.5 transition-all duration-300">
+        {/* Right Main content stage */}
+        <main className={`flex-grow w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 transition-all duration-300 ${
+          isSidebarVisible ? 'max-w-7xl' : 'max-w-full'
+        }`}>
           
-          {/* Collapse/Expand Sidebar Controller (only shown when sidebar is collapsed) */}
-          {!isSidebarVisible && (
-            <div className="mb-2.5 flex items-center justify-between">
+          {/* Collapse/Expand Sidebar Controller */}
+          <div className="mb-4 flex items-center justify-between">
+            {!isSidebarVisible ? (
               <button
                 onClick={() => setIsSidebarVisible(true)}
                 className="flex items-center justify-center p-2 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] border border-[#e4b35e]/30 rounded-xl transition-all duration-200 shadow-sm cursor-pointer"
@@ -315,23 +210,18 @@ export default function App() {
               >
                 <Menu className="h-5 w-5" />
               </button>
-            </div>
-          )}
+            ) : (
+              <div /> // spacer
+            )}
+
+          </div>
 
           {activeTab === 'auditoria_fiscal' ? (
             <AuditoriaFiscalWorkspace />
           ) : activeTab === 'calculadora' ? (
             <CalculadoraWorkspace />
           ) : activeTab === 'xml_auditor' ? (
-            <NfeXmlAuditor initialXmls={importedXmlsForAuditor} />
-          ) : activeTab === 'consulta_nfe' ? (
-            <ConsultaNfeWorkspace 
-              onNavigateToAuditor={(xmls) => {
-                setImportedXmlsForAuditor(xmls);
-                setActiveTab('xml_auditor');
-              }}
-              onNavigateToConfig={() => setActiveTab('configuracoes_gerais')}
-            />
+            <NfeXmlAuditor />
           ) : activeTab === 'debit_levantamento' ? (
             <DebtLevantamento />
           ) : activeTab === 'chave_sanitizer' ? (
@@ -351,13 +241,6 @@ export default function App() {
 
       {/* 3. Footer (Rodapé) */}
       <Footer />
-
-      {/* Modal de Gestão de Funcionários (Administrador) */}
-      <EmployeeManagerModal
-        isOpen={isEmployeeModalOpen}
-        onClose={() => setIsEmployeeModalOpen(false)}
-        currentUserEmail={syncStatus.user?.email}
-      />
 
     </div>
   );

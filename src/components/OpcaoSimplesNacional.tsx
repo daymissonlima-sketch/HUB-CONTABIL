@@ -13,28 +13,11 @@ import {
   Calendar,
   ShieldCheck,
   AlertTriangle,
-  Download,
-  Info,
-  Edit3,
-  Clipboard,
-  ExternalLink,
-  Plus,
-  Trash2,
-  Check,
-  Sparkles,
-  HelpCircle,
-  FileText
+  Download
 } from 'lucide-react';
-import { Company, IbsCbsEventoFuturo } from '../types_debits';
-import {
-  fetchCnpjSafe,
-  parseCnpjResponseData,
-  isCaepf,
-  isValidCNPJ,
-  parsePortalSimplesText,
-  API_AVAILABLE_FIELDS_CATALOG,
-  API_UNAVAILABLE_FIELDS
-} from '../utils/cnpjHelper';
+import { Company } from '../types_debits';
+import { fetchCnpjSafe, parseCnpjResponseData, isCaepf, isValidCNPJ } from '../utils/cnpjHelper';
+import { getAppLogoPath } from '../utils/logoHelper';
 import { loadStoredCompanies, saveStoredCompanies, COMPANIES_UPDATED_EVENT } from '../utils/companyStorage';
 import * as XLSX from 'xlsx-js-style';
 
@@ -57,8 +40,8 @@ interface BatchItemStatus {
 export const OpcaoSimplesNacional: React.FC = () => {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterMode, setFilterMode] = useState<'all' | 'simples' | 'nao_simples' | 'excluidos' | 'mei' | 'ibs_cbs_regular'>('all');
-
+  const [filterMode, setFilterMode] = useState<'all' | 'simples' | 'nao_simples' | 'excluidos' | 'mei'>('all');
+  
   // Batch update state
   const [isUpdatingBatch, setIsUpdatingBatch] = useState(false);
   const [showBatchModal, setShowBatchModal] = useState(false);
@@ -70,29 +53,14 @@ export const OpcaoSimplesNacional: React.FC = () => {
   const [updatingSingleId, setUpdatingSingleId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ msg: string; isError?: boolean } | null>(null);
 
-  // IBS/CBS 2027 future events state
-  const [selectedCompanyForIbs, setSelectedCompanyForIbs] = useState<Company | null>(null);
-  const [showIbsModal, setShowIbsModal] = useState(false);
-  const [ibsEventsDraft, setIbsEventsDraft] = useState<IbsCbsEventoFuturo[]>([]);
-
-  // API fields modal
-  const [showApiFieldsModal, setShowApiFieldsModal] = useState(false);
-
-  // Paste portal modal
-  const [showPasteModal, setShowPasteModal] = useState(false);
-  const [pasteTargetCompanyId, setPasteTargetCompanyId] = useState<string>('');
-  const [pastePortalText, setPastePortalText] = useState('');
-
-  // Batch IBS configuration modal
-  const [showBatchIbsModal, setShowBatchIbsModal] = useState(false);
-
   // Corporate data
   const officeName = localStorage.getItem('cfg_office_name') || 'Moreira & Lima Contadores Associados';
   const officeCnpj = localStorage.getItem('cfg_office_cnpj') || '12.345.678/0001-90';
+  const logoPath = getAppLogoPath();
 
   const showFeedback = (msg: string, isError = false) => {
     setNotification({ msg, isError });
-    setTimeout(() => setNotification(null), 6000);
+    setTimeout(() => setNotification(null), 5000);
   };
 
   const loadCompanies = () => {
@@ -124,10 +92,10 @@ export const OpcaoSimplesNacional: React.FC = () => {
     return `${clean.slice(0, 2)}.${clean.slice(2, 5)}.${clean.slice(5, 8)}/${clean.slice(8, 12)}-${clean.slice(12, 14)}`;
   };
 
-  // Atualizar única empresa via API
+  // Atualizar única empresa
   const handleUpdateSingle = async (company: Company) => {
     const cleanCnpj = company.cnpj.replace(/\D/g, '');
-
+    
     if (isCaepf(company.cnpj)) {
       showFeedback(`O documento ${company.cnpj} é um CAEPF / Pessoa Física (Produtor Rural). Não possui cadastro no webservice de CNPJ da Receita Federal (permanece tributação Pessoa Física / Presumido).`);
       return;
@@ -143,8 +111,6 @@ export const OpcaoSimplesNacional: React.FC = () => {
       const raw = await fetchCnpjSafe(cleanCnpj);
       const parsed = parseCnpjResponseData(raw);
 
-      const hasApiIbsEvents = parsed.eventosFuturosIbsCbs && parsed.eventosFuturosIbsCbs.length > 0;
-
       const updated = companies.map(c => {
         if (c.id === company.id) {
           return {
@@ -157,23 +123,16 @@ export const OpcaoSimplesNacional: React.FC = () => {
             motivoExclusaoSimples: parsed.motivoExclusaoSimples || (parsed.dataExclusaoSimples ? 'Ato Administrativo / Desenquadramento RFB' : ''),
             opcaoMei: parsed.opcaoMei,
             situacaoCadastral: parsed.situacaoCadastral || c.situacaoCadastral,
-            // Regra de faturamento: mantida estritamente
+            // Regra 1: Não permitir alterar esse percentual automaticamente via consulta do Simples Nacional
             vendaVistaPercent: c.vendaVistaPercent,
-            vendaPrazoPercent: c.vendaPrazoPercent,
-            // Preserva ou atualiza Eventos Futuros IBS/CBS
-            eventosFuturosIbsCbs: hasApiIbsEvents ? parsed.eventosFuturosIbsCbs : (c.eventosFuturosIbsCbs || [])
+            vendaPrazoPercent: c.vendaPrazoPercent
           };
         }
         return c;
       });
 
       saveToStorage(updated);
-
-      if (hasApiIbsEvents) {
-        showFeedback(`Opção pelo Simples Nacional e Eventos Futuros IBS/CBS de ${parsed.razaoSocial || company.razaoSocial} atualizados via API!`);
-      } else {
-        showFeedback(`Opção Simples Nacional atualizada via API da Receita Federal. Nota: A API pública não fornece a tabela de Eventos Futuros IBS/CBS para 2027 (recurso exclusivo do Portal web).`);
-      }
+      showFeedback(`Opção pelo Simples Nacional de ${parsed.razaoSocial || company.razaoSocial} atualizada via API da Receita Federal!`);
     } catch (err: any) {
       console.error(err);
       showFeedback(err.message || 'Erro ao consultar CNPJ na API pública.', true);
@@ -224,6 +183,7 @@ export const OpcaoSimplesNacional: React.FC = () => {
 
       const cleanCnpj = company.cnpj.replace(/\D/g, '');
       if (isCaepf(company.cnpj)) {
+        // Documento CAEPF / Pessoa Física (Produtor Rural)
         successCount++;
         const msg = 'Pessoa Física / CAEPF (Produtor Rural) — Cadastro mantido';
         setBatchItemsStatus(prev => prev.map(item =>
@@ -233,8 +193,6 @@ export const OpcaoSimplesNacional: React.FC = () => {
         try {
           const raw = await fetchCnpjSafe(cleanCnpj);
           const parsed = parseCnpjResponseData(raw);
-
-          const hasApiIbsEvents = parsed.eventosFuturosIbsCbs && parsed.eventosFuturosIbsCbs.length > 0;
 
           updatedCompanies[i] = {
             ...company,
@@ -246,11 +204,9 @@ export const OpcaoSimplesNacional: React.FC = () => {
             motivoExclusaoSimples: parsed.motivoExclusaoSimples || company.motivoExclusaoSimples || (parsed.dataExclusaoSimples ? 'Ato Administrativo / Desenquadramento RFB' : ''),
             opcaoMei: parsed.opcaoMei ?? company.opcaoMei,
             situacaoCadastral: parsed.situacaoCadastral || company.situacaoCadastral,
-            // Regra de faturamento: mantida estritamente
+            // Regra 1: Não permitir alterar esse percentual automaticamente via consulta do Simples Nacional
             vendaVistaPercent: company.vendaVistaPercent,
-            vendaPrazoPercent: company.vendaPrazoPercent,
-            // Preserva ou atualiza Eventos Futuros IBS/CBS
-            eventosFuturosIbsCbs: hasApiIbsEvents ? parsed.eventosFuturosIbsCbs : (company.eventosFuturosIbsCbs || [])
+            vendaPrazoPercent: company.vendaPrazoPercent
           };
           successCount++;
           const msg = parsed.opcaoSimples
@@ -287,119 +243,7 @@ export const OpcaoSimplesNacional: React.FC = () => {
     saveToStorage(updatedCompanies);
     setIsUpdatingBatch(false);
     setBatchFinished(true);
-    showFeedback(`Consulta em lote do Simples Nacional concluída! ${successCount} empresas atualizadas. (Aviso: APIs públicas não fornecem IBS/CBS 2027 automaticamente).`);
-  };
-
-  // Gerenciamento de IBS / CBS 2027
-  const handleOpenIbsModal = (company: Company) => {
-    setSelectedCompanyForIbs(company);
-    setIbsEventsDraft(company.eventosFuturosIbsCbs ? [...company.eventosFuturosIbsCbs] : []);
-    setShowIbsModal(true);
-  };
-
-  const handleApplyPresetIbsRegular = () => {
-    setIbsEventsDraft([
-      { regime: 'IBS', descricao: 'Opção pelo regime regular', dataEfeito: '01/01/2027' },
-      { regime: 'CBS', descricao: 'Opção pelo regime regular', dataEfeito: '01/01/2027' }
-    ]);
-  };
-
-  const handleApplyPresetNaoOptanteIbs = () => {
-    setIbsEventsDraft([
-      { regime: 'IBS', descricao: 'Não optante pelo regime regular (Tributação cumulativa no PGDAS-D)', dataEfeito: '01/01/2027' },
-      { regime: 'CBS', descricao: 'Não optante pelo regime regular (Tributação cumulativa no PGDAS-D)', dataEfeito: '01/01/2027' }
-    ]);
-  };
-
-  const handleClearIbsEvents = () => {
-    setIbsEventsDraft([]);
-  };
-
-  const handleAddCustomIbsRow = () => {
-    setIbsEventsDraft(prev => [
-      ...prev,
-      { regime: 'IBS', descricao: 'Opção pelo regime regular', dataEfeito: '01/01/2027' }
-    ]);
-  };
-
-  const handleSaveIbsEvents = () => {
-    if (!selectedCompanyForIbs) return;
-
-    const updated = companies.map(c => {
-      if (c.id === selectedCompanyForIbs.id) {
-        return {
-          ...c,
-          eventosFuturosIbsCbs: ibsEventsDraft
-        };
-      }
-      return c;
-    });
-
-    saveToStorage(updated);
-    setShowIbsModal(false);
-    showFeedback(`Eventos futuros de IBS/CBS 2027 atualizados para ${selectedCompanyForIbs.razaoSocial}!`);
-  };
-
-  // Aplicação em lote de IBS / CBS 2027 para todas as optantes
-  const handleBatchApplyIbsRegular = (onlySimples: boolean) => {
-    const updated = companies.map(c => {
-      const isSimples = c.opcaoSimples === true || c.opcaoSimples === 'Sim' || c.regimeTributario === 'SIMPLES_NACIONAL';
-      if (!onlySimples || isSimples) {
-        return {
-          ...c,
-          eventosFuturosIbsCbs: [
-            { regime: 'IBS', descricao: 'Opção pelo regime regular', dataEfeito: '01/01/2027' },
-            { regime: 'CBS', descricao: 'Opção pelo regime regular', dataEfeito: '01/01/2027' }
-          ]
-        };
-      }
-      return c;
-    });
-
-    saveToStorage(updated);
-    setShowBatchIbsModal(false);
-    showFeedback(`Configuração de 'Opção pelo regime regular em 01/01/2027' aplicada em lote!`);
-  };
-
-  // Importar / Colar Comprovante do Portal
-  const handleOpenPasteModal = (companyId?: string) => {
-    setPasteTargetCompanyId(companyId || (companies[0]?.id || ''));
-    setPastePortalText('');
-    setShowPasteModal(true);
-  };
-
-  const handleProcessPastedText = () => {
-    if (!pasteTargetCompanyId) {
-      showFeedback('Selecione a empresa de destino.', true);
-      return;
-    }
-
-    const parsed = parsePortalSimplesText(pastePortalText);
-    const targetComp = companies.find(c => c.id === pasteTargetCompanyId);
-
-    if (!targetComp) return;
-
-    const updated = companies.map(c => {
-      if (c.id === pasteTargetCompanyId) {
-        return {
-          ...c,
-          eventosFuturosIbsCbs: parsed.eventosFuturosIbsCbs.length > 0
-            ? parsed.eventosFuturosIbsCbs
-            : (c.eventosFuturosIbsCbs || []),
-          opcaoSimples: parsed.isSimples !== undefined ? parsed.isSimples : c.opcaoSimples,
-          dataOpcaoSimples: parsed.dataOpcao || c.dataOpcaoSimples,
-          dataExclusaoSimples: parsed.dataExclusao || c.dataExclusaoSimples,
-          opcaoMei: parsed.isMei !== undefined ? parsed.isMei : c.opcaoMei
-        };
-      }
-      return c;
-    });
-
-    saveToStorage(updated);
-    setShowPasteModal(false);
-
-    const countEvents = parsed.eventosFuturosIbsCbs.length;
-    showFeedback(`Comprovante do Portal processado com sucesso para ${targetComp.razaoSocial}! (${countEvents} eventos IBS/CBS detectados).`);
+    showFeedback(`Consulta em lote do Simples Nacional concluída! ${successCount} atualizadas.`);
   };
 
   // Filtragem
@@ -409,13 +253,11 @@ export const OpcaoSimplesNacional: React.FC = () => {
     if (!matchSearch) return false;
 
     const isSimplesOpt = c.opcaoSimples === true || c.opcaoSimples === 'Sim' || c.regimeTributario === 'SIMPLES_NACIONAL';
-    const hasIbsRegular = Array.isArray(c.eventosFuturosIbsCbs) && c.eventosFuturosIbsCbs.some(ev => /regular/i.test(ev.descricao));
 
     if (filterMode === 'simples') return isSimplesOpt;
     if (filterMode === 'nao_simples') return !isSimplesOpt && !c.dataExclusaoSimples;
     if (filterMode === 'excluidos') return Boolean(c.dataExclusaoSimples);
     if (filterMode === 'mei') return Boolean(c.opcaoMei === true || c.opcaoMei === 'Sim');
-    if (filterMode === 'ibs_cbs_regular') return hasIbsRegular;
     return true;
   });
 
@@ -424,7 +266,6 @@ export const OpcaoSimplesNacional: React.FC = () => {
   const optantesCount = companies.filter(c => c.opcaoSimples === true || c.opcaoSimples === 'Sim' || c.regimeTributario === 'SIMPLES_NACIONAL').length;
   const meiCount = companies.filter(c => c.opcaoMei === true || c.opcaoMei === 'Sim').length;
   const excluidosCount = companies.filter(c => Boolean(c.dataExclusaoSimples)).length;
-  const ibsRegularCount = companies.filter(c => Array.isArray(c.eventosFuturosIbsCbs) && c.eventosFuturosIbsCbs.some(ev => /regular/i.test(ev.descricao))).length;
 
   // Exportação Excel formatada com estilo corporativo Moreira & Lima (XLSX-JS-STYLE)
   const handleExportExcel = () => {
@@ -439,7 +280,7 @@ export const OpcaoSimplesNacional: React.FC = () => {
     let currentRow = 0;
     const merges: any[] = [];
     const rowHeights: any[] = [];
-    const maxColIndex = 7; // Agora com coluna de Eventos Futuros IBS/CBS
+    const maxColIndex = 6;
 
     const getCellRef = (r: number, c: number) => XLSX.utils.encode_cell({ r, c });
 
@@ -538,7 +379,7 @@ export const OpcaoSimplesNacional: React.FC = () => {
 
     // Row 1: Subtitle Banner
     for (let c = 0; c <= maxColIndex; c++) {
-      writeCell(currentRow, c, c === 0 ? 'AUDITORIA DE OPÇÃO PELO SIMPLES NACIONAL, MEI E EVENTOS FUTUROS IBS/CBS 2027' : '', 's', c === 0 ? styleHeaderSub : styleHeaderBannerBase);
+      writeCell(currentRow, c, c === 0 ? 'AUDITORIA DE OPÇÃO PELO SIMPLES NACIONAL E MEI' : '', 's', c === 0 ? styleHeaderSub : styleHeaderBannerBase);
     }
     merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: maxColIndex } });
     rowHeights.push({ hpt: 20 });
@@ -560,8 +401,7 @@ export const OpcaoSimplesNacional: React.FC = () => {
     writeCell(currentRow, 4, `Filtro: ${filterMode.toUpperCase()}`, 's', styleBarRight);
     writeCell(currentRow, 5, '', 's', styleBarRight);
     writeCell(currentRow, 6, '', 's', styleBarRight);
-    writeCell(currentRow, 7, '', 's', styleBarRight);
-    merges.push({ s: { r: currentRow, c: 4 }, e: { r: currentRow, c: 7 } });
+    merges.push({ s: { r: currentRow, c: 4 }, e: { r: currentRow, c: 6 } });
     rowHeights.push({ hpt: 22 });
     currentRow++;
 
@@ -574,11 +414,10 @@ export const OpcaoSimplesNacional: React.FC = () => {
     writeCell(currentRow, 3, '', 's', styleBarCenter);
     merges.push({ s: { r: currentRow, c: 2 }, e: { r: currentRow, c: 3 } });
 
-    writeCell(currentRow, 4, `MEI: ${meiCount} | IBS/CBS Regular 2027: ${ibsRegularCount}`, 's', styleBarRight);
+    writeCell(currentRow, 4, `MEI: ${meiCount} | Excluídas: ${excluidosCount}`, 's', styleBarRight);
     writeCell(currentRow, 5, '', 's', styleBarRight);
     writeCell(currentRow, 6, '', 's', styleBarRight);
-    writeCell(currentRow, 7, '', 's', styleBarRight);
-    merges.push({ s: { r: currentRow, c: 4 }, e: { r: currentRow, c: 7 } });
+    merges.push({ s: { r: currentRow, c: 4 }, e: { r: currentRow, c: 6 } });
     rowHeights.push({ hpt: 22 });
     currentRow++;
 
@@ -593,13 +432,12 @@ export const OpcaoSimplesNacional: React.FC = () => {
       'Opção Simples Nacional',
       'Data Adesão / Opção',
       'Data Exclusão',
-      'Optante MEI',
-      'Eventos Futuros (Regime Regular IBS/CBS 2027)',
-      'Situação Cadastral'
+      'Motivo da Exclusão',
+      'Optante MEI'
     ];
 
     headers.forEach((h, c) => {
-      const alignStyle = (c === 1 || c === 6) ? styleTableHeaderLeft : styleTableHeaderCenter;
+      const alignStyle = (c === 1 || c === 5) ? styleTableHeaderLeft : styleTableHeaderCenter;
       writeCell(currentRow, c, h, 's', alignStyle);
     });
     rowHeights.push({ hpt: 26 });
@@ -612,11 +450,8 @@ export const OpcaoSimplesNacional: React.FC = () => {
       const statusSimples = isSimples ? 'SIM (OPTANTE)' : (comp.dataExclusaoSimples ? 'EXCLUÍDA' : 'NÃO OPTANTE');
       const dataAdesao = comp.dataOpcaoSimples || '-';
       const dataExclusao = comp.dataExclusaoSimples || '-';
+      const motivoExclusao = comp.motivoExclusaoSimples || (comp.dataExclusaoSimples ? 'Ato Administrativo / Desenquadramento RFB' : '-');
       const statusMei = (comp.opcaoMei === true || comp.opcaoMei === 'Sim') ? 'SIM (MEI)' : 'NÃO';
-
-      const ibsEventsText = (comp.eventosFuturosIbsCbs && comp.eventosFuturosIbsCbs.length > 0)
-        ? comp.eventosFuturosIbsCbs.map(ev => `${ev.regime}: ${ev.descricao} (${ev.dataEfeito})`).join(' | ')
-        : 'Não informado no Portal';
 
       const statusColor = isSimples ? "059669" : (comp.dataExclusaoSimples ? "E11D48" : "475569");
 
@@ -625,9 +460,8 @@ export const OpcaoSimplesNacional: React.FC = () => {
       writeCell(currentRow, 2, statusSimples, 's', getRowStyle(isEven, 'center', true, statusColor));
       writeCell(currentRow, 3, dataAdesao, 's', getRowStyle(isEven, 'center', false, "334155"));
       writeCell(currentRow, 4, dataExclusao, 's', getRowStyle(isEven, 'center', false, "334155"));
-      writeCell(currentRow, 5, statusMei, 's', getRowStyle(isEven, 'center', statusMei.startsWith('SIM') ? true : false, statusMei.startsWith('SIM') ? "0284C7" : "475569"));
-      writeCell(currentRow, 6, ibsEventsText, 's', getRowStyle(isEven, 'left', false, ibsEventsText.includes('regime regular') ? "4338CA" : "475569"));
-      writeCell(currentRow, 7, comp.situacaoCadastral || 'ATIVA', 's', getRowStyle(isEven, 'center', false, "334155"));
+      writeCell(currentRow, 5, motivoExclusao, 's', getRowStyle(isEven, 'left', false, "334155"));
+      writeCell(currentRow, 6, statusMei, 's', getRowStyle(isEven, 'center', statusMei.startsWith('SIM') ? true : false, statusMei.startsWith('SIM') ? "0284C7" : "475569"));
 
       rowHeights.push({ hpt: 20 });
       currentRow++;
@@ -640,12 +474,11 @@ export const OpcaoSimplesNacional: React.FC = () => {
     ws['!cols'] = [
       { wch: 20 }, // CNPJ
       { wch: 45 }, // Razão Social
-      { wch: 22 }, // Opção Simples
-      { wch: 18 }, // Data Adesão
-      { wch: 18 }, // Data Exclusão
-      { wch: 16 }, // Optante MEI
-      { wch: 48 }, // Eventos Futuros IBS/CBS
-      { wch: 18 }  // Situação Cadastral
+      { wch: 24 }, // Opção Simples
+      { wch: 20 }, // Data Adesão
+      { wch: 20 }, // Data Exclusão
+      { wch: 45 }, // Motivo Exclusão
+      { wch: 18 }  // Optante MEI
     ];
     ws['!views'] = [{ showGridLines: false }];
 
@@ -653,16 +486,16 @@ export const OpcaoSimplesNacional: React.FC = () => {
     ws['!ref'] = `A1:${lastRef}`;
 
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, ws, 'Opção Simples e IBS-CBS');
-    const fileName = `Relatorio_Simples_IBS_CBS_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.utils.book_append_sheet(workbook, ws, 'Opção Simples Nacional');
+    const fileName = `Relatorio_Opcao_Simples_${new Date().toISOString().slice(0, 10)}.xlsx`;
     XLSX.writeFile(workbook, fileName);
 
-    showFeedback(`Planilha Excel com Simples Nacional e Eventos Futuros IBS/CBS (${fileName}) exportada com sucesso!`);
+    showFeedback(`Planilha Excel formatada (${fileName}) exportada com sucesso!`);
   };
 
   return (
-    <div className="space-y-6">
-      {/* NOTIFICAÇÃO TOAST */}
+    <div className="space-y-6 max-w-7xl mx-auto">
+      {/* Feedback Toast */}
       {notification && (
         <div className={`p-4 rounded-xl border flex items-center justify-between text-xs font-bold shadow-sm ${
           notification.isError
@@ -686,46 +519,22 @@ export const OpcaoSimplesNacional: React.FC = () => {
             <ShieldCheck className="h-7 w-7" />
           </div>
           <div>
-            <h1 className="text-xl font-black text-slate-900 tracking-tight">Consulta Optantes Simples Nacional & IBS/CBS 2027</h1>
+            <h1 className="text-xl font-black text-slate-900 tracking-tight">Consulta Optantes Simples Nacional</h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              Acompanhamento cadastral da Receita Federal, eventos futuros da Reforma Tributária (IBS/CBS) e conformidade fiscal.
+              Acompanhamento cadastral, datas de adesão, exclusão e geração de relatórios oficiais para auditoria.
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
           <button
-            onClick={() => setShowApiFieldsModal(true)}
-            className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-300"
-            title="Ver quais campos a API pública da Receita Federal fornece"
-          >
-            <Info className="h-4 w-4 text-blue-600" />
-            Campos da API RFB
-          </button>
-          <button
-            onClick={() => handleOpenPasteModal()}
-            className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-            title="Importar comprovante copiado diretamente do Portal do Simples Nacional"
-          >
-            <Clipboard className="h-4 w-4 text-indigo-600" />
-            Importar Comprovante Portal
-          </button>
-          <button
             onClick={handleOpenBatchModal}
             disabled={isUpdatingBatch}
             className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs uppercase flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
-            title="Atualizar situação no Simples Nacional de todas as empresas via API"
+            title="Atualizar situação no Simples Nacional de todas as empresas"
           >
             <RefreshCw className={`h-4 w-4 ${isUpdatingBatch ? 'animate-spin' : ''}`} />
             Atualizar Consulta
-          </button>
-          <button
-            onClick={() => setShowBatchIbsModal(true)}
-            className="px-3.5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs uppercase flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
-            title="Configurar Reforma Tributária 2027 (IBS/CBS) em Lote"
-          >
-            <Sparkles className="h-4 w-4" />
-            IBS/CBS em Lote
           </button>
           <button
             onClick={handleExportExcel}
@@ -739,10 +548,10 @@ export const OpcaoSimplesNacional: React.FC = () => {
       </div>
 
       {/* CARDS RESUMO ESTATÍSTICO (OCULTO NA IMPRESSÃO) */}
-      <div className="print:hidden grid grid-cols-2 md:grid-cols-5 gap-3.5">
+      <div className="print:hidden grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase mb-1">
-            <span>Monitoradas</span>
+            <span>Total Monitoradas</span>
             <Building2 className="h-4 w-4 text-slate-400" />
           </div>
           <p className="text-2xl font-black text-slate-900">{totalCount}</p>
@@ -763,20 +572,6 @@ export const OpcaoSimplesNacional: React.FC = () => {
           <span className="text-[10px] text-emerald-700">Com adesão homologada</span>
         </div>
 
-        <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 shadow-2xs">
-          <div className="flex items-center justify-between text-indigo-800 text-xs font-bold uppercase mb-1">
-            <span>IBS/CBS 2027 (Regular)</span>
-            <Sparkles className="h-4 w-4 text-indigo-600" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <p className="text-2xl font-black text-indigo-900">{ibsRegularCount}</p>
-            <span className="text-xs font-bold text-indigo-700">
-              ({totalCount > 0 ? Math.round((ibsRegularCount / totalCount) * 100) : 0}%)
-            </span>
-          </div>
-          <span className="text-[10px] text-indigo-700">Opção regime regular 2027</span>
-        </div>
-
         <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-4 shadow-2xs">
           <div className="flex items-center justify-between text-blue-800 text-xs font-bold uppercase mb-1">
             <span>Optantes MEI</span>
@@ -786,13 +581,13 @@ export const OpcaoSimplesNacional: React.FC = () => {
           <span className="text-[10px] text-blue-700">Microempreendedor Individual</span>
         </div>
 
-        <div className="bg-rose-50/70 border border-rose-200 rounded-2xl p-4 shadow-2xs">
-          <div className="flex items-center justify-between text-rose-800 text-xs font-bold uppercase mb-1">
-            <span>Com Exclusão</span>
-            <AlertTriangle className="h-4 w-4 text-rose-600" />
+        <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 shadow-2xs">
+          <div className="flex items-center justify-between text-amber-800 text-xs font-bold uppercase mb-1">
+            <span>Com Exclusão / Histórico</span>
+            <AlertTriangle className="h-4 w-4 text-amber-600" />
           </div>
-          <p className="text-2xl font-black text-rose-900">{excluidosCount}</p>
-          <span className="text-[10px] text-rose-700">Histórico de exclusão</span>
+          <p className="text-2xl font-black text-amber-900">{excluidosCount}</p>
+          <span className="text-[10px] text-amber-700">Registram data de exclusão</span>
         </div>
       </div>
 
@@ -805,7 +600,6 @@ export const OpcaoSimplesNacional: React.FC = () => {
           {[
             { id: 'all', label: 'Todas as Empresas', count: totalCount },
             { id: 'simples', label: 'Optantes Simples', count: optantesCount },
-            { id: 'ibs_cbs_regular', label: 'IBS/CBS Regular 2027', count: ibsRegularCount },
             { id: 'nao_simples', label: 'Não Optantes / Demais', count: totalCount - optantesCount },
             { id: 'excluidos', label: 'Com Exclusão', count: excluidosCount },
             { id: 'mei', label: 'Optantes MEI', count: meiCount }
@@ -848,9 +642,11 @@ export const OpcaoSimplesNacional: React.FC = () => {
         <div className="hidden print:block p-8 border-b-2 border-[#04243b] mb-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="px-3.5 py-2 bg-[#04243b] text-[#e4b35e] rounded-xl font-black text-sm tracking-widest border border-[#e4b35e]/30">
-                M&amp;L
-              </div>
+              {logoPath ? (
+                <img src={logoPath} alt="Logotipo" className="h-14 w-auto object-contain" />
+              ) : (
+                <div className="p-3 bg-[#04243b] text-[#e4b35e] rounded-xl font-bold">M&L</div>
+              )}
               <div>
                 <h2 className="text-lg font-black text-[#04243b] uppercase tracking-tight">{officeName}</h2>
                 <p className="text-xs text-slate-600 font-mono">CNPJ: {officeCnpj}</p>
@@ -867,7 +663,7 @@ export const OpcaoSimplesNacional: React.FC = () => {
           </div>
           <div className="mt-6 pt-4 border-t border-slate-200">
             <h1 className="text-base font-bold text-slate-900 uppercase">
-              Auditoria de Opção pelo Simples Nacional, MEI e Eventos Futuros IBS/CBS 2027
+              Auditoria de Opção pelo Simples Nacional e MEI (Consulta API RFB)
             </h1>
             <p className="text-xs text-slate-600 mt-0.5">
               Filtro Aplicado: <strong className="font-bold uppercase">{filterMode === 'all' ? 'Todas as Empresas' : filterMode}</strong> • Total Listado: <strong className="font-bold">{filteredCompanies.length} empresas</strong>
@@ -883,17 +679,16 @@ export const OpcaoSimplesNacional: React.FC = () => {
                 <th className="py-3.5 px-4">CNPJ</th>
                 <th className="py-3.5 px-4">Razão Social / Nome Empresarial</th>
                 <th className="py-3.5 px-4 text-center">Opção Simples Nacional</th>
-                <th className="py-3.5 px-4">Data Adesão</th>
+                <th className="py-3.5 px-4">Data Adesão / Opção</th>
                 <th className="py-3.5 px-4">Data Exclusão</th>
                 <th className="py-3.5 px-4 text-center">Optante MEI</th>
-                <th className="py-3.5 px-4">Eventos Futuros (IBS/CBS 2027)</th>
-                <th className="py-3.5 px-4 text-right print:hidden">Ações</th>
+                <th className="py-3.5 px-4 text-right print:hidden">Consulta API</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-xs">
               {filteredCompanies.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400 font-medium">
+                  <td colSpan={7} className="py-12 text-center text-slate-400 font-medium">
                     Nenhuma empresa encontrada com os critérios de filtro selecionados.
                   </td>
                 </tr>
@@ -904,17 +699,15 @@ export const OpcaoSimplesNacional: React.FC = () => {
                   const hasExclusao = Boolean(comp.dataExclusaoSimples);
                   const isUpdatingThis = updatingSingleId === comp.id;
 
-                  const hasIbsEvents = Array.isArray(comp.eventosFuturosIbsCbs) && comp.eventosFuturosIbsCbs.length > 0;
-
                   return (
                     <tr key={comp.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-3 px-4 font-mono font-bold text-slate-800 whitespace-nowrap">
                         {comp.cnpj}
                       </td>
-                      <td className="py-3 px-4 font-semibold text-slate-900 max-w-[220px] truncate" title={comp.razaoSocial}>
+                      <td className="py-3 px-4 font-semibold text-slate-900 max-w-xs truncate" title={comp.razaoSocial}>
                         {comp.razaoSocial}
                       </td>
-                      <td className="py-3 px-4 text-center whitespace-nowrap">
+                      <td className="py-3 px-4 text-center">
                         {isSimples ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 font-bold text-[10px]">
                             <CheckCircle className="h-3 w-3 text-emerald-600" />
@@ -951,7 +744,7 @@ export const OpcaoSimplesNacional: React.FC = () => {
                           <span className="text-slate-400 italic">—</span>
                         )}
                       </td>
-                      <td className="py-3 px-4 text-center whitespace-nowrap">
+                      <td className="py-3 px-4 text-center">
                         {isMei ? (
                           <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-bold text-[10px]">
                             SIM (MEI)
@@ -960,71 +753,16 @@ export const OpcaoSimplesNacional: React.FC = () => {
                           <span className="text-slate-400 text-[11px]">Não</span>
                         )}
                       </td>
-                      
-                      {/* COLUNA DE EVENTOS FUTUROS IBS/CBS 2027 */}
-                      <td className="py-3 px-4">
-                        {hasIbsEvents ? (
-                          <div className="flex flex-col gap-1 items-start">
-                            {comp.eventosFuturosIbsCbs!.map((ev, i) => (
-                              <div
-                                key={i}
-                                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-900 text-[10px] font-semibold"
-                              >
-                                <span className="px-1 py-0.2 bg-indigo-600 text-white font-bold rounded text-[9px] font-mono">
-                                  {ev.regime}
-                                </span>
-                                <span className="truncate max-w-[150px]" title={ev.descricao}>
-                                  {ev.descricao}
-                                </span>
-                                <span className="font-mono text-indigo-600 font-bold shrink-0">
-                                  {ev.dataEfeito}
-                                </span>
-                              </div>
-                            ))}
-                            <button
-                              onClick={() => handleOpenIbsModal(comp)}
-                              className="print:hidden text-[10px] font-bold text-indigo-600 hover:text-indigo-900 underline mt-0.5 flex items-center gap-1 cursor-pointer"
-                            >
-                              <Edit3 className="h-2.5 w-2.5" />
-                              Editar tabela
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] text-slate-400 italic bg-slate-50 px-2 py-1 rounded border border-slate-200" title="A API pública da Receita Federal não expõe este campo">
-                              Não fornecido pela API
-                            </span>
-                            <button
-                              onClick={() => handleOpenIbsModal(comp)}
-                              className="print:hidden px-2 py-1 bg-white hover:bg-indigo-50 border border-indigo-300 text-indigo-700 font-bold text-[10px] rounded-lg transition-colors cursor-pointer shadow-2xs flex items-center gap-1"
-                              title="Registrar opção IBS/CBS para 2027"
-                            >
-                              <Plus className="h-3 w-3" />
-                              Informar
-                            </button>
-                          </div>
-                        )}
-                      </td>
-
                       <td className="py-3 px-4 text-right print:hidden whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => handleOpenPasteModal(comp.id)}
-                            className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 hover:text-indigo-600 transition-colors cursor-pointer"
-                            title="Colar comprovante do Portal para esta empresa"
-                          >
-                            <Clipboard className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleUpdateSingle(comp)}
-                            disabled={isUpdatingThis || isUpdatingBatch}
-                            className="px-2.5 py-1.5 rounded-lg border border-slate-300 hover:bg-[#04243b] hover:text-[#e4b35e] text-slate-700 font-bold text-[11px] transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-40"
-                            title="Atualizar dados do Simples Nacional via API pública"
-                          >
-                            <RefreshCw className={`h-3 w-3 ${isUpdatingThis ? 'animate-spin text-[#e4b35e]' : ''}`} />
-                            {isUpdatingThis ? 'Consultando...' : 'Atualizar'}
-                          </button>
-                        </div>
+                        <button
+                          onClick={() => handleUpdateSingle(comp)}
+                          disabled={isUpdatingThis || isUpdatingBatch}
+                          className="px-2.5 py-1.5 rounded-lg border border-slate-300 hover:bg-[#04243b] hover:text-[#e4b35e] text-slate-700 font-bold text-[11px] transition-colors flex items-center gap-1 ml-auto cursor-pointer disabled:opacity-40"
+                          title="Atualizar dados do Simples Nacional via API pública"
+                        >
+                          <RefreshCw className={`h-3 w-3 ${isUpdatingThis ? 'animate-spin text-[#e4b35e]' : ''}`} />
+                          {isUpdatingThis ? 'Consultando...' : 'Atualizar'}
+                        </button>
                       </td>
                     </tr>
                   );
@@ -1043,484 +781,7 @@ export const OpcaoSimplesNacional: React.FC = () => {
         </div>
       </div>
 
-      {/* MODAL 1: EVENTOS FUTUROS (REGIME REGULAR IBS/CBS) IDENTICO AO PORTAL */}
-      <AnimatePresence>
-        {showIbsModal && selectedCompanyForIbs && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs print:hidden">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden"
-            >
-              <div className="bg-[#04243b] px-6 py-4 flex items-center justify-between text-white">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-[#e4b35e]/20 text-[#e4b35e] rounded-xl">
-                    <Sparkles className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-sm sm:text-base">Eventos Futuros (Regime Regular IBS/CBS)</h3>
-                    <p className="text-[11px] text-slate-300 font-mono">
-                      {selectedCompanyForIbs.razaoSocial} • CNPJ: {selectedCompanyForIbs.cnpj}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowIbsModal(false)}
-                  className="text-slate-300 hover:text-white p-1.5 rounded-lg hover:bg-white/10 cursor-pointer transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
-                {/* AVISO EXPLICATIVO */}
-                <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 space-y-1">
-                  <p className="font-bold text-xs flex items-center gap-1.5">
-                    <Info className="h-4 w-4 text-blue-600 shrink-0" />
-                    Sobre a tabela de Eventos Futuros (EC 132/2023 - Reforma Tributária)
-                  </p>
-                  <p className="text-[11px] text-blue-800 leading-relaxed">
-                    Esta tabela reproduz exatamente a seção oficial <strong>"Eventos Futuros (Regime Regular IBS/CBS)"</strong> 
-                    do Portal do Simples Nacional da Receita Federal. As empresas optantes pelo Simples que optarem pelo regime regular de apuração 
-                    de IBS e CBS a partir de <strong>01/01/2027</strong> podem transferir créditos não-cumulativos para clientes pessoa jurídica.
-                  </p>
-                </div>
-
-                {/* BOTÕES DE PRESET RÁPIDO */}
-                <div className="space-y-2">
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                    Ações Rápidas de Configuração
-                  </label>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={handleApplyPresetIbsRegular}
-                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
-                    >
-                      <Check className="h-3.5 w-3.5" />
-                      Opção pelo Regime Regular (IBS + CBS - 01/01/2027)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleApplyPresetNaoOptanteIbs}
-                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-300"
-                    >
-                      Permanecer no Simples (Sem regime regular)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleClearIbsEvents}
-                      className="px-3 py-1.5 text-rose-600 hover:bg-rose-50 font-bold rounded-lg text-xs transition-colors cursor-pointer border border-rose-200"
-                    >
-                      Limpar Registros
-                    </button>
-                  </div>
-                </div>
-
-                {/* TABELA VISUAL IDÊNTICA AO PORTAL SIMPLES NACIONAL (SCREENSHOT DO USUÁRIO) */}
-                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-                  <div className="bg-[#04243b] text-[#e4b35e] font-bold text-xs px-4 py-2.5 flex items-center justify-between">
-                    <span>Eventos Futuros (Regime Regular IBS/CBS)</span>
-                    <button
-                      type="button"
-                      onClick={handleAddCustomIbsRow}
-                      className="text-[11px] bg-white/10 hover:bg-white/20 text-white px-2 py-1 rounded flex items-center gap-1 transition-colors cursor-pointer"
-                    >
-                      <Plus className="h-3 w-3" />
-                      Adicionar Linha
-                    </button>
-                  </div>
-
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-slate-100 border-b border-slate-200 text-[11px] font-bold text-slate-700">
-                        <th className="py-2.5 px-4 w-28">Regime</th>
-                        <th className="py-2.5 px-4">Descrição do evento</th>
-                        <th className="py-2.5 px-4 w-32">Data efeito</th>
-                        <th className="py-2.5 px-4 w-12 text-center">Remover</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-sans">
-                      {ibsEventsDraft.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="py-6 text-center text-slate-400 italic">
-                            Nenhum evento futuro registrado para esta empresa. Use os botões acima ou adicione manualmente.
-                          </td>
-                        </tr>
-                      ) : (
-                        ibsEventsDraft.map((row, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50">
-                            <td className="py-2 px-4">
-                              <select
-                                value={row.regime}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setIbsEventsDraft(prev => prev.map((item, i) => i === idx ? { ...item, regime: val } : item));
-                                }}
-                                className="w-full border border-slate-300 rounded px-2 py-1 text-xs font-bold text-slate-800 bg-white"
-                              >
-                                <option value="IBS">IBS</option>
-                                <option value="CBS">CBS</option>
-                              </select>
-                            </td>
-                            <td className="py-2 px-4">
-                              <input
-                                type="text"
-                                value={row.descricao}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setIbsEventsDraft(prev => prev.map((item, i) => i === idx ? { ...item, descricao: val } : item));
-                                }}
-                                placeholder="Opção pelo regime regular"
-                                className="w-full border border-slate-300 rounded px-2 py-1 text-xs text-slate-800"
-                              />
-                            </td>
-                            <td className="py-2 px-4">
-                              <input
-                                type="text"
-                                value={row.dataEfeito}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setIbsEventsDraft(prev => prev.map((item, i) => i === idx ? { ...item, dataEfeito: val } : item));
-                                }}
-                                placeholder="01/01/2027"
-                                className="w-full border border-slate-300 rounded px-2 py-1 text-xs font-mono text-slate-800"
-                              />
-                            </td>
-                            <td className="py-2 px-4 text-center">
-                              <button
-                                type="button"
-                                onClick={() => setIbsEventsDraft(prev => prev.filter((_, i) => i !== idx))}
-                                className="p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded cursor-pointer transition-colors"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowIbsModal(false)}
-                  className="px-4 py-2 border border-slate-300 rounded-xl text-slate-600 font-bold hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveIbsEvents}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
-                >
-                  <Check className="h-4 w-4" />
-                  Salvar Eventos Futuros
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL 2: LISTA DE CAMPOS QUE A API DA RECEITA FEDERAL DISPONIBILIZA */}
-      <AnimatePresence>
-        {showApiFieldsModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs print:hidden">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden"
-            >
-              <div className="bg-[#04243b] px-6 py-4 flex items-center justify-between text-white">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-white/10 rounded-xl">
-                    <FileText className="h-5 w-5 text-[#e4b35e]" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-sm sm:text-base">Mapeamento da API de CNPJ da Receita Federal</h3>
-                    <p className="text-[11px] text-slate-300">Campos disponibilizados via BrasilAPI / Dados Abertos RFB</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowApiFieldsModal(false)}
-                  className="text-slate-300 hover:text-white p-1.5 rounded-lg hover:bg-white/10 cursor-pointer transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
-                {/* ALERTA SOBRE A AUSÊNCIA DO IBS/CBS NA API PÚBLICA */}
-                <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl space-y-2 text-amber-950">
-                  <div className="flex items-center gap-2">
-                    <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0" />
-                    <span className="font-bold text-sm">Por que a API pública não baixa IBS e CBS 2027?</span>
-                  </div>
-                  <p className="text-xs text-amber-900 leading-relaxed">
-                    A Receita Federal publica mensalmente os <em>Dados Abertos do CNPJ</em>. Esse banco de dados aberto contém informações cadastrais, 
-                    situação, QSA e dados básicos de opção pelo Simples Nacional (se é optante e data de opção). 
-                    Porém, a tabela <strong>"Eventos Futuros (Regime Regular IBS/CBS)"</strong> foi introduzida recentemente no sistema web interativo 
-                    do <strong>Portal do Simples Nacional</strong> (com proteção por hCaptcha) em virtude da Reforma Tributária (EC 132/2023), 
-                    e <strong>ainda não foi incluída nos arquivos públicos abertos da Receita Federal</strong> que alimentam APIs como BrasilAPI, 
-                    ReceitaWS ou publica.cnpj.ws.
-                  </p>
-                </div>
-
-                {/* CATEGORIAS E CAMPOS DISPONIBILIZADOS PELA API */}
-                <div className="space-y-4">
-                  <h4 className="text-sm font-black text-slate-900 uppercase tracking-tight">
-                    Relação de Campos que a API Pública Baixa Atualmente:
-                  </h4>
-
-                  {API_AVAILABLE_FIELDS_CATALOG.map((cat, idx) => (
-                    <div key={idx} className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-                      <div className="bg-slate-100 px-4 py-2 font-bold text-slate-800 text-xs border-b border-slate-200 flex items-center justify-between">
-                        <span>{cat.categoria}</span>
-                        <span className="text-[10px] text-slate-500 font-mono">{cat.campos.length} campos</span>
-                      </div>
-                      <div className="divide-y divide-slate-100 bg-white">
-                        {cat.campos.map((item, cIdx) => (
-                          <div key={cIdx} className="p-2.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
-                            <span className="font-mono font-bold text-slate-800 bg-slate-50 px-2 py-0.5 rounded border border-slate-200 w-fit">
-                              {item.campo}
-                            </span>
-                            <span className="text-slate-600 text-[11px] sm:text-right">
-                              {item.descricao}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-end">
-                <button
-                  type="button"
-                  onClick={() => setShowApiFieldsModal(false)}
-                  className="px-5 py-2 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] font-bold rounded-xl transition-colors cursor-pointer"
-                >
-                  Entendi e Fechar
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL 3: IMPORTAR / COLAR COMPROVANTE DO PORTAL SIMPLES NACIONAL */}
-      <AnimatePresence>
-        {showPasteModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs print:hidden">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden"
-            >
-              <div className="bg-[#04243b] px-6 py-4 flex items-center justify-between text-white">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-indigo-500/20 text-[#e4b35e] rounded-xl">
-                    <Clipboard className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-sm sm:text-base">Importar Comprovante do Portal Simples Nacional</h3>
-                    <p className="text-[11px] text-slate-300">Cole o texto copiado da consulta do Portal da Receita Federal</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowPasteModal(false)}
-                  className="text-slate-300 hover:text-white p-1.5 rounded-lg hover:bg-white/10 cursor-pointer transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="p-6 overflow-y-auto space-y-5 flex-1 text-xs">
-                <div className="space-y-1.5">
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                    Selecione a Empresa de Destino:
-                  </label>
-                  <select
-                    value={pasteTargetCompanyId}
-                    onChange={(e) => setPasteTargetCompanyId(e.target.value)}
-                    className="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-[#04243b]/40"
-                  >
-                    {companies.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.cnpj} — {c.razaoSocial}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                    Cole o texto da consulta do Portal do Simples Nacional:
-                  </label>
-                  <textarea
-                    rows={8}
-                    value={pastePortalText}
-                    onChange={(e) => setPastePortalText(e.target.value)}
-                    placeholder={`Exemplo de conteúdo copiado do Portal:
-Situação Atual: Optante pelo Simples Nacional desde 01/01/2018
-Enquadrado no SIMEI: Não
-
-Eventos Futuros (Regime Regular IBS/CBS)
-Regime    Descrição do evento          Data efeito
-IBS       Opção pelo regime regular    01/01/2027
-CBS       Opção pelo regime regular    01/01/2027`}
-                    className="w-full border border-slate-300 rounded-xl p-3 text-xs font-mono text-slate-800 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#04243b]/40 resize-none"
-                  />
-                </div>
-
-                {/* PRÉVIA DO QUE SERÁ PROCESSADO */}
-                {pastePortalText.trim() && (
-                  <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2">
-                    <span className="text-[10px] font-bold text-indigo-900 uppercase tracking-wider">
-                      Prévia dos Dados Detectados pelo Sistema:
-                    </span>
-                    {(() => {
-                      const detected = parsePortalSimplesText(pastePortalText);
-                      return (
-                        <div className="space-y-1 text-xs text-indigo-950 font-sans">
-                          <p>
-                            • <strong>Eventos IBS/CBS 2027:</strong>{' '}
-                            {detected.eventosFuturosIbsCbs.length > 0 ? (
-                              <span className="font-bold text-indigo-700">
-                                {detected.eventosFuturosIbsCbs.map(e => `${e.regime}: ${e.descricao} (${e.dataEfeito})`).join(' | ')}
-                              </span>
-                            ) : (
-                              <span className="text-slate-500 italic">Nenhum evento detectado no texto</span>
-                            )}
-                          </p>
-                          {detected.isSimples !== undefined && (
-                            <p>• <strong>Situação Simples:</strong> {detected.isSimples ? 'Optante' : 'Não Optante'}</p>
-                          )}
-                          {detected.dataOpcao && (
-                            <p>• <strong>Data Opção:</strong> {detected.dataOpcao}</p>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-              </div>
-
-              <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowPasteModal(false)}
-                  className="px-4 py-2 border border-slate-300 rounded-xl text-slate-600 font-bold hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleProcessPastedText}
-                  disabled={!pastePortalText.trim()}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
-                >
-                  <Check className="h-4 w-4" />
-                  Processar e Salvar
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL 4: CONFIGURAÇÃO EM LOTE DE IBS/CBS 2027 */}
-      <AnimatePresence>
-        {showBatchIbsModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs print:hidden">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full flex flex-col overflow-hidden"
-            >
-              <div className="bg-[#04243b] px-6 py-4 flex items-center justify-between text-white">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-[#e4b35e]/20 text-[#e4b35e] rounded-xl">
-                    <Sparkles className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-sm sm:text-base">Configurar IBS/CBS 2027 em Lote</h3>
-                    <p className="text-[11px] text-slate-300">Definição rápida de eventos futuros para a carteira</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowBatchIbsModal(false)}
-                  className="text-slate-300 hover:text-white p-1.5 rounded-lg hover:bg-white/10 cursor-pointer transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="p-6 space-y-4 text-xs">
-                <p className="text-slate-600 leading-relaxed">
-                  Como as APIs públicas não entregam os eventos futuros de IBS/CBS 2027, você pode registrar em lote 
-                  a <strong>"Opção pelo regime regular" (IBS e CBS a partir de 01/01/2027)</strong> para as empresas da sua carteira:
-                </p>
-
-                <div className="space-y-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => handleBatchApplyIbsRegular(true)}
-                    className="w-full p-4 rounded-xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100/90 text-left transition-all cursor-pointer space-y-1 shadow-2xs"
-                  >
-                    <p className="font-bold text-indigo-950 flex items-center gap-2">
-                      <Check className="h-4 w-4 text-indigo-600" />
-                      Aplicar apenas para todas as Optantes pelo Simples Nacional ({optantesCount} empresas)
-                    </p>
-                    <p className="text-[11px] text-indigo-800">
-                      Adiciona os eventos: <code>IBS - Opção pelo regime regular (01/01/2027)</code> e <code>CBS - Opção pelo regime regular (01/01/2027)</code>.
-                    </p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleBatchApplyIbsRegular(false)}
-                    className="w-full p-4 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-left transition-all cursor-pointer space-y-1"
-                  >
-                    <p className="font-bold text-slate-900 flex items-center gap-2">
-                      <Sparkles className="h-4 w-4 text-slate-600" />
-                      Aplicar para todas as empresas da carteira ({totalCount} empresas)
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      Inclui optantes e demais empresas ativas no sistema.
-                    </p>
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-end">
-                <button
-                  type="button"
-                  onClick={() => setShowBatchIbsModal(false)}
-                  className="px-4 py-2 border border-slate-300 rounded-xl text-slate-600 font-bold hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  Fechar
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL 5: CONSULTA EM LOTE VIA API DA RECEITA FEDERAL */}
+      {/* MODAL DE ATUALIZAÇÃO EM LOTE COM PROGRESSO */}
       <AnimatePresence>
         {showBatchModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs print:hidden">
@@ -1557,9 +818,6 @@ CBS       Opção pelo regime regular    01/01/2027`}
                       <p className="font-bold text-sm">Pronto para iniciar a auditoria em lote:</p>
                       <p className="text-xs leading-relaxed">
                         O sistema irá consultar a base pública da Receita Federal em tempo real para capturar a <strong>situação de optante pelo Simples Nacional</strong>, <strong>Data de Opção</strong>, <strong>Data de Exclusão</strong> e situação de <strong>MEI</strong> de todas as {companies.length} empresas.
-                      </p>
-                      <p className="text-[11px] text-blue-700 bg-blue-100/60 p-2 rounded-lg">
-                        <strong>Nota Técnica:</strong> Os dados de IBS/CBS 2027 já registrados manualmente ou importados serão 100% preservados durante a consulta da API.
                       </p>
                     </div>
 

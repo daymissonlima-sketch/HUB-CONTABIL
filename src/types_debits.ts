@@ -81,12 +81,6 @@ export interface Company {
   // Inscrições Estaduais e Municipais (API)
   situacaoInscEst?: string;
   inscMun?: string;
-  // Eventos Futuros Reforma Tributária (IBS/CBS 2027)
-  eventosFuturosIbsCbs?: Array<{
-    regime: string; // Ex: "IBS", "CBS"
-    descricao: string; // Ex: "Opção pelo regime regular"
-    dataEfeito: string; // Ex: "01/01/2027"
-  }>;
   // Digital Certificate integration fields
   certificateFile?: string; // Base64 content of .pfx or .p12
   certificatePassword?: string;
@@ -94,22 +88,6 @@ export interface Company {
   certificateValidTo?: string;
   certificateIssuer?: string;
   certificateSerialNumber?: string;
-  certificateTitular?: string;
-  certificateCnpj?: string;
-  ultimoNSU?: string;
-  maxNSU?: string;
-  autoPollEnabled?: boolean;
-  consultaNfeHabilitada?: boolean;
-  varredura90DiasConcluida?: boolean;
-  lastPolledAt?: string;
-  nextAllowedPollAt?: string;
-  lastPollStatus?: string;
-}
-
-export interface IbsCbsEventoFuturo {
-  regime: string;
-  descricao: string;
-  dataEfeito: string;
 }
 
 export interface FaturamentoItem {

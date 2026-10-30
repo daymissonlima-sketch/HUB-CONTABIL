@@ -4,45 +4,41 @@
  */
 
 import React from 'react';
-import { ShieldCheck, Building2 } from 'lucide-react';
+import { Logo } from './Logo';
+import { ShieldCheck } from 'lucide-react';
 
 export function Header() {
   return (
-    <header className="bg-[#031d30] text-slate-100 border-b border-[#e4b35e]/30 shadow-lg shrink-0">
-      <div className="w-full px-6 sm:px-10 py-3.5 flex items-center justify-between min-h-[64px]">
-        {/* Identidade Corporativa Sofisticada e Tipográfica */}
-        <div className="flex items-center gap-4 select-none">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#e4b35e] to-[#c99542] flex items-center justify-center text-[#031d30] shadow-md border border-[#e4b35e]/40 shrink-0">
-            <Building2 className="h-5 w-5 font-bold" />
-          </div>
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2.5">
-              <span className="text-base sm:text-lg font-extrabold tracking-tight text-white">
-                Moreira &amp; Lima
-              </span>
-              <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-[0.18em] bg-[#e4b35e]/15 text-[#e4b35e] border border-[#e4b35e]/30">
-                My Hub
-              </span>
-            </div>
-            <span className="text-[11px] font-medium text-[#e4b35e]/90 tracking-wider uppercase mt-0.5">
-              Gestão Contábil &amp; Tributária
+    <header className="bg-[#04243b] text-slate-100 border-b border-[#e4b35e]/30 shadow-md shrink-0">
+      <div className="w-full px-4 sm:px-6 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-3">
+        
+        {/* Logo alinhado à esquerda com subtítulo institucional corporativo */}
+        <div className="flex items-center gap-4">
+          <Logo origin="left center" />
+          <div className="hidden md:flex flex-col border-l border-[#e4b35e]/25 pl-4 py-0.5">
+            <span className="text-xs font-bold tracking-wide text-slate-200">
+              My Hub - Moreira &amp; Lima
+            </span>
+            <span className="text-[10px] font-medium text-slate-400">
+              Gestão Contábil e Tributária
             </span>
           </div>
         </div>
 
-        {/* Indicador de Ambiente Corporativo */}
-        <div className="hidden md:flex items-center gap-3 text-right">
-          <div className="flex flex-col items-end">
-            <div className="flex items-center gap-1.5 text-slate-200 text-[11px] font-bold">
-              <ShieldCheck className="h-4 w-4 text-[#e4b35e]" />
-              <span>Plataforma Fiscal Integrada</span>
-            </div>
-            <span className="text-[10px] text-slate-400 tracking-wide mt-0.5">
-              Auditoria Avançada • DFe SEFAZ • Inteligência Tributária
+        {/* Lado Direito: Badge profissional de segurança e status */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#031d30]/80 border border-[#e4b35e]/20 text-xs text-slate-300 shadow-inner">
+            <ShieldCheck className="h-4 w-4 text-[#e4b35e] shrink-0" />
+            <span className="hidden sm:inline font-medium">Ambiente Fiscal Homologado</span>
+            <span className="flex h-2 w-2 relative ml-1">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
             </span>
           </div>
         </div>
+
       </div>
     </header>
   );
 }
+
