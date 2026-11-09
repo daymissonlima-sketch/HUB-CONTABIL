@@ -15,7 +15,8 @@ import { Comunicados } from './components/Comunicados';
 import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
 import { ChaveSanitizer } from './components/ChaveSanitizer';
 import { CalculadoraWorkspace } from './components/CalculadoraWorkspace';
-import { FileSpreadsheet, Briefcase, Menu, Coins, Settings, Table, FileText, ShieldCheck, Sparkles, Calculator } from 'lucide-react';
+import { ReformaTributariaWorkspace } from './components/ReformaTributariaWorkspace';
+import { FileSpreadsheet, Briefcase, Menu, Coins, Settings, Table, FileText, ShieldCheck, Sparkles, Calculator, Scale } from 'lucide-react';
 import { loadStoredCompanies } from './utils/companyStorage';
 
 // Synchronously ensure companies storage is reconciled with the official database
@@ -25,8 +26,8 @@ try {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'auditoria_fiscal' | 'calculadora' | 'xml_auditor' | 'debit_levantamento' | 'faturamento_gerador' | 'configuracoes_gerais' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
-  >('auditoria_fiscal');
+    'reforma_tributaria' | 'auditoria_fiscal' | 'calculadora' | 'xml_auditor' | 'debit_levantamento' | 'faturamento_gerador' | 'configuracoes_gerais' | 'comunicados' | 'opcao_simples_nacional' | 'chave_sanitizer'
+  >('reforma_tributaria');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
   return (
@@ -62,6 +63,20 @@ export default function App() {
             {/* Navigation Buttons list */}
             <nav className="p-3 space-y-1 flex flex-row md:flex-col items-center justify-around md:justify-start w-full md:space-y-1.5">
               
+              {/* Button: Reforma Tributária (Novo Módulo) */}
+              <button
+                onClick={() => setActiveTab('reforma_tributaria')}
+                className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-bold w-full transition-all cursor-pointer ${
+                  activeTab === 'reforma_tributaria'
+                    ? 'bg-[#e4b35e] text-[#04243b] shadow-sm'
+                    : 'hover:bg-[#031d30] text-slate-300'
+                }`}
+                title="Módulo Reforma Tributária (IBS, CBS e Imposto Seletivo)"
+              >
+                <Scale className={`h-4.5 w-4.5 shrink-0 ${activeTab === 'reforma_tributaria' ? 'text-[#04243b]' : 'text-[#e4b35e]'}`} />
+                <span className="hidden sm:inline md:inline">Reforma Tributária</span>
+              </button>
+
               {/* Button: Auditoria Fiscal (Unified Cockpit) */}
               <button
                 onClick={() => setActiveTab('auditoria_fiscal')}
@@ -216,7 +231,9 @@ export default function App() {
 
           </div>
 
-          {activeTab === 'auditoria_fiscal' ? (
+          {activeTab === 'reforma_tributaria' ? (
+            <ReformaTributariaWorkspace />
+          ) : activeTab === 'auditoria_fiscal' ? (
             <AuditoriaFiscalWorkspace />
           ) : activeTab === 'calculadora' ? (
             <CalculadoraWorkspace />

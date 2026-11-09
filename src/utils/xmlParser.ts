@@ -5,6 +5,14 @@
 
 import { NFeItemRow } from '../types';
 import { sanitizeXmlPayload } from './sanitizer';
+import { 
+  resolveOriginRegion, 
+  getDecreto29560TaxRate, 
+  calculateDecreto29560ST,
+  isSimplesNacionalSupplier,
+  isImportedGoods4Pct,
+  calculateDecreto29560TaxRate
+} from './decreto29560Helper';
 
 // Helper to safely get node text content by tag name
 function getTagValue(parent: Element, tagName: string): string {
@@ -112,11 +120,16 @@ export async function parseNfeXml(xmlText: string, simulateIbsCbs: boolean = tru
   const emit = infNfe.getElementsByTagName('emit')[0];
   const emitCNPJ = emit ? (getTagValue(emit, 'CNPJ') || getTagValue(emit, 'CPF')) : '';
   const emitNome = emit ? getTagValue(emit, 'xNome') : '';
+  const crt = emit ? getTagValue(emit, 'CRT') : '';
+  const enderEmit = emit ? emit.getElementsByTagName('enderEmit')[0] : null;
+  const emitUF = enderEmit ? getTagValue(enderEmit, 'UF') : (getTagValue(xmlDoc.documentElement, 'UF') || '');
 
   // Destinatário Info
   const dest = infNfe.getElementsByTagName('dest')[0];
   const destCNPJ = dest ? (getTagValue(dest, 'CNPJ') || getTagValue(dest, 'CPF')) : '';
   const destNome = dest ? getTagValue(dest, 'xNome') : '';
+  const enderDest = dest ? dest.getElementsByTagName('enderDest')[0] : null;
+  const destUF = enderDest ? getTagValue(enderDest, 'UF') : 'CE';
 
   // Global complementary / fiscal info
   const infAdicEl = infNfe.getElementsByTagName('infAdic')[0];
@@ -142,31 +155,51 @@ export async function parseNfeXml(xmlText: string, simulateIbsCbs: boolean = tru
     const qCom = parseFloatValue(prod, 'qCom');
     const vUnCom = parseFloatValue(prod, 'vUnCom');
     const vProd = parseFloatValue(prod, 'vProd');
+    const vFrete = parseFloatValue(prod, 'vFrete');
+    const vSeg = parseFloatValue(prod, 'vSeg');
+    const vOutro = parseFloatValue(prod, 'vOutro');
+    const vDesc = parseFloatValue(prod, 'vDesc');
 
     // Taxes
     const imposto = det.getElementsByTagName('imposto')[0];
     
-    // ICMS Default Values
+    // ICMS & FECOP Default Values
     let cstICMS = '';
+    let orig = '0';
     let vBC_ICMS = 0;
     let pICMS = 0;
     let vICMS = 0;
     let vBCST = 0;
     let pICMSST = 0;
     let vICMSST = 0;
+    let vBCFCP = 0;
+    let pFCP = 0;
+    let vFCP = 0;
+    let vBCFCPST = 0;
+    let pFCPST = 0;
+    let vFCPST = 0;
 
     if (imposto) {
       // Find the ICMS node
       const icmsNode = imposto.getElementsByTagName('ICMS')[0];
       if (icmsNode && icmsNode.children.length > 0) {
-        const icmsDetail = icmsNode.children[0]; // e.g. ICMS00, ICMS40, ICMSSN102
+        const icmsDetail = icmsNode.children[0]; // e.g. ICMS00, ICMS10, ICMS20, ICMS60, ICMSSN102
         cstICMS = getTagValue(icmsDetail, 'CST') || getTagValue(icmsDetail, 'CSOSN') || '';
+        orig = getTagValue(icmsDetail, 'orig') || '0';
         vBC_ICMS = parseFloatValue(icmsDetail, 'vBC');
         pICMS = parseFloatValue(icmsDetail, 'pICMS');
         vICMS = parseFloatValue(icmsDetail, 'vICMS');
-        vBCST = parseFloatValue(icmsDetail, 'vBCST');
-        pICMSST = parseFloatValue(icmsDetail, 'pICMSST');
-        vICMSST = parseFloatValue(icmsDetail, 'vICMSST');
+        vBCST = parseFloatValue(icmsDetail, 'vBCST') || parseFloatValue(icmsDetail, 'vBCSTRet');
+        pICMSST = parseFloatValue(icmsDetail, 'pICMSST') || parseFloatValue(icmsDetail, 'pST');
+        vICMSST = parseFloatValue(icmsDetail, 'vICMSST') || parseFloatValue(icmsDetail, 'vICMSSTRet');
+
+        // FECOP / FCP (Fundo de Combate à Pobreza) Normal e ST
+        vBCFCP = parseFloatValue(icmsDetail, 'vBCFCP');
+        pFCP = parseFloatValue(icmsDetail, 'pFCP');
+        vFCP = parseFloatValue(icmsDetail, 'vFCP');
+        vBCFCPST = parseFloatValue(icmsDetail, 'vBCFCPST') || parseFloatValue(icmsDetail, 'vBCFCPSTRet');
+        pFCPST = parseFloatValue(icmsDetail, 'pFCPST') || parseFloatValue(icmsDetail, 'pFCPSTRet');
+        vFCPST = parseFloatValue(icmsDetail, 'vFCPST') || parseFloatValue(icmsDetail, 'vFCPSTRet');
       }
 
       // If CST/CSOSN is empty, look deeper
@@ -332,6 +365,38 @@ export async function parseNfeXml(xmlText: string, simulateIbsCbs: boolean = tru
       vIBSMun = parseFloat(((vBC_IBS * pIBSMun) / 100).toFixed(2));
     }
 
+    // Calculate Decreto 29.560 (RET 2024 - Termo de Acordo Atacadista)
+    // 1. Identificar se o fornecedor é optante pelo Simples Nacional
+    const isSimplesNacional = isSimplesNacionalSupplier(emitNome, crt, cstICMS);
+
+    // 2. Identificar se é operação interestadual
+    const isInterstate = CFOP.startsWith('2') || CFOP.startsWith('6') || (emitUF !== '' && emitUF !== destUF);
+
+    // 3. Identificar se é produto de origem estrangeira com alíquota interestadual de 4% (Res. 13/2012)
+    const isImportado4Pct = isImportedGoods4Pct(orig, pICMS, isInterstate);
+
+    // 4. Resolver a região geográfica da operação
+    const originRegion = resolveOriginRegion(emitUF, destUF);
+
+    // 5. Apurar alíquota líquida considerando base e acréscimos legais do Decreto 29.560/08
+    const rateCalc = calculateDecreto29560TaxRate({
+      region: originRegion,
+      internalRate: 20, // Alíquota geral interna no Ceará
+      isSimplesNacional,
+      isImportado4Pct
+    });
+
+    const pICMSST_29560 = rateCalc.finalRate;
+    const { vBC_ST_29560, vICMSST_29560 } = calculateDecreto29560ST(
+      vProd,
+      vIPI,
+      vFrete,
+      vSeg,
+      vOutro,
+      vDesc,
+      pICMSST_29560
+    );
+
     // Add row
     itemRows.push({
       id: `${chNFe}_${nItem}`,
@@ -344,6 +409,9 @@ export async function parseNfeXml(xmlText: string, simulateIbsCbs: boolean = tru
       emitNome,
       destCNPJ: formatCNPJorCPF(destCNPJ),
       destNome,
+      emitUF,
+      destUF,
+      crt,
       
       nItem,
       cProd,
@@ -354,6 +422,11 @@ export async function parseNfeXml(xmlText: string, simulateIbsCbs: boolean = tru
       qCom,
       vUnCom,
       vProd,
+      orig,
+      vFrete,
+      vSeg,
+      vOutro,
+      vDesc,
       
       cstICMS,
       vBC_ICMS,
@@ -362,6 +435,19 @@ export async function parseNfeXml(xmlText: string, simulateIbsCbs: boolean = tru
       vBCST,
       pICMSST,
       vICMSST,
+
+      vBC_ST_29560,
+      pICMSST_29560,
+      vICMSST_29560,
+      regraDecreto29560: rateCalc.descricaoRegra,
+      isSimplesNacional,
+      isImportado4Pct,
+      vBCFCP,
+      pFCP,
+      vFCP,
+      vBCFCPST,
+      pFCPST,
+      vFCPST,
       
       cstIPI,
       vBC_IPI,

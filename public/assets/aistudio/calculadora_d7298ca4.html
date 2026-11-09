@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador Reforma Tributária - Cigarros & Dual VAT</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              navy: '#04243b',
+              gold: '#e4b35e'
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans antialiased min-h-screen">
+
+  <!-- Header Institucional -->
+  <header class="bg-[#04243b] text-white border-b-4 border-[#e4b35e] shadow-md sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row justify-between items-center gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg bg-[#e4b35e] flex items-center justify-center text-[#04243b] text-xl font-bold shadow-sm">
+          <i class="fa-solid fa-receipt"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+            Simulador de Impacto: Reforma Tributária
+            <span class="text-xs font-semibold px-2 py-0.5 rounded bg-[#e4b35e]/20 text-[#e4b35e] border border-[#e4b35e]/40">Regime Específico & IS</span>
+          </h1>
+          <p class="text-xs text-slate-300">Confronto Outubro/2026 × Março/2027 (MP 1.399/2026 | CBS 11,3% | IBS 0,1%)</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-xs">
+        <span class="inline-flex items-center gap-1.5 bg-slate-800/80 px-3 py-1.5 rounded-full border border-slate-700 text-slate-300">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          Processamento em Lote Ativo
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- Upload XML da NF-e -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div class="p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/70">
+        <div>
+          <h2 class="text-sm font-bold text-[#04243b] flex items-center gap-2">
+            <i class="fa-solid fa-file-code text-[#e4b35e]"></i> Importação da NF-e (Modelo 55)
+          </h2>
+          <p class="text-xs text-slate-500">Arraste a nota fiscal. Todos os produtos serão extraídos e calculados simultaneamente na tabela abaixo.</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="file" id="xmlFileInput" accept=".xml" class="hidden">
+          <button type="button" onclick="document.getElementById('xmlFileInput').click()" class="inline-flex items-center gap-2 px-4 py-2 bg-[#04243b] text-white hover:bg-[#063354] rounded-lg text-xs font-semibold shadow-sm transition">
+            <i class="fa-solid fa-upload text-[#e4b35e]"></i> Carregar XML da Nota
+          </button>
+        </div>
+      </div>
+
+      <!-- Drag & Drop Zone -->
+      <div id="dropZone" class="p-4 border-2 border-dashed border-slate-200 hover:border-[#e4b35e] bg-white transition cursor-pointer flex flex-col items-center justify-center text-center">
+        <p class="text-xs font-semibold text-slate-700">Clique ou arraste o XML da NF-e aqui</p>
+        <p class="text-[11px] text-slate-400 mt-0.5">Leitura segura em memória local pelo navegador.</p>
+      </div>
+
+      <!-- Barra de Identificação da Nota Fiscal -->
+      <div id="nfeInfoBar" class="hidden px-5 py-3 bg-amber-50/50 border-t border-amber-200/60 flex flex-wrap items-center justify-between text-xs gap-3">
+        <div><strong>Emitente:</strong> <span id="nfeEmitNome" class="text-slate-700">-</span> (<span id="nfeEmitCnpj">-</span>)</div>
+        <div><strong>NF-e:</strong> <span id="nfeNumero" class="font-bold text-[#04243b]">-</span> | <strong>Data:</strong> <span id="nfeData">-</span></div>
+        <div><strong>Total DANFE:</strong> <span id="nfeTotalDanfe" class="font-bold text-emerald-700">-</span></div>
+      </div>
+    </div>
+
+    <!-- Parâmetros Globais Editáveis de Projeção -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+        <h3 class="text-xs font-bold text-[#04243b] uppercase tracking-wider flex items-center gap-2">
+          <i class="fa-solid fa-sliders text-[#e4b35e]"></i> Parâmetros Gerais da Transição (Março/2027)
+        </h3>
+        <span class="text-[11px] text-slate-400">Edições refletem imediatamente em todos os produtos</span>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">Fração Base IS</label>
+          <input type="number" step="0.01" id="globalFracIs" value="0.15" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-center font-bold text-[#04243b]">
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">IS Ad Valorem (%)</label>
+          <input type="number" step="0.1" id="globalAliqIs" value="66.7" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-center font-bold text-[#04243b]">
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">IS Específico (R$/maço)</label>
+          <input type="number" step="0.01" id="globalEspIs" value="3.50" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-center font-bold text-[#04243b]">
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">CBS Entrada (%)</label>
+          <input type="number" step="0.01" id="globalAliqCbs" value="11.30" class="w-full bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 text-center font-bold text-[#04243b]">
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">IBS Entrada (%)</label>
+          <input type="number" step="0.001" id="globalAliqIbs" value="0.10" class="w-full bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 text-center font-bold text-[#04243b]">
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">ICMS Origem (%)</label>
+          <input type="number" step="0.1" id="globalAliqIcmsOrigem" value="7.0" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-center font-bold text-slate-700">
+        </div>
+      </div>
+    </div>
+
+    <!-- Cards Consolidados de Totais -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="bg-white rounded-xl shadow-sm border-l-4 border-l-slate-600 border border-slate-200 p-4">
+        <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Desembolso Atual (DANFE)</span>
+        <div id="kpiTotalAtual" class="text-xl font-black text-slate-800">R$ 0,00</div>
+        <p class="text-[11px] text-slate-500 mt-1">Produtos - Desc + ST + FECOP</p>
+      </div>
+
+      <div class="bg-white rounded-xl shadow-sm border-l-4 border-l-[#e4b35e] border border-slate-200 p-4">
+        <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">IS Total Projetado</span>
+        <div id="kpiTotalIs" class="text-xl font-black text-[#04243b]">R$ 0,00</div>
+        <p class="text-[11px] text-slate-500 mt-1">Parcela Ad Valorem + Específica</p>
+      </div>
+
+      <div class="bg-white rounded-xl shadow-sm border-l-4 border-l-emerald-600 border border-slate-200 p-4">
+        <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Créditos CBS / IBS</span>
+        <div id="kpiTotalCreditos" class="text-xl font-black text-emerald-700">R$ 0,00</div>
+        <p class="text-[11px] text-slate-500 mt-1">Crédito total recuperável na entrada</p>
+      </div>
+
+      <div class="bg-white rounded-xl shadow-sm border-l-4 border-l-rose-500 border border-slate-200 p-4">
+        <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Desembolso Compra 2027</span>
+        <div id="kpiTotalDesembolso2027" class="text-xl font-black text-rose-600">R$ 0,00</div>
+        <div class="text-[11px] font-semibold mt-1" id="kpiVariacaoDesembolso">Delta: +R$ 0,00</div>
+      </div>
+    </div>
+
+    <!-- Tabela com TODOS os Produtos da Nota -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div class="p-4 border-b border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 bg-slate-50/70">
+        <div>
+          <h3 class="text-xs font-bold uppercase tracking-wider text-[#04243b] flex items-center gap-2">
+            <i class="fa-solid fa-list-check text-[#e4b35e]"></i> Itens da Nota Fiscal & Confronto Setorial
+          </h3>
+          <p class="text-[11px] text-slate-500">Altere o preço de varejo ou as vintenas diretamente nos campos da tabela para recalcular.</p>
+        </div>
+        <span id="productCountBadge" class="text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#04243b]/10 text-[#04243b]">0 itens</span>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs text-left">
+          <thead>
+            <tr class="bg-slate-100/80 text-slate-700 border-b border-slate-200 text-[10px] uppercase font-bold tracking-wider">
+              <th class="py-3 px-3">Item / NCM</th>
+              <th class="py-3 px-2 text-center">Vintenas (Maços)</th>
+              <th class="py-3 px-2 text-center">Preço Varejo (R$)</th>
+              <th class="py-3 px-2 text-right">Vr Produtos</th>
+              <th class="py-3 px-2 text-right">Desconto</th>
+              <th class="py-3 px-2 text-right">ICMS ST + FECOP</th>
+              <th class="py-3 px-2 text-right bg-amber-50/80 text-[#04243b]">IS Projetado</th>
+              <th class="py-3 px-2 text-right bg-amber-50/80 text-[#04243b]">Base CBS/IBS</th>
+              <th class="py-3 px-2 text-right bg-amber-50/80 text-[#04243b]">CBS Entrada</th>
+              <th class="py-3 px-2 text-right bg-rose-50/70 text-rose-900">Desembolso 2027</th>
+              <th class="py-3 px-2 text-right bg-emerald-50/70 text-emerald-900 font-bold">Custo Pós-Crédito</th>
+            </tr>
+          </thead>
+          <tbody id="productsTableBody" class="divide-y divide-slate-100 font-medium text-slate-700">
+            <!-- Linhas geradas via JavaScript -->
+          </tbody>
+          <tfoot id="productsTableFoot" class="bg-slate-50 border-t-2 border-slate-300 font-bold text-slate-900 text-xs">
+            <!-- Linha de totais -->
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // -------------------------------------------------------------------------
+    // ESTADO E DADOS INICIAIS (Baseados exatamente na planilha enviada)
+    // -------------------------------------------------------------------------
+    let products = [
+      {
+        id: 1,
+        desc: 'XLINT WHITE',
+        ncm: '24022000',
+        qtdade: 800, // milheiros
+        vrUnit: 131.30,
+        vrProd: 105040.00,
+        vDesc: 7207.20,
+        icmsProprio: 7352.80,
+        vintenas: 40000,
+        precoVarejo: 9.00,
+        icmsSt: 100647.20,
+        fecop: 7200.00,
+        pis: 5012.99,
+        cofins: 19731.75
+      },
+      {
+        id: 2,
+        desc: 'X-LINT SILVER SOFT',
+        ncm: '24022000',
+        qtdade: 700,
+        vrUnit: 99.50,
+        vrProd: 69650.00,
+        vDesc: 5274.50,
+        icmsProprio: 4875.50,
+        vintenas: 35000,
+        precoVarejo: 7.50,
+        icmsSt: 73874.50,
+        fecop: 5250.00,
+        pis: 3324.01,
+        cofins: 13083.75
+      }
+    ];
+
+    const fmtBRL = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val || 0);
+
+    // -------------------------------------------------------------------------
+    // MOTOR DE CÁLCULO BASEADO NA PLANILHA
+    // -------------------------------------------------------------------------
+    function calculateAll() {
+      const fracIs = parseFloat(document.getElementById('globalFracIs').value) || 0.15;
+      const aliqIs = (parseFloat(document.getElementById('globalAliqIs').value) || 66.7) / 100;
+      const espIs = parseFloat(document.getElementById('globalEspIs').value) || 3.50;
+      const aliqCbs = (parseFloat(document.getElementById('globalAliqCbs').value) || 11.3) / 100;
+      const aliqIbs = (parseFloat(document.getElementById('globalAliqIbs').value) || 0.10) / 100;
+
+      let totDanfeAtual = 0;
+      let totIs = 0;
+      let totCbs = 0;
+      let totIbs = 0;
+      let totDesembolso2027 = 0;
+      let totCustoAposCredito = 0;
+
+      const tbody = document.getElementById('productsTableBody');
+      tbody.innerHTML = '';
+
+      products.forEach((prod, index) => {
+        // 1. Projeção Atual (Outubro/2026)
+        const danfeAtualItem = prod.vrProd - prod.vDesc + prod.icmsSt + prod.fecop;
+        totDanfeAtual += danfeAtualItem;
+
+        // 2. Imposto Seletivo (Março/2027 - MP 1.399/2026)
+        // Base IS = Maços * Preço Varejo * 15%
+        const baseIs = prod.vintenas * prod.precoVarejo * fracIs;
+        const isAdValorem = baseIs * aliqIs;
+        const isEspecifico = prod.vintenas * espIs;
+        const isTotal = isAdValorem + isEspecifico;
+        totIs += isTotal;
+
+        // 3. Preço Líquido (Exclusão dos tributos por dentro da nota original)
+        // Conforme fórmula Linha 44: vrProd - vDesc - ICMS próprio - PIS - COFINS
+        const precoLiquido = prod.vrProd - prod.vDesc - prod.icmsProprio - prod.pis - prod.cofins;
+
+        // 4. Base CBS / IBS e Tributos da Entrada
+        // Conforme Linha 48: Preço Líquido + IS
+        const baseCbsIbs = precoLiquido + isTotal;
+        const cbsEntrada = baseCbsIbs * aliqCbs;
+        const ibsEntrada = baseCbsIbs * aliqIbs;
+        totCbs += cbsEntrada;
+        totIbs += ibsEntrada;
+
+        // 5. Desembolso Total de Compra Projetado 2027 (Linha 51)
+        // vrProd - vDesc + ST + FECOP + IS - PIS - COFINS + CBS + IBS
+        const desembolso2027 = prod.vrProd - prod.vDesc + prod.icmsSt + prod.fecop + isTotal - prod.pis - prod.cofins + cbsEntrada + ibsEntrada;
+        totDesembolso2027 += desembolso2027;
+
+        // 6. Custo Líquido após Créditos (Linha 54)
+        const creditosRecuperaveis = cbsEntrada + ibsEntrada;
+        const custoAposCredito = desembolso2027 - creditosRecuperaveis;
+        totCustoAposCredito += custoAposCredito;
+
+        // Renderiza Linha
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-50 transition border-b border-slate-100';
+        tr.innerHTML = `
+          <td class="py-2.5 px-3">
+            <span class="font-bold text-slate-800 block">${prod.desc}</span>
+            <span class="text-[10px] text-slate-400">NCM: ${prod.ncm} | Qtd: ${prod.qtdade}</span>
+          </td>
+          <td class="py-2 px-2 text-center">
+            <input type="number" value="${prod.vintenas}" onchange="updateProductField(${index}, 'vintenas', this.value)"
+              class="w-20 bg-slate-50 border border-slate-200 rounded px-1.5 py-1 text-center font-semibold text-slate-800 text-xs">
+          </td>
+          <td class="py-2 px-2 text-center">
+            <input type="number" step="0.10" value="${prod.precoVarejo.toFixed(2)}" onchange="updateProductField(${index}, 'precoVarejo', this.value)"
+              class="w-16 bg-slate-50 border border-slate-200 rounded px-1.5 py-1 text-center font-bold text-[#04243b] text-xs">
+          </td>
+          <td class="py-2.5 px-2 text-right font-medium">${fmtBRL(prod.vrProd)}</td>
+          <td class="py-2.5 px-2 text-right text-slate-500">${fmtBRL(prod.vDesc)}</td>
+          <td class="py-2.5 px-2 text-right text-slate-600">${fmtBRL(prod.icmsSt + prod.fecop)}</td>
+          <td class="py-2.5 px-2 text-right font-bold text-[#04243b] bg-amber-50/50">${fmtBRL(isTotal)}</td>
+          <td class="py-2.5 px-2 text-right font-semibold text-slate-700 bg-amber-50/30">${fmtBRL(baseCbsIbs)}</td>
+          <td class="py-2.5 px-2 text-right font-medium text-amber-800 bg-amber-50/30">${fmtBRL(cbsEntrada)}</td>
+          <td class="py-2.5 px-2 text-right font-bold text-rose-700 bg-rose-50/40">${fmtBRL(desembolso2027)}</td>
+          <td class="py-2.5 px-2 text-right font-black text-emerald-700 bg-emerald-50/40">${fmtBRL(custoAposCredito)}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      // Linha de Rodapé dos Totais
+      const tfoot = document.getElementById('productsTableFoot');
+      tfoot.innerHTML = `
+        <tr class="bg-slate-100">
+          <td class="py-3 px-3">TOTAL GERAL (${products.length} ITENS)</td>
+          <td colspan="2" class="py-3 px-2 text-center">-</td>
+          <td class="py-3 px-2 text-right">${fmtBRL(products.reduce((acc, p) => acc + p.vrProd, 0))}</td>
+          <td class="py-3 px-2 text-right">${fmtBRL(products.reduce((acc, p) => acc + p.vDesc, 0))}</td>
+          <td class="py-3 px-2 text-right">${fmtBRL(products.reduce((acc, p) => acc + (p.icmsSt + p.fecop), 0))}</td>
+          <td class="py-3 px-2 text-right text-[#04243b] bg-amber-100/60">${fmtBRL(totIs)}</td>
+          <td class="py-3 px-2 text-right bg-amber-100/40">-</td>
+          <td class="py-3 px-2 text-right text-amber-900 bg-amber-100/40">${fmtBRL(totCbs)}</td>
+          <td class="py-3 px-2 text-right text-rose-700 bg-rose-100/60">${fmtBRL(totDesembolso2027)}</td>
+          <td class="py-3 px-2 text-right text-emerald-800 bg-emerald-100/60">${fmtBRL(totCustoAposCredito)}</td>
+        </tr>
+      `;
+
+      // Atualiza KPIs
+      document.getElementById('kpiTotalAtual').innerText = fmtBRL(totDanfeAtual);
+      document.getElementById('kpiTotalIs').innerText = fmtBRL(totIs);
+      document.getElementById('kpiTotalCreditos').innerText = fmtBRL(totCbs + totIbs);
+      document.getElementById('kpiTotalDesembolso2027').innerText = fmtBRL(totDesembolso2027);
+
+      const deltaDesembolso = totDesembolso2027 - totDanfeAtual;
+      const deltaEl = document.getElementById('kpiVariacaoDesembolso');
+      deltaEl.innerText = `Delta: ${deltaDesembolso >= 0 ? '+' : ''}${fmtBRL(deltaDesembolso)}`;
+      deltaEl.className = `text-[11px] font-bold mt-1 ${deltaDesembolso > 0 ? 'text-rose-600' : 'text-emerald-600'}`;
+
+      document.getElementById('productCountBadge').innerText = `${products.length} itens listados`;
+    }
+
+    function updateProductField(index, field, value) {
+      if (products[index]) {
+        products[index][field] = parseFloat(value) || 0;
+        calculateAll();
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // LEITURA COMPLETA DO XML DA NF-e EM LOTE
+    // -------------------------------------------------------------------------
+    function handleXmlFile(file) {
+      if (!file || !file.name.endsWith('.xml')) {
+        alert('Selecione um arquivo XML de NF-e válido.');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(e.target.result, 'text/xml');
+
+          const infNFe = xmlDoc.getElementsByTagName('infNFe')[0];
+          if (!infNFe) {
+            alert('Não foi encontrada a tag <infNFe> no arquivo.');
+            return;
+          }
+
+          // Emitente e Totais do DANFE
+          const emit = xmlDoc.getElementsByTagName('emit')[0];
+          const xNome = emit ? (emit.getElementsByTagName('xNome')[0]?.textContent || 'Emitente') : 'Emitente';
+          const cnpj = emit ? (emit.getElementsByTagName('CNPJ')[0]?.textContent || '-') : '-';
+          const ide = xmlDoc.getElementsByTagName('ide')[0];
+          const nNF = ide ? (ide.getElementsByTagName('nNF')[0]?.textContent || '-') : '-';
+          const dEmi = ide ? (ide.getElementsByTagName('dhEmi')[0]?.textContent?.substring(0, 10) || ide.getElementsByTagName('dEmi')[0]?.textContent || '-') : '-';
+          
+          const total = xmlDoc.getElementsByTagName('total')[0];
+          const vNF = total ? parseFloat(total.getElementsByTagName('vNF')[0]?.textContent || '0') : 0;
+          const vPIS_total = total ? parseFloat(total.getElementsByTagName('vPIS')[0]?.textContent || '0') : 0;
+          const vCOFINS_total = total ? parseFloat(total.getElementsByTagName('vCOFINS')[0]?.textContent || '0') : 0;
+          const vProd_total = total ? parseFloat(total.getElementsByTagName('vProd')[0]?.textContent || '0') : 0;
+
+          document.getElementById('nfeEmitNome').innerText = xNome;
+          document.getElementById('nfeEmitCnpj').innerText = cnpj;
+          document.getElementById('nfeNumero').innerText = nNF;
+          document.getElementById('nfeData').innerText = dEmi;
+          document.getElementById('nfeTotalDanfe').innerText = fmtBRL(vNF);
+          document.getElementById('nfeInfoBar').classList.remove('hidden');
+
+          // Processa TODOS os itens <det>
+          const detList = xmlDoc.getElementsByTagName('det');
+          const newProducts = [];
+
+          for (let i = 0; i < detList.length; i++) {
+            const det = detList[i];
+            const prod = det.getElementsByTagName('prod')[0];
+            const imposto = det.getElementsByTagName('imposto')[0];
+
+            const xProd = prod.getElementsByTagName('xProd')[0]?.textContent || `Item ${i+1}`;
+            const ncm = prod.getElementsByTagName('NCM')[0]?.textContent || '';
+            const qCom = parseFloat(prod.getElementsByTagName('qCom')[0]?.textContent || '0');
+            const vUnCom = parseFloat(prod.getElementsByTagName('vUnCom')[0]?.textContent || '0');
+            const vProd = parseFloat(prod.getElementsByTagName('vProd')[0]?.textContent || '0');
+            const vDesc = parseFloat(prod.getElementsByTagName('vDesc')[0]?.textContent || '0');
+
+            // Impostos
+            let icmsProprio = 0;
+            let vBCST = 0;
+            let pICMSST = 0;
+            let vICMSST = 0;
+            let vFCPST = 0;
+            let vPisItem = 0;
+            let vCofinsItem = 0;
+
+            if (imposto) {
+              const icmsTag = imposto.getElementsByTagName('ICMS')[0];
+              if (icmsTag) {
+                icmsProprio = parseFloat(icmsTag.getElementsByTagName('vICMS')[0]?.textContent || '0');
+                vBCST = parseFloat(icmsTag.getElementsByTagName('vBCST')[0]?.textContent || '0');
+                pICMSST = parseFloat(icmsTag.getElementsByTagName('pICMSST')[0]?.textContent || '0');
+                vICMSST = parseFloat(icmsTag.getElementsByTagName('vICMSST')[0]?.textContent || '0');
+                vFCPST = parseFloat(icmsTag.getElementsByTagName('vFCPST')[0]?.textContent || '0');
+              }
+
+              const pisTag = imposto.getElementsByTagName('PIS')[0];
+              if (pisTag) {
+                vPisItem = parseFloat(pisTag.getElementsByTagName('vPIS')[0]?.textContent || '0');
+              }
+              const cofinsTag = imposto.getElementsByTagName('COFINS')[0];
+              if (cofinsTag) {
+                vCofinsItem = parseFloat(cofinsTag.getElementsByTagName('vCOFINS')[0]?.textContent || '0');
+              }
+            }
+
+            // Rateio proporcional de PIS/COFINS caso a nota traga no total geral
+            if (vPisItem === 0 && vPIS_total > 0 && vProd_total > 0) {
+              vPisItem = vPIS_total * (vProd / vProd_total);
+            }
+            if (vCofinsItem === 0 && vCOFINS_total > 0 && vProd_total > 0) {
+              vCofinsItem = vCOFINS_total * (vProd / vProd_total);
+            }
+
+            // Estimativa de maços (vintenas): na falta, usa qCom * 50 se for milheiro (MH), ou qCom direto
+            const uCom = prod.getElementsByTagName('uCom')[0]?.textContent?.toUpperCase() || '';
+            const vintenasEstimadas = (uCom === 'MH' || uCom === 'MIL') ? (qCom * 50) : qCom;
+
+            newProducts.push({
+              id: i + 1,
+              desc: xProd,
+              ncm: ncm,
+              qtdade: qCom,
+              vrUnit: vUnCom,
+              vrProd: vProd,
+              vDesc: vDesc,
+              icmsProprio: icmsProprio > 0 ? icmsProprio : (vProd * 0.07),
+              vintenas: vintenasEstimadas,
+              precoVarejo: 9.00, // Preço de tabela de referência (ajustável pelo usuário)
+              icmsSt: vICMSST,
+              fecop: vFCPST,
+              pis: vPisItem,
+              cofins: vCofinsItem
+            });
+          }
+
+          if (newProducts.length > 0) {
+            products = newProducts;
+            calculateAll();
+          }
+
+        } catch (err) {
+          console.error(err);
+          alert('Erro ao interpretar a estrutura do XML. Verifique se o arquivo está íntegro.');
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // -------------------------------------------------------------------------
+    // EVENTOS E INICIALIZAÇÃO
+    // -------------------------------------------------------------------------
+    document.addEventListener('DOMContentLoaded', () => {
+      // Inputs globais de parametrização
+      ['globalFracIs', 'globalAliqIs', 'globalEspIs', 'globalAliqCbs', 'globalAliqIbs', 'globalAliqIcmsOrigem'].forEach(id => {
+        document.getElementById(id).addEventListener('input', calculateAll);
+      });
+
+      // Upload e Drag & Drop
+      const dropZone = document.getElementById('dropZone');
+      const fileInput = document.getElementById('xmlFileInput');
+
+      dropZone.addEventListener('click', () => fileInput.click());
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('border-[#e4b35e]', 'bg-amber-50/20');
+      });
+      dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('border-[#e4b35e]', 'bg-amber-50/20');
+      });
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('border-[#e4b35e]', 'bg-amber-50/20');
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+          handleXmlFile(e.dataTransfer.files[0]);
+        }
+      });
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files[0]) {
+          handleXmlFile(e.target.files[0]);
+        }
+      });
+
+      // Executa cálculo inicial com os dados da planilha
+      calculateAll();
+    });
+  </script>
+</body>
+</html>

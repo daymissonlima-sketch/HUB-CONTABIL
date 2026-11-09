@@ -3,14 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { UploadZone } from './UploadZone';
 import { StatsBanner } from './StatsBanner';
 import { NfeGrid } from './NfeGrid';
 import { NFeItemRow } from '../types';
 import { parseNfeXml } from '../utils/xmlParser';
 import { exportToExcel } from '../utils/excelExporter';
-import { MOCK_NFES } from '../utils/mockNfes';
 import { 
   FileCheck2, 
   Trash2, 
@@ -18,7 +17,11 @@ import {
   FileUp
 } from 'lucide-react';
 
-export function NfeXmlAuditor() {
+interface NfeXmlAuditorProps {
+  initialXmls?: string[];
+}
+
+export function NfeXmlAuditor({ initialXmls }: NfeXmlAuditorProps = {}) {
   const [parsedRows, setParsedRows] = useState<NFeItemRow[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -30,6 +33,13 @@ export function NfeXmlAuditor() {
   // Default simulation rates to use for new parses
   const ibsRate = 17.7;
   const cbsRate = 8.8;
+
+  // Process initial XMLs if received from other modules (e.g. Consulta NF-e)
+  useEffect(() => {
+    if (initialXmls && initialXmls.length > 0) {
+      handleFilesParsed(initialXmls);
+    }
+  }, [initialXmls]);
 
   const triggerSuccessNotification = (msg: string) => {
     setSuccessMessage(msg);
@@ -72,31 +82,23 @@ export function NfeXmlAuditor() {
     }
   };
 
-  // Load sample XMLs for immediate visual demonstration
-  const handleLoadExampleData = async () => {
-    setIsLoading(true);
-    try {
-      const allRows: NFeItemRow[] = [];
-      for (const xml of MOCK_NFES) {
-        const rows = await parseNfeXml(xml, true, ibsRate, cbsRate);
-        allRows.push(...rows);
-      }
-      setParsedRows(allRows);
-      triggerSuccessNotification('Notas Fiscais de exemplo carregadas com sucesso!');
-    } catch (err: any) {
-      triggerErrorNotification('Erro ao carregar notas de exemplo.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleRowUpdate = (updatedRow: NFeItemRow) => {
     setParsedRows(prev => prev.map(row => row.id === updatedRow.id ? updatedRow : row));
   };
 
-  const handleExport = (rowsToExport: NFeItemRow[], visibleColumns: string[], reportName: string) => {
-    exportToExcel(rowsToExport, visibleColumns, reportName);
-    triggerSuccessNotification(`Planilha Excel "${reportName}" gerada com sucesso!`);
+  const handleExport = (
+    rowsToExport: NFeItemRow[],
+    visibleColumns: string[],
+    reportName: string,
+    includeConsolidatedLastItems: boolean = false,
+    decreto29560Enabled: boolean = false,
+    decretoSuppliers: string[] = []
+  ) => {
+    exportToExcel(rowsToExport, visibleColumns, reportName, includeConsolidatedLastItems, decreto29560Enabled, decretoSuppliers);
+    const detailMsg = includeConsolidatedLastItems
+      ? 'com Histórico Completo e Aba Consolidada (Última Nota por Produto)'
+      : 'com Histórico Completo';
+    triggerSuccessNotification(`Planilha Excel gerada com sucesso (${detailMsg})!`);
   };
 
   const handleClearAll = () => {
@@ -218,7 +220,6 @@ export function NfeXmlAuditor() {
           <UploadZone 
             onFilesParsed={handleFilesParsed} 
             isLoading={isLoading} 
-            onLoadExampleData={handleLoadExampleData} 
           />
         </div>
       ) : (

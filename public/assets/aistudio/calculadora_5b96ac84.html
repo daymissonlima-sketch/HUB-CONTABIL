@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador Reforma Tributária - Transição & Auditoria Transparente</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              navy: '#04243b',
+              gold: '#e4b35e'
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans antialiased min-h-screen">
+
+  <!-- Header Institucional -->
+  <header class="bg-[#04243b] text-white border-b-4 border-[#e4b35e] shadow-md sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row justify-between items-center gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg bg-[#e4b35e] flex items-center justify-center text-[#04243b] text-xl font-bold shadow-sm">
+          <i class="fa-solid fa-scale-balanced"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+            Simulador de Transição Tributária
+            <span class="text-xs font-semibold px-2 py-0.5 rounded bg-[#e4b35e]/20 text-[#e4b35e] border border-[#e4b35e]/40">Vigente × 2027</span>
+          </h1>
+          <p class="text-xs text-slate-300">Auditoria Detalhada: IPI, ICMS-ST, FECOP, PIS/COFINS, CBS, IBS e Imposto Seletivo</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <button type="button" onclick="openProductCatalogModal()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-[#e4b35e] border border-slate-700 rounded-lg text-xs font-semibold transition flex items-center gap-1.5">
+          <i class="fa-solid fa-tags"></i> Cadastro Fiscal NCM
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- Barra de Controles: Importação XML + Seletor de Regime -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-col md:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-3 w-full md:w-auto">
+        <input type="file" id="xmlFileInput" accept=".xml" class="hidden">
+        <button type="button" onclick="document.getElementById('xmlFileInput').click()" class="inline-flex items-center gap-2 px-4 py-2 bg-[#04243b] text-white hover:bg-[#063354] rounded-lg text-xs font-bold shadow-sm transition">
+          <i class="fa-solid fa-file-import text-[#e4b35e]"></i> Importar NF-e (XML)
+        </button>
+        <span id="nfeLoadedBadge" class="text-xs text-slate-500 font-medium truncate max-w-[280px]">Nenhum arquivo carregado (usando dados de demonstração)</span>
+      </div>
+
+      <!-- Regime PIS/COFINS e Alíquotas 2027 -->
+      <div class="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
+        <div class="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg text-xs">
+          <label class="font-bold text-[#04243b]">Regime PIS/COFINS:</label>
+          <select id="regimeSelect" onchange="handleRegimeChange()" class="bg-white border border-slate-300 rounded px-2 py-1 font-semibold text-slate-800 outline-none">
+            <option value="nao_cumulativo" selected>Não Cumulativo (1,65% / 7,60% - Com Crédito)</option>
+            <option value="cumulativo">Cumulativo (0,65% / 3,00% - Sem Crédito)</option>
+          </select>
+        </div>
+
+        <div class="flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg text-xs font-medium text-[#04243b]">
+          <span>CBS:</span>
+          <input type="number" step="0.1" id="globalCbsRate" value="11.3" onchange="recalculateAll()" class="w-14 bg-white border border-amber-300 rounded px-1.5 py-0.5 text-center font-bold">
+          <span>% | IBS:</span>
+          <input type="number" step="0.01" id="globalIbsRate" value="0.10" onchange="recalculateAll()" class="w-14 bg-white border border-amber-300 rounded px-1.5 py-0.5 text-center font-bold">
+          <span>%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAINEL COMPARATIVO DE TOTAIS COM SEGREGAÇÃO COMPLETA -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div class="p-4 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-[#04243b] flex items-center gap-2">
+          <i class="fa-solid fa-chart-pie text-[#e4b35e]"></i> Confronto Consolidado de Totais da Operação
+        </h2>
+        <span class="text-[11px] text-slate-500 font-semibold" id="totalItemsBadge">2 itens processados</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-200">
+        <!-- Coluna Esquerda: Cenário Atual (Regime Vigente) -->
+        <div class="p-5 space-y-3">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+            <h3 class="text-sm font-black text-slate-800 flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-slate-500"></span> Regime Vigente (Hoje)
+            </h3>
+            <span class="text-[11px] font-semibold text-slate-500" id="lblRegimeAtual">Não Cumulativo</span>
+          </div>
+
+          <div class="space-y-1.5 text-xs">
+            <div class="flex justify-between text-slate-600">
+              <span>Valor Bruto dos Produtos:</span>
+              <strong id="totAtualVrProd" class="text-slate-800">R$ 0,00</strong>
+            </div>
+            <div class="flex justify-between text-slate-500">
+              <span>(-) Descontos Incondicionais:</span>
+              <span id="totAtualDesc">R$ 0,00</span>
+            </div>
+            <!-- IPI Evidenciado Mesmo Zerado -->
+            <div class="flex justify-between text-slate-600 bg-slate-50 px-2 py-0.5 rounded">
+              <span>(+) IPI Destacado no DANFE:</span>
+              <strong id="totAtualIpi" class="text-slate-800">R$ 0,00</strong>
+            </div>
+            <!-- ICMS-ST Segregado -->
+            <div class="flex justify-between text-slate-600">
+              <span>(+) ICMS Substituição Tributária (ST):</span>
+              <span id="totAtualSt" class="font-semibold text-slate-700">R$ 0,00</span>
+            </div>
+            <!-- FECOP Segregado -->
+            <div class="flex justify-between text-slate-600">
+              <span>(+) FECOP Estadual:</span>
+              <span id="totAtualFecop" class="font-semibold text-slate-700">R$ 0,00</span>
+            </div>
+            <div class="flex justify-between text-slate-600 pt-1 border-t border-slate-100">
+              <span>PIS e COFINS informados no DANFE:</span>
+              <span id="totAtualPisCofins">R$ 0,00</span>
+            </div>
+            <div class="flex justify-between text-emerald-700">
+              <span>(-) Crédito de Entrada Estimado (PIS/COFINS + ICMS):</span>
+              <strong id="totAtualCreditos">R$ 0,00</strong>
+            </div>
+            <div class="flex justify-between text-slate-600 pt-2 border-t border-slate-200 font-bold text-sm">
+              <span class="text-slate-800">Desembolso Financeiro DANFE:</span>
+              <span id="totAtualDesembolso" class="text-slate-900">R$ 0,00</span>
+            </div>
+            <div class="flex justify-between text-slate-700 font-bold">
+              <span>Custo Efetivo Líquido (Após Créditos):</span>
+              <span id="totAtualCustoLiquido" class="text-slate-800">R$ 0,00</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Coluna Direita: Cenário 2027 (Reforma Tributária) -->
+        <div class="p-5 space-y-3 bg-amber-50/20">
+          <div class="flex items-center justify-between pb-2 border-b border-amber-200/60">
+            <h3 class="text-sm font-black text-[#04243b] flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-[#e4b35e]"></span> Reforma Tributária (2027)
+            </h3>
+            <span class="text-[11px] font-semibold text-[#04243b] bg-amber-100 px-2 py-0.5 rounded">CBS + IBS + IS</span>
+          </div>
+
+          <div class="space-y-1.5 text-xs">
+            <div class="flex justify-between text-slate-600">
+              <span>Preço Líquido (Tributos Antigos Excluídos):</span>
+              <strong id="totRefPrecoLiquido" class="text-slate-800">R$ 0,00</strong>
+            </div>
+            <div class="flex justify-between text-[#04243b] font-semibold">
+              <span>(+) Imposto Seletivo Projetado (IS):</span>
+              <strong id="totRefIs">R$ 0,00</strong>
+            </div>
+            <!-- ST e FECOP Segregados na Transição -->
+            <div class="flex justify-between text-slate-600">
+              <span>(+) ICMS-ST (Transição):</span>
+              <span id="totRefSt" class="font-semibold text-slate-700">R$ 0,00</span>
+            </div>
+            <div class="flex justify-between text-slate-600">
+              <span>(+) FECOP (Transição):</span>
+              <span id="totRefFecop" class="font-semibold text-slate-700">R$ 0,00</span>
+            </div>
+            <div class="flex justify-between text-amber-800 font-medium pt-1 border-t border-amber-100">
+              <span>(+) CBS (11,3%) + IBS (0,1%) na Entrada:</span>
+              <span id="totRefCbsIbs">R$ 0,00</span>
+            </div>
+            <div class="flex justify-between text-emerald-700">
+              <span>(-) Crédito CBS / IBS Apropriável:</span>
+              <strong id="totRefCreditos">R$ 0,00</strong>
+            </div>
+            <div class="flex justify-between text-[#04243b] pt-2 border-t border-amber-200 font-bold text-sm">
+              <span>Desembolso de Compra Projetado:</span>
+              <span id="totRefDesembolso" class="text-rose-600">R$ 0,00</span>
+            </div>
+            <div class="flex justify-between text-slate-800 font-bold">
+              <span>Custo Efetivo Líquido (Sem Crédito de IS):</span>
+              <span id="totRefCustoLiquido" class="text-emerald-700">R$ 0,00</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Barra de Resumo do Delta Financeiro -->
+      <div class="p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-slate-700">Variação de Desembolso Financeiro:</span>
+          <span id="kpiDeltaDesembolso" class="px-2.5 py-1 rounded text-xs font-black bg-rose-100 text-rose-700">+R$ 0,00 (+0,0%)</span>
+        </div>
+        <div class="text-[11px] text-slate-500">
+          * A segregação do IPI, ICMS-ST e FECOP garante a conferência do valor total conciliado do documento fiscal.
+        </div>
+      </div>
+    </div>
+
+    <!-- TABELA DE ITENS COM COLUNAS SEPARADAS DE IPI, ICMS-ST E FECOP -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div class="p-4 border-b border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 bg-slate-50/70">
+        <div>
+          <h3 class="text-xs font-bold uppercase tracking-wider text-[#04243b] flex items-center gap-2">
+            <i class="fa-solid fa-list text-[#e4b35e]"></i> Detalhamento por Item da Nota Fiscal
+          </h3>
+          <p class="text-[11px] text-slate-500">Visualização discriminada de IPI, ICMS-ST e FECOP com acesso à auditoria de cada item.</p>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs text-left">
+          <thead>
+            <tr class="bg-slate-100 text-slate-600 border-b border-slate-200 text-[10px] uppercase font-bold tracking-wider">
+              <th class="py-3 px-3">Item / Descrição</th>
+              <th class="py-3 px-2 text-center">NCM</th>
+              <th class="py-3 px-2 text-center">Qtd / Un</th>
+              <th class="py-3 px-2 text-center" title="Fator de conversão (ex.: Maços / Vintenas)">Qtd Conv.</th>
+              <th class="py-3 px-2 text-right">Valor Líquido</th>
+              <th class="py-3 px-2 text-right bg-slate-50 text-slate-700">IPI Dest.</th>
+              <th class="py-3 px-2 text-right text-slate-700">ICMS-ST</th>
+              <th class="py-3 px-2 text-right text-slate-700">FECOP</th>
+              <th class="py-3 px-2 text-right bg-amber-50 font-bold text-[#04243b]">IS Projetado</th>
+              <th class="py-3 px-2 text-right bg-amber-50 font-semibold text-slate-700">CBS + IBS</th>
+              <th class="py-3 px-2 text-right text-slate-800 font-bold">Desemb. Atual</th>
+              <th class="py-3 px-2 text-right text-rose-700 font-bold">Desemb. 2027</th>
+              <th class="py-3 px-2 text-center">Ações</th>
+            </tr>
+          </thead>
+          <tbody id="itemsTableBody" class="divide-y divide-slate-100 font-medium text-slate-700">
+            <!-- Linhas montadas via JavaScript -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- MODAL: MEMÓRIA COMPLETA DE CÁLCULO POR ITEM (COM IPI, ST E FECOP DISCRIMINADOS) -->
+  <div id="calculationModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden border border-slate-200 animate-in fade-in duration-150">
+      <div class="bg-[#04243b] text-white p-4 flex items-center justify-between border-b-2 border-[#e4b35e]">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-calculator text-[#e4b35e]"></i>
+          <div>
+            <h3 class="text-sm font-bold" id="modalItemTitle">Detalhamento do Cálculo</h3>
+            <p class="text-[11px] text-slate-300" id="modalItemSubtitle">Memória de cálculo rastreável do produto</p>
+          </div>
+        </div>
+        <button type="button" onclick="closeCalculationModal()" class="text-slate-400 hover:text-white text-lg">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="p-5 max-h-[80vh] overflow-y-auto space-y-4 text-xs">
+        
+        <!-- Bloco 1: Unidade e Conversão -->
+        <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1.5">
+          <span class="font-bold text-[#04243b] text-[11px] uppercase tracking-wider block">1. Unidade e Conversão</span>
+          <div class="grid grid-cols-3 gap-2 text-[11px]">
+            <div>Qtd XML: <strong id="mdlQCom">-</strong></div>
+            <div>Unidade XML: <strong id="mdlUCom">-</strong></div>
+            <div>Qtd Convertida (Maços): <strong id="mdlQtdConvertida" class="text-[#04243b]">-</strong></div>
+          </div>
+          <div class="text-[11px] text-slate-500 pt-1 border-t border-slate-200">
+            Preço de Varejo de Referência: <strong id="mdlPrecoVarejo">-</strong>
+          </div>
+        </div>
+
+        <!-- Bloco 2: Apuração Vigente (IPI, ICMS-ST e FECOP Segregados) -->
+        <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1.5">
+          <span class="font-bold text-slate-700 text-[11px] uppercase tracking-wider block">2. Composição da Operação Atual (DANFE)</span>
+          <div class="space-y-1 text-slate-600">
+            <div class="flex justify-between"><span>Valor Bruto do Produto:</span><strong id="mdlVrProd">-</strong></div>
+            <div class="flex justify-between"><span>(-) Desconto Incondicional:</span><span id="mdlVDesc">-</span></div>
+            <div class="flex justify-between bg-slate-100/70 px-2 py-0.5 rounded font-medium">
+              <span>(+) IPI Destacado na Nota:</span>
+              <strong id="mdlIpi" class="text-slate-800">-</strong>
+            </div>
+            <div class="flex justify-between"><span>ICMS Próprio Destacado (7%):</span><span id="mdlIcmsProprio">-</span></div>
+            <div class="flex justify-between text-slate-800"><span>(+) ICMS-ST Destacado:</span><strong id="mdlSt">-</strong></div>
+            <div class="flex justify-between text-slate-800"><span>(+) FECOP Destacado:</span><strong id="mdlFecop">-</strong></div>
+            <div class="flex justify-between"><span>PIS Informado:</span><span id="mdlPis">-</span></div>
+            <div class="flex justify-between"><span>COFINS Informada:</span><span id="mdlCofins">-</span></div>
+            <div class="flex justify-between pt-1 border-t border-slate-200 font-bold text-slate-900">
+              <span>Desembolso Atual no DANFE:</span>
+              <span id="mdlDesembolsoAtual">-</span>
+            </div>
+            <div class="flex justify-between text-emerald-700">
+              <span id="mdlCreditoLegenda">Crédito de Entrada PIS/COFINS (Regime):</span>
+              <strong id="mdlCreditoAtual">-</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bloco 3: Imposto Seletivo Projetado -->
+        <div class="bg-amber-50/50 p-3 rounded-lg border border-amber-200 space-y-1.5">
+          <span class="font-bold text-[#04243b] text-[11px] uppercase tracking-wider block">3. Imposto Seletivo Projetado (MP 1.399/2026)</span>
+          <div class="space-y-1 text-slate-700">
+            <div class="flex justify-between"><span>Base IS (15% do Varejo):</span><strong id="mdlBaseIs">-</strong></div>
+            <div class="flex justify-between"><span>Parcela Ad Valorem (66,7%):</span><span id="mdlIsAdValorem">-</span></div>
+            <div class="flex justify-between"><span>Parcela Específica (R$ 3,50 / maço):</span><span id="mdlIsEspecifico">-</span></div>
+            <div class="flex justify-between pt-1 border-t border-amber-200 font-bold text-[#04243b]">
+              <span>IS Total Devido:</span>
+              <span id="mdlIsTotal">-</span>
+            </div>
+            <div class="text-[10px] text-slate-500 italic">IS Unitário: <span id="mdlIsUnitario">-</span> por maço.</div>
+          </div>
+        </div>
+
+        <!-- Bloco 4: CBS e IBS 2027 -->
+        <div class="bg-amber-50/50 p-3 rounded-lg border border-amber-200 space-y-1.5">
+          <span class="font-bold text-[#04243b] text-[11px] uppercase tracking-wider block">4. Dual VAT (CBS 11,3% + IBS 0,1%)</span>
+          <div class="space-y-1 text-slate-700">
+            <div class="flex justify-between"><span>Preço Líquido (Excluídos Tributos Antigos):</span><strong id="mdlPrecoLiquido">-</strong></div>
+            <div class="flex justify-between"><span>(+) Imposto Seletivo na Base:</span><span id="mdlIsNaBase">-</span></div>
+            <div class="flex justify-between font-semibold"><span>(=) Base CBS / IBS:</span><span id="mdlBaseCbsIbs">-</span></div>
+            <div class="flex justify-between text-amber-900"><span>CBS na Entrada (11,3%):</span><span id="mdlCbs">-</span></div>
+            <div class="flex justify-between text-amber-900"><span>IBS na Entrada (0,1%):</span><span id="mdlIbs">-</span></div>
+            <div class="flex justify-between pt-1 border-t border-amber-200 font-bold text-rose-700">
+              <span>Desembolso de Compra 2027:</span>
+              <span id="mdlDesembolso2027">-</span>
+            </div>
+            <div class="flex justify-between text-emerald-700 font-bold">
+              <span>Custo após Créditos CBS/IBS:</span>
+              <span id="mdlCustoAposCredito">-</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="bg-slate-50 p-3 border-t border-slate-200 flex justify-end">
+        <button type="button" onclick="closeCalculationModal()" class="px-4 py-1.5 bg-[#04243b] text-white rounded-lg text-xs font-semibold hover:bg-slate-800 transition">
+          Fechar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CADASTRO FISCAL DE PRODUTOS / NCM -->
+  <div id="catalogModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full overflow-hidden border border-slate-200">
+      <div class="bg-[#04243b] text-white p-4 flex items-center justify-between border-b-2 border-[#e4b35e]">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-tags text-[#e4b35e]"></i>
+          <h3 class="text-sm font-bold">Cadastro de Parâmetros Fiscais por NCM</h3>
+        </div>
+        <button type="button" onclick="closeProductCatalogModal()" class="text-slate-400 hover:text-white text-lg">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="p-5 space-y-4 text-xs max-h-[75vh] overflow-y-auto">
+        <p class="text-slate-500">
+          Quando o XML for importado, se o NCM for encontrado nesta tabela, as regras fiscais de conversão de unidade, IPI e Imposto Seletivo serão atribuídas automaticamente, sem necessitar de digitação repetitiva.
+        </p>
+
+        <div class="border border-slate-200 rounded-xl overflow-hidden">
+          <table class="w-full text-xs text-left">
+            <thead class="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+              <tr>
+                <th class="py-2.5 px-3">NCM</th>
+                <th class="py-2.5 px-3">Descrição Categoria</th>
+                <th class="py-2.5 px-2 text-center">Fator Conversão (p/ Maços)</th>
+                <th class="py-2.5 px-2 text-center">Fração Varejo IS</th>
+                <th class="py-2.5 px-2 text-center">Aliq. Ad Valorem</th>
+                <th class="py-2.5 px-2 text-center">Valor Fixo (R$)</th>
+              </tr>
+            </thead>
+            <tbody id="catalogTableBody" class="divide-y divide-slate-100 font-medium">
+              <!-- Populado via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="bg-slate-50 p-3 border-t border-slate-200 flex justify-between items-center text-xs">
+        <span class="text-slate-400">Regras tributárias pré-configuradas (Decreto 12.922/26 & MP 1.399/26)</span>
+        <button type="button" onclick="closeProductCatalogModal()" class="px-4 py-1.5 bg-[#04243b] text-white rounded-lg font-semibold hover:bg-slate-800 transition">
+          Concluir
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // -------------------------------------------------------------------------
+    // CADASTRO FISCAL DE REFERÊNCIA POR NCM
+    // -------------------------------------------------------------------------
+    const fiscalCatalog = {
+      '24022000': {
+        ncm: '24022000',
+        categoria: 'Cigarros contendo tabaco',
+        fatorConversaoMaco: 50, // 1 Milheiro (MH) = 50 Maços
+        fracaoVarejo: 0.15,
+        aliqIsAdVal: 0.667,
+        isValorFixo: 3.50,
+        aliqIpiAdVal: 0.667,
+        ipiValorFixo: 3.50
+      }
+    };
+
+    // -------------------------------------------------------------------------
+    // ESTADO DA APLICAÇÃO
+    // -------------------------------------------------------------------------
+    let currentRegime = 'nao_cumulativo'; // 'nao_cumulativo' ou 'cumulativo'
+    let items = [
+      {
+        id: 1,
+        desc: 'XLINT WHITE',
+        ncm: '24022000',
+        uCom: 'MH',
+        qCom: 800,
+        vrUnit: 131.30,
+        vrProd: 105040.00,
+        vDesc: 7207.20,
+        vIpi: 0.00, // IPI evidenciado mesmo quando for 0,00 no DANFE
+        icmsProprio: 7352.80,
+        icmsSt: 100647.20,
+        fecop: 7200.00,
+        pis: 5012.99,
+        cofins: 19731.75,
+        fatorConversao: 50,
+        precoVarejo: 9.00
+      },
+      {
+        id: 2,
+        desc: 'X-LINT SILVER SOFT',
+        ncm: '24022000',
+        uCom: 'MH',
+        qCom: 700,
+        vrUnit: 99.50,
+        vrProd: 69650.00,
+        vDesc: 5274.50,
+        vIpi: 0.00,
+        icmsProprio: 4875.50,
+        icmsSt: 73874.50,
+        fecop: 5250.00,
+        pis: 3324.01,
+        cofins: 13083.75,
+        fatorConversao: 50,
+        precoVarejo: 7.50
+      }
+    ];
+
+    const fmtBRL = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val || 0);
+
+    // -------------------------------------------------------------------------
+    // CÁLCULO GERAL E ATUALIZAÇÃO DA TELA
+    // -------------------------------------------------------------------------
+    function recalculateAll() {
+      const cbsRate = (parseFloat(document.getElementById('globalCbsRate').value) || 11.3) / 100;
+      const ibsRate = (parseFloat(document.getElementById('globalIbsRate').value) || 0.10) / 100;
+      const isCumulativo = (currentRegime === 'cumulativo');
+
+      // Alíquotas PIS/COFINS
+      const pisRate = isCumulativo ? 0.0065 : 0.0165;
+      const cofinsRate = isCumulativo ? 0.0300 : 0.0760;
+
+      // Totais acumuladores
+      let totVrProd = 0;
+      let totDesc = 0;
+      let totIpi = 0;
+      let totSt = 0;
+      let totFecop = 0;
+      let totPisCofinsNota = 0;
+      let totCreditoAtual = 0;
+      let totDesembolsoAtual = 0;
+      let totCustoLiquidoAtual = 0;
+
+      let totPrecoLiquidoRef = 0;
+      let totIsRef = 0;
+      let totCbsIbsRef = 0;
+      let totCreditoRef = 0;
+      let totDesembolsoRef = 0;
+      let totCustoLiquidoRef = 0;
+
+      const tbody = document.getElementById('itemsTableBody');
+      tbody.innerHTML = '';
+
+      items.forEach((item, index) => {
+        // Regras NCM
+        const regFiscal = fiscalCatalog[item.ncm] || {
+          fracaoVarejo: 0.15,
+          aliqIsAdVal: 0.667,
+          isValorFixo: 3.50,
+          fatorConversaoMaco: 1
+        };
+
+        const fator = item.fatorConversao || regFiscal.fatorConversaoMaco || 1;
+        const qtdConvertida = item.qCom * fator;
+        const precoVarejo = item.precoVarejo || 9.00;
+
+        // 1. Apuração Vigente (IPI, ICMS-ST e FECOP Segregados)
+        const ipiItem = item.vIpi || 0.00;
+        const stItem = item.icmsSt || 0.00;
+        const fecopItem = item.fecop || 0.00;
+        const pisCofinsItem = item.pis + item.cofins;
+        
+        // Desembolso DANFE = VrProd - Desc + IPI + ST + FECOP
+        const desembolsoAtual = item.vrProd - item.vDesc + ipiItem + stItem + fecopItem;
+        
+        // Créditos de Entrada:
+        const baseCreditoPisCofins = Math.max(0, item.vrProd - item.vDesc);
+        const creditoPisCofins = isCumulativo ? 0 : (baseCreditoPisCofins * (pisRate + cofinsRate));
+        const creditoIcms = isCumulativo ? 0 : item.icmsProprio;
+        const creditoIpi = isCumulativo ? 0 : ipiItem; // Apropriação de IPI no Lucro Real se aplicável
+        const creditoTotalAtual = creditoPisCofins + creditoIcms + creditoIpi;
+        const custoLiquidoAtual = desembolsoAtual - creditoTotalAtual;
+
+        // 2. Apuração Reforma (2027)
+        const baseIs = qtdConvertida * precoVarejo * regFiscal.fracaoVarejo;
+        const isAdValorem = baseIs * regFiscal.aliqIsAdVal;
+        const isFixo = qtdConvertida * regFiscal.isValorFixo;
+        const isTotal = isAdValorem + isFixo;
+
+        // Preço líquido da mercadoria sem os tributos antigos por dentro (deduzindo também IPI se destacado)
+        const precoLiquido = item.vrProd - item.vDesc - item.icmsProprio - ipiItem - item.pis - item.cofins;
+        
+        // Base CBS / IBS = Preço Líquido + Imposto Seletivo
+        const baseCbsIbs = precoLiquido + isTotal;
+        const cbsEntrada = baseCbsIbs * cbsRate;
+        const ibsEntrada = baseCbsIbs * ibsRate;
+        const cbsIbsTotal = cbsEntrada + ibsEntrada;
+
+        // Desembolso de Compra 2027: Preço Líquido + ST + FECOP + IS + CBS + IBS
+        const desembolso2027 = precoLiquido + stItem + fecopItem + isTotal + cbsIbsTotal;
+        const creditoRef = cbsIbsTotal;
+        const custoLiquidoRef = desembolso2027 - creditoRef;
+
+        // Acumulação de Totais
+        totVrProd += item.vrProd;
+        totDesc += item.vDesc;
+        totIpi += ipiItem;
+        totSt += stItem;
+        totFecop += fecopItem;
+        totPisCofinsNota += pisCofinsItem;
+        totCreditoAtual += creditoTotalAtual;
+        totDesembolsoAtual += desembolsoAtual;
+        totCustoLiquidoAtual += custoLiquidoAtual;
+
+        totPrecoLiquidoRef += precoLiquido;
+        totIsRef += isTotal;
+        totCbsIbsRef += cbsIbsTotal;
+        totCreditoRef += creditoRef;
+        totDesembolsoRef += desembolso2027;
+        totCustoLiquidoRef += custoLiquidoRef;
+
+        // Renderiza Linha com Colunas Individuais
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-50 transition border-b border-slate-100';
+        tr.innerHTML = `
+          <td class="py-2.5 px-3">
+            <span class="font-bold text-slate-800 block">${item.desc}</span>
+            <span class="text-[10px] text-slate-400">R$ ${item.vrUnit.toFixed(2)} / un</span>
+          </td>
+          <td class="py-2.5 px-2 text-center font-mono text-[11px] text-slate-600">${item.ncm}</td>
+          <td class="py-2.5 px-2 text-center text-slate-700">${item.qCom} ${item.uCom}</td>
+          <td class="py-2 px-2 text-center">
+            <input type="number" value="${qtdConvertida}" onchange="updateItemQty(${index}, this.value)"
+              class="w-20 bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-center font-bold text-[#04243b]">
+          </td>
+          <td class="py-2.5 px-2 text-right">${fmtBRL(item.vrProd - item.vDesc)}</td>
+          <td class="py-2.5 px-2 text-right bg-slate-50 font-medium text-slate-700">${fmtBRL(ipiItem)}</td>
+          <td class="py-2.5 px-2 text-right font-medium text-slate-700">${fmtBRL(stItem)}</td>
+          <td class="py-2.5 px-2 text-right font-medium text-slate-600">${fmtBRL(fecopItem)}</td>
+          <td class="py-2.5 px-2 text-right font-bold text-[#04243b] bg-amber-50/50">${fmtBRL(isTotal)}</td>
+          <td class="py-2.5 px-2 text-right text-amber-900 bg-amber-50/30">${fmtBRL(cbsIbsTotal)}</td>
+          <td class="py-2.5 px-2 text-right font-bold text-slate-800">${fmtBRL(desembolsoAtual)}</td>
+          <td class="py-2.5 px-2 text-right font-black text-rose-700">${fmtBRL(desembolso2027)}</td>
+          <td class="py-2.5 px-2 text-center">
+            <button type="button" onclick="openCalculationModal(${index})" class="px-2 py-1 bg-[#04243b] text-white hover:bg-slate-800 rounded text-[11px] font-semibold transition">
+              <i class="fa-solid fa-eye text-[#e4b35e]"></i> Ver Cálculo
+            </button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      // Atualiza Painel de Totais Segregado
+      document.getElementById('lblRegimeAtual').innerText = isCumulativo ? 'Cumulativo (0,65% / 3%)' : 'Não Cumulativo (1,65% / 7,6%)';
+      document.getElementById('totAtualVrProd').innerText = fmtBRL(totVrProd);
+      document.getElementById('totAtualDesc').innerText = fmtBRL(totDesc);
+      document.getElementById('totAtualIpi').innerText = fmtBRL(totIpi);
+      document.getElementById('totAtualSt').innerText = fmtBRL(totSt);
+      document.getElementById('totAtualFecop').innerText = fmtBRL(totFecop);
+      document.getElementById('totAtualPisCofins').innerText = fmtBRL(totPisCofinsNota);
+      document.getElementById('totAtualCreditos').innerText = fmtBRL(totCreditoAtual);
+      document.getElementById('totAtualDesembolso').innerText = fmtBRL(totDesembolsoAtual);
+      document.getElementById('totAtualCustoLiquido').innerText = fmtBRL(totCustoLiquidoAtual);
+
+      document.getElementById('totRefPrecoLiquido').innerText = fmtBRL(totPrecoLiquidoRef);
+      document.getElementById('totRefIs').innerText = fmtBRL(totIsRef);
+      document.getElementById('totRefSt').innerText = fmtBRL(totSt);
+      document.getElementById('totRefFecop').innerText = fmtBRL(totFecop);
+      document.getElementById('totRefCbsIbs').innerText = fmtBRL(totCbsIbsRef);
+      document.getElementById('totRefCreditos').innerText = fmtBRL(totCreditoRef);
+      document.getElementById('totRefDesembolso').innerText = fmtBRL(totDesembolsoRef);
+      document.getElementById('totRefCustoLiquido').innerText = fmtBRL(totCustoLiquidoRef);
+
+      const deltaDesembolso = totDesembolsoRef - totDesembolsoAtual;
+      const deltaPct = totDesembolsoAtual > 0 ? (deltaDesembolso / totDesembolsoAtual) * 100 : 0;
+      const kpiDelta = document.getElementById('kpiDeltaDesembolso');
+      kpiDelta.innerText = `${deltaDesembolso >= 0 ? '+' : ''}${fmtBRL(deltaDesembolso)} (${deltaPct >= 0 ? '+' : ''}${deltaPct.toFixed(1)}%)`;
+
+      document.getElementById('totalItemsBadge').innerText = `${items.length} itens processados`;
+    }
+
+    function handleRegimeChange() {
+      currentRegime = document.getElementById('regimeSelect').value;
+      recalculateAll();
+    }
+
+    function updateItemQty(index, newQty) {
+      const val = parseFloat(newQty) || 0;
+      if (items[index] && items[index].qCom > 0) {
+        items[index].fatorConversao = val / items[index].qCom;
+        recalculateAll();
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // MODAL DE MEMÓRIA DE CÁLCULO POR ITEM
+    // -------------------------------------------------------------------------
+    function openCalculationModal(index) {
+      const item = items[index];
+      if (!item) return;
+
+      const regFiscal = fiscalCatalog[item.ncm] || {
+        fracaoVarejo: 0.15,
+        aliqIsAdVal: 0.667,
+        isValorFixo: 3.50,
+        fatorConversaoMaco: 1
+      };
+
+      const cbsRate = (parseFloat(document.getElementById('globalCbsRate').value) || 11.3) / 100;
+      const ibsRate = (parseFloat(document.getElementById('globalIbsRate').value) || 0.10) / 100;
+      const isCumulativo = (currentRegime === 'cumulativo');
+      const pisRate = isCumulativo ? 0.0065 : 0.0165;
+      const cofinsRate = isCumulativo ? 0.0300 : 0.0760;
+
+      const fator = item.fatorConversao || regFiscal.fatorConversaoMaco || 1;
+      const qtdConvertida = item.qCom * fator;
+      const precoVarejo = item.precoVarejo || 9.00;
+
+      const ipiItem = item.vIpi || 0.00;
+      const stItem = item.icmsSt || 0.00;
+      const fecopItem = item.fecop || 0.00;
+      const desembolsoAtual = item.vrProd - item.vDesc + ipiItem + stItem + fecopItem;
+
+      const baseCreditoPisCofins = Math.max(0, item.vrProd - item.vDesc);
+      const creditoPisCofins = isCumulativo ? 0 : (baseCreditoPisCofins * (pisRate + cofinsRate));
+      const creditoIcms = isCumulativo ? 0 : item.icmsProprio;
+      const creditoIpi = isCumulativo ? 0 : ipiItem;
+      const creditoTotalAtual = creditoPisCofins + creditoIcms + creditoIpi;
+
+      const baseIs = qtdConvertida * precoVarejo * regFiscal.fracaoVarejo;
+      const isAdValorem = baseIs * regFiscal.aliqIsAdVal;
+      const isFixo = qtdConvertida * regFiscal.isValorFixo;
+      const isTotal = isAdValorem + isFixo;
+
+      const precoLiquido = item.vrProd - item.vDesc - item.icmsProprio - ipiItem - item.pis - item.cofins;
+      const baseCbsIbs = precoLiquido + isTotal;
+      const cbs = baseCbsIbs * cbsRate;
+      const ibs = baseCbsIbs * ibsRate;
+      const desembolso2027 = precoLiquido + stItem + fecopItem + isTotal + cbs + ibs;
+      const custoAposCredito = desembolso2027 - (cbs + ibs);
+
+      // Preenchimento do Modal
+      document.getElementById('modalItemTitle').innerText = `${item.desc} (NCM ${item.ncm})`;
+      document.getElementById('mdlQCom').innerText = `${item.qCom}`;
+      document.getElementById('mdlUCom').innerText = item.uCom;
+      document.getElementById('mdlQtdConvertida').innerText = `${qtdConvertida} maços (fator: ${fator})`;
+      document.getElementById('mdlPrecoVarejo').innerText = fmtBRL(precoVarejo);
+
+      document.getElementById('mdlVrProd').innerText = fmtBRL(item.vrProd);
+      document.getElementById('mdlVDesc').innerText = fmtBRL(item.vDesc);
+      document.getElementById('mdlIpi').innerText = fmtBRL(ipiItem);
+      document.getElementById('mdlIcmsProprio').innerText = fmtBRL(item.icmsProprio);
+      document.getElementById('mdlSt').innerText = fmtBRL(stItem);
+      document.getElementById('mdlFecop').innerText = fmtBRL(fecopItem);
+      document.getElementById('mdlPis').innerText = fmtBRL(item.pis);
+      document.getElementById('mdlCofins').innerText = fmtBRL(item.cofins);
+      document.getElementById('mdlDesembolsoAtual').innerText = fmtBRL(desembolsoAtual);
+      document.getElementById('mdlCreditoLegenda').innerText = isCumulativo 
+        ? 'Crédito de Entrada PIS/COFINS (Regime Cumulativo = Zero):' 
+        : 'Crédito Entrada PIS/COFINS + ICMS + IPI:';
+      document.getElementById('mdlCreditoAtual').innerText = fmtBRL(creditoTotalAtual);
+
+      document.getElementById('mdlBaseIs').innerText = fmtBRL(baseIs);
+      document.getElementById('mdlIsAdValorem').innerText = fmtBRL(isAdValorem);
+      document.getElementById('mdlIsEspecifico').innerText = fmtBRL(isFixo);
+      document.getElementById('mdlIsTotal').innerText = fmtBRL(isTotal);
+      document.getElementById('mdlIsUnitario').innerText = fmtBRL(qtdConvertida > 0 ? isTotal / qtdConvertida : 0);
+
+      document.getElementById('mdlPrecoLiquido').innerText = fmtBRL(precoLiquido);
+      document.getElementById('mdlIsNaBase').innerText = fmtBRL(isTotal);
+      document.getElementById('mdlBaseCbsIbs').innerText = fmtBRL(baseCbsIbs);
+      document.getElementById('mdlCbs').innerText = fmtBRL(cbs);
+      document.getElementById('mdlIbs').innerText = fmtBRL(ibs);
+      document.getElementById('mdlDesembolso2027').innerText = fmtBRL(desembolso2027);
+      document.getElementById('mdlCustoAposCredito').innerText = fmtBRL(custoAposCredito);
+
+      document.getElementById('calculationModal').classList.remove('hidden');
+    }
+
+    function closeCalculationModal() {
+      document.getElementById('calculationModal').classList.add('hidden');
+    }
+
+    // -------------------------------------------------------------------------
+    // MODAL DE CADASTRO FISCAL NCM
+    // -------------------------------------------------------------------------
+    function openProductCatalogModal() {
+      const tbody = document.getElementById('catalogTableBody');
+      tbody.innerHTML = '';
+
+      Object.values(fiscalCatalog).forEach(cat => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-50';
+        tr.innerHTML = `
+          <td class="py-2 px-3 font-mono font-bold text-[#04243b]">${cat.ncm}</td>
+          <td class="py-2 px-3 text-slate-700">${cat.categoria}</td>
+          <td class="py-2 px-2 text-center font-bold">${cat.fatorConversaoMaco} (1 MH = 50)</td>
+          <td class="py-2 px-2 text-center">${(cat.fracaoVarejo * 100).toFixed(0)}%</td>
+          <td class="py-2 px-2 text-center">${(cat.aliqIsAdVal * 100).toFixed(1)}%</td>
+          <td class="py-2 px-2 text-center font-bold text-amber-800">${fmtBRL(cat.isValorFixo)}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById('catalogModal').classList.remove('hidden');
+    }
+
+    function closeProductCatalogModal() {
+      document.getElementById('catalogModal').classList.add('hidden');
+    }
+
+    // -------------------------------------------------------------------------
+    // PARSER DE XML DA NF-e (MOD. 55) COM LEITURA ESPECÍFICA DE IPI, ST E FECOP
+    // -------------------------------------------------------------------------
+    function handleXmlFile(file) {
+      if (!file || !file.name.endsWith('.xml')) {
+        alert('Selecione um arquivo XML de NF-e válido.');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(e.target.result, 'text/xml');
+
+          const infNFe = xmlDoc.getElementsByTagName('infNFe')[0];
+          if (!infNFe) {
+            alert('Não foi possível identificar a estrutura da NF-e.');
+            return;
+          }
+
+          const ide = xmlDoc.getElementsByTagName('ide')[0];
+          const nNF = ide ? (ide.getElementsByTagName('nNF')[0]?.textContent || '-') : '-';
+          document.getElementById('nfeLoadedBadge').innerText = `NF-e Nº ${nNF} carregada com sucesso`;
+
+          const total = xmlDoc.getElementsByTagName('total')[0];
+          const vPIS_total = total ? parseFloat(total.getElementsByTagName('vPIS')[0]?.textContent || '0') : 0;
+          const vCOFINS_total = total ? parseFloat(total.getElementsByTagName('vCOFINS')[0]?.textContent || '0') : 0;
+          const vProd_total = total ? parseFloat(total.getElementsByTagName('vProd')[0]?.textContent || '0') : 0;
+
+          const detList = xmlDoc.getElementsByTagName('det');
+          const newItems = [];
+
+          for (let i = 0; i < detList.length; i++) {
+            const det = detList[i];
+            const prod = det.getElementsByTagName('prod')[0];
+            const imposto = det.getElementsByTagName('imposto')[0];
+
+            const xProd = prod.getElementsByTagName('xProd')[0]?.textContent || `Item ${i+1}`;
+            const ncm = (prod.getElementsByTagName('NCM')[0]?.textContent || '').replace(/\D/g, '');
+            const qCom = parseFloat(prod.getElementsByTagName('qCom')[0]?.textContent || '0');
+            const vUnCom = parseFloat(prod.getElementsByTagName('vUnCom')[0]?.textContent || '0');
+            const vProd = parseFloat(prod.getElementsByTagName('vProd')[0]?.textContent || '0');
+            const vDesc = parseFloat(prod.getElementsByTagName('vDesc')[0]?.textContent || '0');
+            const uCom = prod.getElementsByTagName('uCom')[0]?.textContent?.toUpperCase() || 'UN';
+
+            let icmsProprio = 0;
+            let vICMSST = 0;
+            let vFCPST = 0;
+            let vIpiItem = 0;
+            let vPisItem = 0;
+            let vCofinsItem = 0;
+
+            if (imposto) {
+              // ICMS, ICMS-ST e FECOP
+              const icmsTag = imposto.getElementsByTagName('ICMS')[0];
+              if (icmsTag) {
+                icmsProprio = parseFloat(icmsTag.getElementsByTagName('vICMS')[0]?.textContent || '0');
+                vICMSST = parseFloat(icmsTag.getElementsByTagName('vICMSST')[0]?.textContent || '0');
+                // FECOP pode constar como vFCPST ou vFCP
+                vFCPST = parseFloat(icmsTag.getElementsByTagName('vFCPST')[0]?.textContent || icmsTag.getElementsByTagName('vFCP')[0]?.textContent || '0');
+              }
+
+              // IPI (evidenciado mesmo se 0)
+              const ipiTag = imposto.getElementsByTagName('IPI')[0];
+              if (ipiTag) {
+                vIpiItem = parseFloat(ipiTag.getElementsByTagName('vIPI')[0]?.textContent || '0');
+              }
+
+              // PIS e COFINS
+              const pisTag = imposto.getElementsByTagName('PIS')[0];
+              if (pisTag) {
+                vPisItem = parseFloat(pisTag.getElementsByTagName('vPIS')[0]?.textContent || '0');
+              }
+              const cofinsTag = imposto.getElementsByTagName('COFINS')[0];
+              if (cofinsTag) {
+                vCofinsItem = parseFloat(cofinsTag.getElementsByTagName('vCOFINS')[0]?.textContent || '0');
+              }
+            }
+
+            // Rateio proporcional de PIS/COFINS caso venha apenas no totalizador
+            if (vPisItem === 0 && vPIS_total > 0 && vProd_total > 0) {
+              vPisItem = vPIS_total * (vProd / vProd_total);
+            }
+            if (vCofinsItem === 0 && vCOFINS_total > 0 && vProd_total > 0) {
+              vCofinsItem = vCOFINS_total * (vProd / vProd_total);
+            }
+
+            // Verifica catálogo para NCM
+            const regFiscal = fiscalCatalog[ncm];
+            let fator = 1;
+            if (regFiscal) {
+              fator = regFiscal.fatorConversaoMaco;
+            } else if (uCom === 'MH' || uCom === 'MIL') {
+              fator = 50;
+            }
+
+            newItems.push({
+              id: i + 1,
+              desc: xProd,
+              ncm: ncm,
+              uCom: uCom,
+              qCom: qCom,
+              vrUnit: vUnCom,
+              vrProd: vProd,
+              vDesc: vDesc,
+              vIpi: vIpiItem,
+              icmsProprio: icmsProprio > 0 ? icmsProprio : (vProd * 0.07),
+              icmsSt: vICMSST,
+              fecop: vFCPST,
+              pis: vPisItem,
+              cofins: vCofinsItem,
+              fatorConversao: fator,
+              precoVarejo: 9.00
+            });
+          }
+
+          if (newItems.length > 0) {
+            items = newItems;
+            recalculateAll();
+          }
+
+        } catch (err) {
+          console.error(err);
+          alert('Erro ao interpretar o arquivo XML.');
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // -------------------------------------------------------------------------
+    // INICIALIZAÇÃO
+    // -------------------------------------------------------------------------
+    document.addEventListener('DOMContentLoaded', () => {
+      const fileInput = document.getElementById('xmlFileInput');
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files[0]) {
+          handleXmlFile(e.target.files[0]);
+        }
+      });
+
+      recalculateAll();
+    });
+  </script>
+</body>
+</html>

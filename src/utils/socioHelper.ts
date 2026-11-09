@@ -79,17 +79,8 @@ export function getSocioRoleTitle(nome: string, qualificacao?: string, uppercase
   return female ? 'Sócia Administradora' : 'Sócio Administrador';
 }
 
-/**
- * Formats a raw 11-digit CPF to 000.000.000-00, or returns the string if already formatted or masked
- */
-export function formatCpf(val: string): string {
-  if (!val) return '';
-  const clean = val.replace(/\D/g, '');
-  if (clean.length === 11) {
-    return `${clean.slice(0, 3)}.${clean.slice(3, 6)}.${clean.slice(6, 9)}-${clean.slice(9, 11)}`;
-  }
-  return val.trim();
-}
+import { formatCpf } from '../shared/utils/formatters';
+export { formatCpf };
 
 /**
  * Extracts all known partners for a company from both sociosDetalhados and quadroSocietario

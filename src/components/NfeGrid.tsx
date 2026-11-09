@@ -18,8 +18,15 @@ import {
   Percent,
   Coins,
   FileSpreadsheet,
-  Info
+  Info,
+  CheckSquare,
+  Square,
+  Layers,
+  SlidersHorizontal,
+  Check,
+  Building2
 } from 'lucide-react';
+import { DEFAULT_DECRETO_29560_SUPPLIERS, isSupplierEligibleForDecreto29560 } from '../utils/decreto29560Helper';
 import { NFeItemRow, SortConfig, GridFilters } from '../types';
 import { Company } from '../types_debits';
 import { loadStoredCompanies, COMPANIES_UPDATED_EVENT } from '../utils/companyStorage';
@@ -27,17 +34,34 @@ import { loadStoredCompanies, COMPANIES_UPDATED_EVENT } from '../utils/companySt
 interface NFeGridProps {
   rows: NFeItemRow[];
   onRowUpdate: (updatedRow: NFeItemRow) => void;
-  onExport: (exportedRows: NFeItemRow[], visibleColumns: string[], reportName: string) => void;
+  onExport: (
+    exportedRows: NFeItemRow[],
+    visibleColumns: string[],
+    reportName: string,
+    includeConsolidatedLastItems?: boolean,
+    decreto29560Enabled?: boolean,
+    decretoSuppliers?: string[]
+  ) => void;
 }
 
 // Category definition for NFe columns
 export interface ColumnDefinition {
   key: keyof NFeItemRow;
   label: string;
-  category: 'Identificação' | 'Dados do Item' | 'ICMS / ICMS ST' | 'IPI' | 'PIS / COFINS' | 'IBS / CBS' | 'Informações Complementares';
+  category:
+    | 'Identificação'
+    | 'Dados do Item'
+    | 'ICMS Normal'
+    | 'ICMS ST'
+    | 'ICMS ST Decreto 29.560'
+    | 'FECOP'
+    | 'IPI'
+    | 'PIS / COFINS'
+    | 'IBS / CBS'
+    | 'Informações Complementares';
 }
 
-const ALL_COLUMNS: ColumnDefinition[] = [
+export const ALL_COLUMNS: ColumnDefinition[] = [
   // 1. Identificação
   { key: 'chNFe', label: 'Chave de Acesso', category: 'Identificação' },
   { key: 'nNF', label: 'Número NFe', category: 'Identificação' },
@@ -60,22 +84,37 @@ const ALL_COLUMNS: ColumnDefinition[] = [
   { key: 'vUnCom', label: 'Valor Unitário', category: 'Dados do Item' },
   { key: 'vProd', label: 'Valor Total Item', category: 'Dados do Item' },
 
-  // 3. ICMS / ICMS ST
-  { key: 'cstICMS', label: 'CST ICMS', category: 'ICMS / ICMS ST' },
-  { key: 'vBC_ICMS', label: 'BC ICMS', category: 'ICMS / ICMS ST' },
-  { key: 'pICMS', label: 'Alíquota ICMS %', category: 'ICMS / ICMS ST' },
-  { key: 'vICMS', label: 'Valor ICMS', category: 'ICMS / ICMS ST' },
-  { key: 'vBCST', label: 'BC ICMS ST', category: 'ICMS / ICMS ST' },
-  { key: 'pICMSST', label: 'Alíquota ICMS ST %', category: 'ICMS / ICMS ST' },
-  { key: 'vICMSST', label: 'Valor ICMS ST', category: 'ICMS / ICMS ST' },
+  // 3. ICMS Normal
+  { key: 'cstICMS', label: 'CST ICMS', category: 'ICMS Normal' },
+  { key: 'vBC_ICMS', label: 'BC ICMS', category: 'ICMS Normal' },
+  { key: 'pICMS', label: 'Alíquota ICMS %', category: 'ICMS Normal' },
+  { key: 'vICMS', label: 'Valor ICMS', category: 'ICMS Normal' },
 
-  // 4. IPI
+  // 4. ICMS ST (Destacado na Nota)
+  { key: 'vBCST', label: 'BC ICMS ST', category: 'ICMS ST' },
+  { key: 'pICMSST', label: 'Alíquota ICMS ST %', category: 'ICMS ST' },
+  { key: 'vICMSST', label: 'Valor ICMS ST', category: 'ICMS ST' },
+
+  // 5. ICMS ST Decreto 29.560 (Termo de Acordo Atacadista / RET 2024)
+  { key: 'vBC_ST_29560', label: 'BC ST Dec. 29.560', category: 'ICMS ST Decreto 29.560' },
+  { key: 'pICMSST_29560', label: 'Alíquota Dec. 29.560 %', category: 'ICMS ST Decreto 29.560' },
+  { key: 'vICMSST_29560', label: 'ICMS ST Dec. 29.560', category: 'ICMS ST Decreto 29.560' },
+
+  // 5. FECOP
+  { key: 'vBCFCP', label: 'BC FECOP', category: 'FECOP' },
+  { key: 'pFCP', label: 'Alíquota FECOP %', category: 'FECOP' },
+  { key: 'vFCP', label: 'Valor FECOP', category: 'FECOP' },
+  { key: 'vBCFCPST', label: 'BC FECOP ST', category: 'FECOP' },
+  { key: 'pFCPST', label: 'Alíquota FECOP ST %', category: 'FECOP' },
+  { key: 'vFCPST', label: 'Valor FECOP ST', category: 'FECOP' },
+
+  // 6. IPI
   { key: 'cstIPI', label: 'CST IPI', category: 'IPI' },
   { key: 'vBC_IPI', label: 'BC IPI', category: 'IPI' },
   { key: 'pIPI', label: 'Alíquota IPI %', category: 'IPI' },
   { key: 'vIPI', label: 'Valor IPI', category: 'IPI' },
 
-  // 5. PIS / COFINS
+  // 7. PIS / COFINS
   { key: 'cstPIS', label: 'CST PIS', category: 'PIS / COFINS' },
   { key: 'vBC_PIS', label: 'BC PIS', category: 'PIS / COFINS' },
   { key: 'pPIS', label: 'Alíquota PIS %', category: 'PIS / COFINS' },
@@ -85,7 +124,7 @@ const ALL_COLUMNS: ColumnDefinition[] = [
   { key: 'pCOFINS', label: 'Alíquota COFINS %', category: 'PIS / COFINS' },
   { key: 'vCOFINS', label: 'Valor COFINS', category: 'PIS / COFINS' },
 
-  // 6. IBS / CBS (Tax Reform)
+  // 8. IBS / CBS (Tax Reform)
   { key: 'cClassTrib', label: 'cClassTrib', category: 'IBS / CBS' },
   { key: 'cstIBS', label: 'CST IBS', category: 'IBS / CBS' },
   { key: 'vBC_IBS', label: 'BC IBS', category: 'IBS / CBS' },
@@ -100,7 +139,7 @@ const ALL_COLUMNS: ColumnDefinition[] = [
   { key: 'pCBS', label: 'Alíquota CBS %', category: 'IBS / CBS' },
   { key: 'vCBS', label: 'Valor CBS', category: 'IBS / CBS' },
 
-  // 7. Informações Complementares
+  // 9. Informações Complementares
   { key: 'infAdic', label: 'Informações Complementares', category: 'Informações Complementares' },
   { key: 'infAdFisco', label: 'Informações de Interesse do Fisco', category: 'Informações Complementares' }
 ];
@@ -135,10 +174,13 @@ const DEFAULT_PRESETS: ColumnPresetGroup[] = [
   },
   {
     id: 'icms_st',
-    name: 'Conferência ICMS & ICMS ST',
+    name: 'Conferência ICMS, ST & FECOP',
     columns: [
       'nNF', 'serie', 'modelo', 'dhEmi', 'emitNome', 'xProd', 'CFOP', 'vProd',
-      'cstICMS', 'vBC_ICMS', 'pICMS', 'vICMS', 'vBCST', 'pICMSST', 'vICMSST'
+      'cstICMS', 'vBC_ICMS', 'pICMS', 'vICMS',
+      'vBCST', 'pICMSST', 'vICMSST',
+      'vBC_ST_29560', 'pICMSST_29560', 'vICMSST_29560',
+      'vBCFCP', 'pFCP', 'vFCP', 'vBCFCPST', 'pFCPST', 'vFCPST'
     ]
   },
   {
@@ -160,6 +202,9 @@ const EDITABLE_FIELDS: Record<string, { type: 'text' | 'number'; step?: string }
   pIBS: { type: 'number', step: '0.01' },
   vBC_CBS: { type: 'number', step: '0.01' },
   pCBS: { type: 'number', step: '0.01' },
+  vBC_ST_29560: { type: 'number', step: '0.01' },
+  pICMSST_29560: { type: 'number', step: '0.01' },
+  vICMSST_29560: { type: 'number', step: '0.01' },
 };
 
 export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
@@ -177,6 +222,107 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
 
   const [showFilterPanel, setShowFilterPanel] = useState(false);
   const [showConfigPanel, setShowConfigPanel] = useState(false);
+
+  // Advanced Configurations Modal state (Unchecked / Closed by default as requested)
+  const [showAdvancedModal, setShowAdvancedModal] = useState(false);
+
+  // Option 1: Consolidated Last Item Sheet (Default: UNCHECKED / FALSE as requested)
+  const [includeLastItemSheet, setIncludeLastItemSheet] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('ml_nfe_export_last_item_sheet');
+      return saved !== null ? JSON.parse(saved) : false; // Default: FALSE (desmarcado)
+    } catch {
+      return false;
+    }
+  });
+
+  // Option 2: ICMS ST Decreto 29.560 calculation (Default: UNCHECKED / FALSE)
+  const [decreto29560Enabled, setDecreto29560Enabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('ml_decreto_29560_enabled');
+      return saved !== null ? JSON.parse(saved) : false; // Default: FALSE (desmarcado)
+    } catch {
+      return false;
+    }
+  });
+
+  // Fornecedores configurados para o Decreto 29.560
+  const [decretoSuppliers, setDecretoSuppliers] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('ml_decreto_29560_suppliers');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // Merge default suppliers so new additions appear automatically
+          const combined = [...parsed];
+          DEFAULT_DECRETO_29560_SUPPLIERS.forEach(s => {
+            const normS = s.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+            const exists = combined.some(existing => {
+              const normE = existing.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+              return normE === normS || normE.includes(normS.slice(0, 8)) || normS.includes(normE.slice(0, 8));
+            });
+            if (!exists) {
+              combined.push(s);
+            }
+          });
+          return combined;
+        }
+      }
+      return DEFAULT_DECRETO_29560_SUPPLIERS;
+    } catch {
+      return DEFAULT_DECRETO_29560_SUPPLIERS;
+    }
+  });
+
+  const [newSupplierInput, setNewSupplierInput] = useState('');
+
+  const toggleIncludeLastItemSheet = () => {
+    setIncludeLastItemSheet(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('ml_nfe_export_last_item_sheet', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  const toggleDecreto29560 = () => {
+    setDecreto29560Enabled(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('ml_decreto_29560_enabled', JSON.stringify(next));
+      } catch {}
+
+      // If turning ON, ensure the 3 columns are in visibleColumns so the user sees them!
+      if (next) {
+        setVisibleColumns(curr => {
+          const toAdd: (keyof NFeItemRow)[] = ['vBC_ST_29560', 'pICMSST_29560', 'vICMSST_29560'];
+          const missing = toAdd.filter(k => !curr.includes(k));
+          return missing.length > 0 ? [...curr, ...missing] : curr;
+        });
+      }
+      return next;
+    });
+  };
+
+  const handleAddSupplier = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSupplierInput.trim()) return;
+    const updated = [...decretoSuppliers, newSupplierInput.trim().toUpperCase()];
+    setDecretoSuppliers(updated);
+    try {
+      localStorage.setItem('ml_decreto_29560_suppliers', JSON.stringify(updated));
+    } catch {}
+    setNewSupplierInput('');
+  };
+
+  const handleRemoveSupplier = (suppToRemove: string) => {
+    const updated = decretoSuppliers.filter(s => s !== suppToRemove);
+    setDecretoSuppliers(updated);
+    try {
+      localStorage.setItem('ml_decreto_29560_suppliers', JSON.stringify(updated));
+    } catch {}
+  };
 
   const [registeredCompanies, setRegisteredCompanies] = useState<Company[]>([]);
 
@@ -327,6 +473,13 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
       if (field === 'vBC_CBS' || field === 'pCBS') {
         updatedRow.vCBS = parseFloat(((updatedRow.vBC_CBS * updatedRow.pCBS) / 100).toFixed(2));
       }
+
+      // Recalculate Decreto 29.560 ST on edits
+      if (field === 'vBC_ST_29560' || field === 'pICMSST_29560') {
+        const bc = updatedRow.vBC_ST_29560 || 0;
+        const rate = updatedRow.pICMSST_29560 || 0;
+        updatedRow.vICMSST_29560 = parseFloat(((bc * rate) / 100).toFixed(2));
+      }
     } else {
       (updatedRow[field] as any) = editValue.trim();
     }
@@ -412,10 +565,22 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
       borderAccent = 'border-t-[3px] border-emerald-500';
       labelBg = 'bg-[#ecfdf5]'; // Emerald 50
       textColor = 'text-emerald-950 font-bold';
-    } else if (category === 'ICMS / ICMS ST') {
+    } else if (category === 'ICMS Normal') {
       borderAccent = 'border-t-[3px] border-sky-500';
       labelBg = 'bg-[#f0f9ff]'; // Sky 50
       textColor = 'text-sky-950 font-bold';
+    } else if (category === 'ICMS ST') {
+      borderAccent = 'border-t-[3px] border-blue-600';
+      labelBg = 'bg-[#eff6ff]'; // Blue 50
+      textColor = 'text-blue-950 font-bold';
+    } else if (category === 'ICMS ST Decreto 29.560') {
+      borderAccent = 'border-t-[3px] border-amber-600';
+      labelBg = 'bg-[#fffbeb]'; // Amber 50
+      textColor = 'text-amber-950 font-bold';
+    } else if (category === 'FECOP') {
+      borderAccent = 'border-t-[3px] border-cyan-600';
+      labelBg = 'bg-[#ecfeff]'; // Cyan 50
+      textColor = 'text-cyan-950 font-bold';
     } else if (category === 'IPI') {
       borderAccent = 'border-t-[3px] border-purple-500';
       labelBg = 'bg-[#faf5ff]'; // Purple 50
@@ -438,7 +603,7 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
       <th 
         key={field}
         onDoubleClick={() => handleHeaderDoubleClick(field)}
-        className={`sticky top-0 z-20 px-4 py-3.5 text-left text-[11px] font-extrabold uppercase tracking-wider cursor-pointer select-none group transition-all duration-200 hover:brightness-95 shadow-[0_1px_0_rgba(0,0,0,0.08)] ${borderAccent} ${labelBg} ${textColor}`}
+        className={`px-4 py-3.5 text-left text-[11px] font-extrabold uppercase tracking-wider cursor-pointer select-none group transition-all duration-200 hover:brightness-95 shadow-[0_1px_0_rgba(0,0,0,0.08)] ${borderAccent} ${labelBg} ${textColor}`}
         title="Dê duplo clique para ordenar por esta coluna"
         id={`th-${field}`}
       >
@@ -462,16 +627,7 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
     else if (isChave) alignClass = 'text-left font-mono text-[10px] tracking-wide min-w-[340px] font-semibold text-slate-700 bg-slate-50/50';
     else if (isCenter) alignClass = 'text-center font-mono text-xs';
     
-    let bgClass = 'bg-white';
-    if (category === 'IBS / CBS') {
-      bgClass = 'bg-emerald-50/[0.04] group-hover:bg-emerald-50/10';
-    } else if (category === 'ICMS / ICMS ST') {
-      bgClass = 'bg-sky-50/[0.04] group-hover:bg-sky-50/10';
-    } else if (category === 'IPI') {
-      bgClass = 'bg-purple-50/[0.04] group-hover:bg-purple-50/10';
-    } else if (category === 'PIS / COFINS') {
-      bgClass = 'bg-indigo-50/[0.04] group-hover:bg-indigo-50/10';
-    }
+    const bgClass = 'bg-white';
     
     const isEditable = !!EDITABLE_FIELDS[colKey as string];
     const editableStyle = isEditable 
@@ -482,6 +638,13 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
   };
 
   const renderCellValue = (row: NFeItemRow, colKey: keyof NFeItemRow) => {
+    // If it's a Decreto 29.560 column, verify if feature is enabled and supplier is eligible
+    if (colKey === 'vBC_ST_29560' || colKey === 'pICMSST_29560' || colKey === 'vICMSST_29560') {
+      if (!decreto29560Enabled || !isSupplierEligibleForDecreto29560(row.emitNome, decretoSuppliers)) {
+        return <span className="text-slate-300 font-sans font-normal">-</span>;
+      }
+    }
+
     const val = row[colKey];
     if (val === undefined || val === null || val === '') {
       return <span className="text-slate-300 font-sans font-normal">-</span>;
@@ -590,10 +753,35 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
       if (colKey.startsWith('p')) {
         const formattedPct = `${val.toFixed(4).replace(/\.?0+$/, '')}%`;
         if (val === 0) return <span className="text-slate-300 font-mono text-xs">0%</span>;
+
+        if (colKey === 'pICMSST_29560') {
+          return (
+            <div className="flex items-center justify-end space-x-1" title={row.regraDecreto29560 || 'Decreto 29.560/08'}>
+              <span className="text-amber-900 font-mono text-xs font-bold">{formattedPct}</span>
+              {row.isSimplesNacional && (
+                <span className="inline-flex items-center px-1 py-0.2 rounded text-[9px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300" title={`Fornecedor Simples Nacional: ${row.regraDecreto29560 || '+3% interno, +4% Sul/Sudeste ou +6% Norte/Nordeste'}`}>
+                  SN
+                </span>
+              )}
+              {row.isImportado4Pct && (
+                <span className="inline-flex items-center px-1 py-0.2 rounded text-[9px] font-extrabold bg-blue-100 text-blue-900 border border-blue-300" title={`Produto Origem Estrangeira 4%: ${row.regraDecreto29560 || '+3% Sul/Sudeste ou +8% Norte/Nordeste'}`}>
+                  4% Imp
+                </span>
+              )}
+            </div>
+          );
+        }
+
         return <span className="text-slate-700 font-mono text-xs font-semibold">{formattedPct}</span>;
       }
       
-      if (colKey.includes('vBC') || colKey.startsWith('v') || colKey.endsWith('ST') || colKey === 'vIBSUF' || colKey === 'vIBSMun') {
+      if (
+        colKey.includes('vBC') ||
+        colKey.startsWith('v') ||
+        colKey.endsWith('ST') ||
+        colKey === 'vIBSUF' ||
+        colKey === 'vIBSMun'
+      ) {
         if (val === 0) {
           return <span className="text-slate-300 font-mono text-xs">-</span>;
         }
@@ -601,8 +789,14 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
         let colorClass = 'text-slate-700 font-semibold';
         if (colKey === 'vIBS' || colKey === 'vCBS' || colKey === 'vIBSUF' || colKey === 'vIBSMun') {
           colorClass = 'text-emerald-700 font-bold';
-        } else if (colKey === 'vICMS' || colKey === 'vICMSST') {
+        } else if (colKey === 'vICMS') {
           colorClass = 'text-sky-700 font-bold';
+        } else if (colKey === 'vICMSST') {
+          colorClass = 'text-blue-700 font-bold';
+        } else if (colKey === 'vICMSST_29560') {
+          colorClass = 'text-amber-800 font-bold';
+        } else if (colKey === 'vFCP' || colKey === 'vFCPST') {
+          colorClass = 'text-cyan-700 font-bold';
         } else if (colKey === 'vProd') {
           colorClass = 'text-[#042838] font-bold text-[13px]';
         }
@@ -705,9 +899,30 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
             </button>
           )}
 
-          {/* 3. Export to Excel Button with Brand Theme Colors */}
+          {/* 3. Botão Configurações Avançadas (Aba Consolidada + Decreto 29.560) */}
           <button
-            onClick={() => onExport(sortedRows, visibleColumns as string[], activePresetName)}
+            type="button"
+            onClick={() => setShowAdvancedModal(true)}
+            className={`flex items-center space-x-1.5 px-3.5 py-2.5 border rounded-xl text-xs font-bold transition-all duration-300 cursor-pointer ${
+              includeLastItemSheet || decreto29560Enabled
+                ? 'border-[#dfb25e] bg-[#042838] text-[#dfb25e]'
+                : 'border-slate-200 bg-white hover:bg-slate-50 text-[#042838]'
+            }`}
+            id="btn-advanced-settings"
+            title="Abrir painel de configurações avançadas (Aba consolidada e Decreto 29.560)"
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            <span>Configurações Avançadas</span>
+            {(includeLastItemSheet || decreto29560Enabled) && (
+              <span className="bg-[#dfb25e] text-[#042838] rounded-full h-4 w-4 flex items-center justify-center text-[9px] font-extrabold ml-1">
+                {(includeLastItemSheet ? 1 : 0) + (decreto29560Enabled ? 1 : 0)}
+              </span>
+            )}
+          </button>
+
+          {/* 4. Export to Excel Button with Brand Theme Colors */}
+          <button
+            onClick={() => onExport(sortedRows, visibleColumns as string[], activePresetName, includeLastItemSheet, decreto29560Enabled, decretoSuppliers)}
             className="flex items-center space-x-2 px-4.5 py-2.5 bg-[#042838] border border-[#dfb25e]/30 hover:border-[#dfb25e]/65 text-[#dfb25e] hover:bg-[#02151D] hover:scale-[1.01] font-bold text-xs tracking-wider uppercase rounded-xl shadow-md shadow-[#02151D]/10 transition-all duration-300 cursor-pointer"
             id="btn-export-excel"
           >
@@ -861,7 +1076,7 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
               </h3>
 
               {/* Categories grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[300px] overflow-y-auto pr-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[420px] overflow-y-auto pr-1">
                 {Array.from(new Set(ALL_COLUMNS.map(c => c.category))).map((category) => {
                   const categoryCols = ALL_COLUMNS.filter(c => c.category === category);
                   const allCategoryKeys = categoryCols.map(c => c.key);
@@ -897,7 +1112,7 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
                         </button>
                       </div>
 
-                      <div className="space-y-1.5 max-h-[150px] overflow-y-auto pr-1">
+                      <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
                         {categoryCols.map((col) => {
                           const isChecked = visibleColumns.includes(col.key);
                           return (
@@ -945,15 +1160,62 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
       {/* Main Spreadsheet/Grid Canvas */}
       <div className="overflow-x-auto relative shadow-inner max-h-[600px] rounded-b-xl border-t border-slate-200 bg-slate-50/20">
         <table className="w-full border-collapse border-spacing-0" id="table-document-rows">
-          <thead>
+          <thead className="sticky top-0 z-20">
+            {/* Super-Header Row: Category Groups */}
+            <tr className="border-b border-slate-300/80">
+              {(() => {
+                const activeCols = ALL_COLUMNS.filter(c => visibleColumns.includes(c.key));
+                const groups: { category: ColumnDefinition['category']; count: number }[] = [];
+                activeCols.forEach(col => {
+                  const last = groups[groups.length - 1];
+                  if (last && last.category === col.category) {
+                    last.count += 1;
+                  } else {
+                    groups.push({ category: col.category, count: 1 });
+                  }
+                });
+
+                return groups.map((g, idx) => {
+                  let groupClass = 'bg-[#042838] text-[#dfb25e] border-r border-slate-700';
+                  if (g.category === 'Dados do Item') {
+                    groupClass = 'bg-slate-800 text-slate-100 border-r border-slate-700';
+                  } else if (g.category === 'ICMS Normal') {
+                    groupClass = 'bg-sky-800 text-white border-r border-sky-700';
+                  } else if (g.category === 'ICMS ST') {
+                    groupClass = 'bg-blue-800 text-white border-r border-blue-700';
+                  } else if (g.category === 'ICMS ST Decreto 29.560') {
+                    groupClass = 'bg-amber-900 text-[#dfb25e] border-r border-amber-800';
+                  } else if (g.category === 'FECOP') {
+                    groupClass = 'bg-cyan-800 text-white border-r border-cyan-700';
+                  } else if (g.category === 'IPI') {
+                    groupClass = 'bg-purple-800 text-white border-r border-purple-700';
+                  } else if (g.category === 'PIS / COFINS') {
+                    groupClass = 'bg-indigo-800 text-white border-r border-indigo-700';
+                  } else if (g.category === 'IBS / CBS') {
+                    groupClass = 'bg-emerald-800 text-white border-r border-emerald-700';
+                  } else if (g.category === 'Informações Complementares') {
+                    groupClass = 'bg-amber-800 text-white border-r border-amber-700';
+                  }
+
+                  return (
+                    <th
+                      key={`${g.category}-${idx}`}
+                      colSpan={g.count}
+                      className={`px-3 py-2 text-center text-[10px] font-extrabold uppercase tracking-widest select-none ${groupClass}`}
+                    >
+                      {g.category}
+                    </th>
+                  );
+                });
+              })()}
+            </tr>
+
+            {/* Individual Column Headers */}
             <tr className="border-b border-slate-200 divide-y-0">
-              
-              {/* Dynamic Headers based on Visible Columns list */}
               {ALL_COLUMNS.map((col) => {
                 if (!visibleColumns.includes(col.key)) return null;
                 return renderHeader(col.label, col.key, col.category);
               })}
-
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 text-xs text-slate-700 bg-white font-sans">
@@ -1046,6 +1308,205 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
           <span className="text-[10px] text-slate-400 bg-white px-2 py-1 rounded-md border border-slate-200/50">Dica: Dê duplo clique na célula com borda pontilhada verde para editar</span>
         </div>
       </div>
+
+      {/* Modal de Configurações Avançadas */}
+      {showAdvancedModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-2xl w-full border border-slate-200 shadow-2xl overflow-hidden animate-scaleUp">
+            
+            {/* Header */}
+            <div className="px-6 py-4 bg-[#04243b] text-white flex items-center justify-between border-b border-slate-700">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-slate-800 rounded-lg text-[#dfb25e]">
+                  <SlidersHorizontal className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm tracking-tight text-white">Configurações Avançadas de Auditoria & Exportação</h3>
+                  <p className="text-[11px] text-slate-300">Personalize recursos especiais de cálculo e geração de planilhas</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAdvancedModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
+              
+              {/* Option 1: Aba Consolidada (Último Item) */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start space-x-3">
+                    <div className="p-2 bg-blue-50 text-blue-700 rounded-lg shrink-0 mt-0.5">
+                      <Layers className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800">
+                        Gerar Aba Consolidada na Planilha Excel (Último Item Faturado)
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                        Gera uma 2ª aba no arquivo Excel que agrupa cada produto apenas uma vez, trazendo exclusivamente os dados da sua última nota fiscal faturada (eliminando duplicidades). O histórico completo é preservado na 1ª aba.
+                      </p>
+                    </div>
+                  </div>
+
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
+                    <input
+                      type="checkbox"
+                      checked={includeLastItemSheet}
+                      onChange={toggleIncludeLastItemSheet}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#04243b]"></div>
+                  </label>
+                </div>
+                <div className="mt-2.5 flex items-center text-[10px] text-slate-400 font-medium">
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
+                    includeLastItemSheet ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {includeLastItemSheet ? 'Ativado: 2 abas geradas' : 'Desativado (Padrão): apenas histórico completo'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Option 2: ICMS ST Decreto 29.560 (Termo de Acordo Atacadista / RET 2024) */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start space-x-3">
+                    <div className="p-2 bg-amber-50 text-amber-700 rounded-lg shrink-0 mt-0.5">
+                      <Building2 className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800">
+                        Cálculo do ICMS ST — Decreto Nº 29.560 (RET 2024)
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                        Calcula o ICMS Substituição Tributária específico do Termo de Acordo Atacadista com base na origem da mercadoria (7%, 4% ou 12% de crédito interestadual) e na tabela oficial do Decreto 29.560. A base de cálculo inclui produtos, IPI, frete e encargos da nota.
+                      </p>
+                    </div>
+                  </div>
+
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
+                    <input
+                      type="checkbox"
+                      checked={decreto29560Enabled}
+                      onChange={toggleDecreto29560}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#04243b]"></div>
+                  </label>
+                </div>
+
+                <div className="mt-2.5 flex items-center text-[10px] text-slate-400 font-medium">
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
+                    decreto29560Enabled ? 'bg-amber-100 text-amber-900' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {decreto29560Enabled ? 'Ativado: colunas de ST do Dec. 29.560 exibidas' : 'Desativado (Padrão)'}
+                  </span>
+                </div>
+
+                {/* Lista de Fornecedores Elegíveis ao Decreto */}
+                <div className="mt-4 pt-4 border-t border-slate-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-slate-700">Fornecedores Habilitados no Decreto 29.560</span>
+                    <span className="text-[10px] text-slate-400">({decretoSuppliers.length} cadastrados)</span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {decretoSuppliers.map((supp, sIdx) => (
+                      <span
+                        key={sIdx}
+                        className="inline-flex items-center px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 text-slate-700 shadow-2xs"
+                      >
+                        <span>{supp}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSupplier(supp)}
+                          className="ml-1.5 text-slate-400 hover:text-red-500 font-bold"
+                          title="Remover fornecedor"
+                        >
+                          &times;
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+
+                  {/* Formulário para adicionar novo fornecedor */}
+                  <form onSubmit={handleAddSupplier} className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Adicionar fornecedor (Ex: RICLAN S.A.)"
+                      value={newSupplierInput}
+                      onChange={(e) => setNewSupplierInput(e.target.value)}
+                      className="flex-grow px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-[#04243b]"
+                    />
+                    <button
+                      type="submit"
+                      className="px-3 py-1.5 bg-[#04243b] text-[#dfb25e] text-xs font-bold rounded-lg border border-[#dfb25e]/30 hover:bg-[#02151D] transition-colors"
+                    >
+                      Adicionar
+                    </button>
+                  </form>
+                  {/* Box explicativo das Novas Regras do Decreto 29.560/08 */}
+                  <div className="mt-4 p-3 bg-amber-50/70 rounded-xl border border-amber-200/80 space-y-2 text-[11px] text-amber-950">
+                    <div className="font-bold flex items-center gap-1.5 text-amber-900 text-xs">
+                      <Info className="h-4 w-4 text-amber-700 shrink-0" />
+                      <span>Regras de Acréscimos à Carga Líquida (Decreto 29.560/08 & Res. 13/2012):</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-1 font-sans">
+                      {/* Simples Nacional */}
+                      <div className="p-2.5 bg-white rounded-lg border border-amber-200 shadow-2xs">
+                        <span className="font-bold text-amber-900 block mb-1">
+                          1. Fornecedores do Simples Nacional:
+                        </span>
+                        <ul className="space-y-0.5 text-slate-700 text-[10.5px]">
+                          <li>• <strong className="text-amber-800">+ 3,00%</strong> nas operações internas (ex: AB Alimentos)</li>
+                          <li>• <strong className="text-amber-800">+ 4,00%</strong> procedentes do Sul e Sudeste (exceto ES)</li>
+                          <li>• <strong className="text-amber-800">+ 6,00%</strong> procedentes do Norte, Nordeste, CO e ES</li>
+                        </ul>
+                      </div>
+
+                      {/* Produto de Origem Estrangeira a 4% */}
+                      <div className="p-2.5 bg-white rounded-lg border border-amber-200 shadow-2xs">
+                        <span className="font-bold text-amber-900 block mb-1">
+                          2. Produto Importado a 4% (Res. 13/2012):
+                        </span>
+                        <ul className="space-y-0.5 text-slate-700 text-[10.5px]">
+                          <li>• <strong className="text-blue-800">+ 3,00%</strong> procedentes do Sul e Sudeste (exceto ES)</li>
+                          <li>• <strong className="text-blue-800">+ 8,00%</strong> procedentes do Norte, Nordeste, CO e ES</li>
+                        </ul>
+                      </div>
+                    </div>
+
+                    <p className="text-[10px] text-amber-800/80 italic pt-1">
+                      * A apuração é realizada de forma automática a partir dos campos do XML (emitente, UF, CRT, CSOSN e origem da mercadoria) e pode ser ajustada na célula caso necessário.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">Suas preferências são salvas localmente</span>
+              <button
+                type="button"
+                onClick={() => setShowAdvancedModal(false)}
+                className="px-4 py-2 bg-[#04243b] text-[#dfb25e] hover:bg-[#02151D] text-xs font-bold rounded-lg border border-[#dfb25e]/30 transition-colors shadow-sm cursor-pointer"
+              >
+                Concluir & Aplicar
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );

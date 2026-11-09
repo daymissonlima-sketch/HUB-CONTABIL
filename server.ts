@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
+import fs from "fs";
+import os from "os";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createRequire } from "module";
@@ -9,9 +10,24 @@ import { SignPdf } from "@signpdf/signpdf";
 import { P12Signer } from "@signpdf/signer-p12";
 import { pdflibAddPlaceholder } from "@signpdf/placeholder-pdf-lib";
 import { PDFDocument } from "pdf-lib";
+import { 
+  consultarSefazDistribuicaoDFe, 
+  extrairPemDePfx, 
+  manifestarDestinatarioSefaz, 
+  obterXmlOficialNFePorChave
+} from "./src/services/sefazDfeService";
 
-const require = createRequire(import.meta.url);
-const pdf = require("pdf-parse");
+// Safe require helper compatible with both ESM (tsx dev) and CJS (esbuild bundle)
+const pdfParser = (() => {
+  try {
+    if (typeof require !== 'undefined') {
+      return require('pdf-parse');
+    }
+    return createRequire(import.meta.url)('pdf-parse');
+  } catch {
+    return createRequire('file://' + process.cwd() + '/package.json')('pdf-parse');
+  }
+})();
 
 dotenv.config();
 
@@ -171,20 +187,30 @@ const ai = process.env.GEMINI_API_KEY
     })
   : null;
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+export const app = express();
+const PORT = 3000;
 
-  // Use JSON and urlencoded parser with generous limits
-  app.use(express.json({ limit: "15mb" }));
-  app.use(express.urlencoded({ limit: "15mb", extended: true }));
+// Use JSON and urlencoded parser with generous limits
+app.use(express.json({ limit: "15mb" }));
+app.use(express.urlencoded({ limit: "15mb", extended: true }));
+
+// Normaliza o caminho quando invocado via Netlify Functions (/.netlify/functions/api/* -> /api/*)
+app.use((req, _res, next) => {
+  if (req.url.startsWith("/.netlify/functions/api")) {
+    req.url = "/api" + req.url.slice("/.netlify/functions/api".length);
+  }
+  next();
+});
 
   // API Route: Smart parsing of unstructured RFB text using Gemini
   app.post("/api/gemini/parse-debt", async (req, res) => {
     try {
       const { text, category } = req.body;
-      if (!text || text.trim() === "") {
+      if (!text || typeof text !== "string" || text.trim() === "") {
         return res.status(400).json({ error: "O texto do relatório não pode estar vazio." });
+      }
+      if (text.length > 250000) {
+        return res.status(413).json({ error: "O texto do relatório excede o limite máximo permitido (250.000 caracteres)." });
       }
 
       if (!ai) {
@@ -419,7 +445,7 @@ Instruções importantes:
 
       console.log(`[PDF Parser] Received PDF parsing request...`);
       const buffer = Buffer.from(pdfBase64, 'base64');
-      const parsedData = await pdf(buffer);
+      const parsedData = await pdfParser(buffer);
 
       return res.json({ text: parsedData.text || "" });
     } catch (err: any) {
@@ -556,8 +582,282 @@ Instruções importantes:
     }
   });
 
-  // Serve static client files in production, use Vite middleware in dev
+  // API Route: Validar Certificado Digital A1 (.pfx / .p12) e extrair metadados ICP-Brasil
+  app.post("/api/sefaz/validar-certificado", async (req, res) => {
+    try {
+      const { pfxBase64, passphrase } = req.body;
+      if (!pfxBase64) {
+        return res.status(400).json({ error: "O arquivo do certificado digital (.pfx/.p12) é obrigatório." });
+      }
+      const dados = extrairPemDePfx(pfxBase64, passphrase || "");
+      return res.json({
+        valido: !dados.expirado,
+        titular: dados.titular,
+        cnpjCertificado: dados.cnpjCertificado,
+        emissor: dados.emissor,
+        validoDe: dados.validoDe,
+        validoAte: dados.validoAte,
+        expirado: dados.expirado,
+        possuiCadeia: dados.caPems.length > 0
+      });
+    } catch (err: any) {
+      return res.status(400).json({
+        error: err.message || "Falha ao ler o certificado digital A1."
+      });
+    }
+  });
+
+  // API Route: SEFAZ NFeDistribuicaoDFe (Consulta por NSU ou Chave com Certificado A1)
+  app.post("/api/sefaz/distribuicao-dfe", async (req, res) => {
+    try {
+      const { cnpj, pfxBase64, passphrase, ultNSU, chNFe, nsuEspecifico, ambiente, ufAutor, autoManifestar, chavesPendentes, apenasProcessarPendentes } = req.body;
+      if (!cnpj) {
+        return res.status(400).json({ error: "O CNPJ é obrigatório para consulta na SEFAZ." });
+      }
+      if (!pfxBase64) {
+        return res.status(400).json({ error: "O certificado digital A1 (.pfx/.p12) é obrigatório." });
+      }
+
+      console.log(`[SEFAZ DFe] Iniciando consulta NFeDistribuicaoDFe para CNPJ ${cnpj}, ufAutor: ${ufAutor}, ultNSU: ${ultNSU || '0'}, apenasPendentes: ${Boolean(apenasProcessarPendentes)}...`);
+      const resultado = await consultarSefazDistribuicaoDFe({
+        cnpj,
+        pfxBase64,
+        passphrase,
+        ultNSU,
+        chNFe,
+        nsuEspecifico,
+        ambiente: Number(ambiente) === 2 ? 2 : 1,
+        ufAutor: ufAutor || '23',
+        autoManifestar: autoManifestar !== false,
+        chavesPendentes: Array.isArray(chavesPendentes) ? chavesPendentes : [],
+        apenasProcessarPendentes: Boolean(apenasProcessarPendentes)
+      });
+
+      console.log(`[SEFAZ DFe] Resposta SEFAZ: cStat=${resultado.cStat} (${resultado.xMotivo}), Docs: ${resultado.totalDocumentos}, Pendentes: ${resultado.chavesPendentesLiberacao?.length || 0}`);
+      return res.json(resultado);
+    } catch (err: any) {
+      console.error("[SEFAZ DFe] Erro na consulta SEFAZ:", err);
+      return res.status(500).json({
+        error: `Falha na comunicação com a SEFAZ: ${err.message || "Erro desconhecido"}`
+      });
+    }
+  });
+
+  // API Route: Manifestação do Destinatário Manual pelo Usuário (210210 Ciência, 210200 Confirmação, 210220 Desconhecimento, 210240 Operação não Realizada)
+  app.post("/api/sefaz/manifestar", async (req, res) => {
+    try {
+      const { cnpj, pfxBase64, passphrase, chNFe, tpEvento, justificativa, ambiente } = req.body;
+      if (!cnpj || !pfxBase64 || !chNFe) {
+        return res.status(400).json({ error: "CNPJ, certificado digital A1 e chave de acesso (44 dígitos) são obrigatórios." });
+      }
+      console.log(`[SEFAZ Manifestação] Enviando evento ${tpEvento || '210210'} para chave ${chNFe} (CNPJ: ${cnpj})...`);
+      const resultado = await manifestarDestinatarioSefaz({
+        cnpj,
+        pfxBase64,
+        passphrase,
+        chNFe,
+        tpEvento: tpEvento || '210210',
+        justificativa,
+        ambiente: Number(ambiente) === 2 ? 2 : 1
+      });
+      return res.json(resultado);
+    } catch (err: any) {
+      console.error("[SEFAZ Manifestação] Erro:", err);
+      return res.status(500).json({
+        error: `Falha ao registrar Manifestação na SEFAZ: ${err.message || "Erro desconhecido"}`
+      });
+    }
+  });
+
+  // API Route: Baixar XML Oficial Completo (procNFe_v4.00.xsd) por Chave (manifestando automaticamente APENAS Ciência da Operação 210210)
+  app.post("/api/sefaz/baixar-xml-oficial", async (req, res) => {
+    try {
+      const { cnpj, pfxBase64, passphrase, chNFe, ambiente, ufAutor, manifestarAutomaticamente, dadosExistentes } = req.body;
+      if (!cnpj || !pfxBase64 || !chNFe) {
+        return res.status(400).json({ error: "CNPJ, certificado digital A1 e chave de acesso (44 dígitos) são obrigatórios." });
+      }
+      console.log(`[SEFAZ XML Oficial] Buscando procNFe oficial para chave ${chNFe} (CNPJ: ${cnpj})...`);
+      const resultado = await obterXmlOficialNFePorChave({
+        cnpj,
+        pfxBase64,
+        passphrase,
+        chNFe,
+        ambiente: Number(ambiente) === 2 ? 2 : 1,
+        ufAutor: ufAutor || '23',
+        manifestarAutomaticamente: manifestarAutomaticamente !== false,
+        dadosExistentes
+      });
+      return res.json(resultado);
+    } catch (err: any) {
+      console.error("[SEFAZ XML Oficial] Erro:", err);
+      return res.status(500).json({
+        error: `Falha ao baixar XML oficial na SEFAZ: ${err.message || "Erro desconhecido"}`
+      });
+    }
+  });
+
+  // Diretório base para o Repositório de XMLs organizados por <Empresa>/<AAAA-MM>/<Chave>.xml
+  // Em ambiente Serverless (Netlify / AWS Lambda), utiliza os.tmpdir() pois o filesystem raiz é read-only
+  const isServerless = Boolean(process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.VERCEL);
+  const DEFAULT_REPO_ROOT = isServerless
+    ? path.join(os.tmpdir(), "repositorio_xmls_sefaz")
+    : path.join(process.cwd(), "repositorio_xmls_sefaz");
+
+  // Limpeza automática de qualquer XML residual antigo na inicialização do servidor (clean slate v3)
+  const CLEAN_SLATE_MARKER = path.join(DEFAULT_REPO_ROOT, ".clean_slate_v3_20261025");
+  try {
+    if (fs.existsSync(DEFAULT_REPO_ROOT) && !fs.existsSync(CLEAN_SLATE_MARKER)) {
+      fs.rmSync(DEFAULT_REPO_ROOT, { recursive: true, force: true });
+    }
+    if (!fs.existsSync(DEFAULT_REPO_ROOT)) {
+      fs.mkdirSync(DEFAULT_REPO_ROOT, { recursive: true });
+    }
+    if (!fs.existsSync(CLEAN_SLATE_MARKER)) {
+      fs.writeFileSync(CLEAN_SLATE_MARKER, new Date().toISOString(), "utf-8");
+    }
+  } catch (e) {
+    console.warn("[SEFAZ Repositório] Aviso ao inicializar diretório:", e);
+  }
+
+  // API Route: Limpar todos os XMLs armazenados no repositório do servidor
+  app.post("/api/sefaz/repositorio/limpar-tudo", (_req, res) => {
+    try {
+      if (fs.existsSync(DEFAULT_REPO_ROOT)) {
+        fs.rmSync(DEFAULT_REPO_ROOT, { recursive: true, force: true });
+      }
+      fs.mkdirSync(DEFAULT_REPO_ROOT, { recursive: true });
+      fs.writeFileSync(CLEAN_SLATE_MARKER, new Date().toISOString(), "utf-8");
+      return res.json({ sucesso: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Falha ao limpar repositório." });
+    }
+  });
+
+  // API Route: Salvar automaticamente XMLs capturados em pastas separadas por Empresa e Mês de Emissão
+  app.post("/api/sefaz/repositorio/salvar", (req, res) => {
+    try {
+      const { arquivos } = req.body;
+      if (!Array.isArray(arquivos)) {
+        return res.status(400).json({ error: "Lista de arquivos inválida." });
+      }
+
+      const rootResolved = path.resolve(DEFAULT_REPO_ROOT);
+      const safeRootPrefix = rootResolved.endsWith(path.sep) ? rootResolved : rootResolved + path.sep;
+      let salvos = 0;
+      for (const item of arquivos) {
+        const pastaEmpresa = String(item.pastaEmpresa || "EMPRESA").replace(/[^a-zA-Z0-9_-]/g, "_");
+        const pastaMes = String(item.pastaMes || "2026-10").replace(/[^0-9-]/g, "");
+        let nomeArquivo = String(item.nomeArquivo || `${item.chave || Date.now()}.xml`).replace(/[^a-zA-Z0-9._-]/g, "");
+        if (!nomeArquivo.toLowerCase().endsWith(".xml")) {
+          nomeArquivo += ".xml";
+        }
+        const xmlContent = String(item.xml || "");
+
+        if (!xmlContent) continue;
+
+        const dirCompleto = path.resolve(rootResolved, pastaEmpresa, pastaMes);
+        if (!dirCompleto.startsWith(safeRootPrefix) && dirCompleto !== rootResolved) continue;
+
+        fs.mkdirSync(dirCompleto, { recursive: true });
+        const filePath = path.resolve(dirCompleto, nomeArquivo);
+        const dirPrefix = dirCompleto.endsWith(path.sep) ? dirCompleto : dirCompleto + path.sep;
+        if (!filePath.startsWith(dirPrefix)) continue;
+
+        fs.writeFileSync(filePath, xmlContent, "utf-8");
+        salvos++;
+      }
+
+      return res.json({ sucesso: true, salvos, diretorioRaiz: DEFAULT_REPO_ROOT });
+    } catch (err: any) {
+      console.error("[SEFAZ Repositório] Erro ao salvar XMLs em pasta:", err);
+      return res.status(500).json({ error: err.message || "Falha ao gravar XMLs no repositório." });
+    }
+  });
+
+  // API Route: Listar árvore de pastas do Repositório (Empresa -> Mês de Emissão -> Arquivos XML)
+  app.get("/api/sefaz/repositorio/listar", (_req, res) => {
+    try {
+      if (!fs.existsSync(DEFAULT_REPO_ROOT)) {
+        return res.json({ diretorioRaiz: DEFAULT_REPO_ROOT, empresas: [] });
+      }
+
+      const nomesMeses: Record<string, string> = {
+        "01": "Janeiro", "02": "Fevereiro", "03": "Março", "04": "Abril",
+        "05": "Maio", "06": "Junho", "07": "Julho", "08": "Agosto",
+        "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro"
+      };
+
+      const pastasEmpresas = fs.readdirSync(DEFAULT_REPO_ROOT, { withFileTypes: true }).filter(d => d.isDirectory());
+      const empresas = pastasEmpresas.map(dirEmp => {
+        const empPath = path.join(DEFAULT_REPO_ROOT, dirEmp.name);
+        const pastasMeses = fs.readdirSync(empPath, { withFileTypes: true }).filter(d => d.isDirectory());
+
+        let totalArquivosEmpresa = 0;
+        const meses = pastasMeses
+          .map(dirMes => {
+            const mesPath = path.join(empPath, dirMes.name);
+            const files = fs
+              .readdirSync(mesPath, { withFileTypes: true })
+              .filter(f => f.isFile() && f.name.endsWith(".xml"));
+
+            const arquivos = files.map(f => {
+              const fullFile = path.join(mesPath, f.name);
+              const stat = fs.statSync(fullFile);
+              return {
+                nomeArquivo: f.name,
+                chave: f.name.replace(".xml", ""),
+                caminhoRelativo: `${dirEmp.name}/${dirMes.name}/${f.name}`,
+                tamanhoBytes: stat.size,
+                atualizadoEm: stat.mtime.toISOString()
+              };
+            });
+
+            totalArquivosEmpresa += arquivos.length;
+            const [ano, mes] = dirMes.name.split("-");
+            const labelMes = mes && nomesMeses[mes] ? `${nomesMeses[mes]}/${ano} (${mes}/${ano})` : dirMes.name;
+
+            return {
+              mesAno: dirMes.name,
+              labelMes,
+              totalArquivos: arquivos.length,
+              arquivos
+            };
+          })
+          .sort((a, b) => b.mesAno.localeCompare(a.mesAno));
+
+        return {
+          pastaEmpresa: dirEmp.name,
+          totalArquivos: totalArquivosEmpresa,
+          meses
+        };
+      });
+
+      return res.json({ diretorioRaiz: DEFAULT_REPO_ROOT, empresas });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Erro ao listar repositório de XMLs." });
+    }
+  });
+
+  // API Route: Obter conteúdo de um arquivo do Repositório
+  app.get("/api/sefaz/repositorio/arquivo", (req, res) => {
+    try {
+      const rel = String(req.query.caminho || "").trim();
+      const rootResolved = path.resolve(DEFAULT_REPO_ROOT);
+      const safePrefix = rootResolved.endsWith(path.sep) ? rootResolved : rootResolved + path.sep;
+      const fullPath = path.resolve(rootResolved, rel);
+      if (!fullPath.startsWith(safePrefix) || !fullPath.toLowerCase().endsWith(".xml") || !fs.existsSync(fullPath)) {
+        return res.status(404).json({ error: "Arquivo XML não encontrado no repositório." });
+      }
+      const xml = fs.readFileSync(fullPath, "utf-8");
+      return res.json({ xml });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -566,7 +866,7 @@ Instruções importantes:
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
@@ -576,4 +876,9 @@ Instruções importantes:
   });
 }
 
-startServer();
+// Inicia o servidor HTTP apenas quando executado diretamente (Node.js / Cloud Run / Dev)
+// No Netlify Functions, o handler serverless-http consome a instância `app` exportada acima
+if (!process.env.NETLIFY && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  startServer();
+}
+
