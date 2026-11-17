@@ -10,3 +10,6 @@ export { CalculadoraWorkspace } from '../../components/CalculadoraWorkspace';
 export { DifalCearaCalculator } from '../../components/calculadora/DifalCearaCalculator';
 export { MvaAjustadaCalculator } from '../../components/calculadora/MvaAjustadaCalculator';
 export { DifalMemoriaModal } from '../../components/calculadora/DifalMemoriaModal';
+export * from '../../utils/difalCearaCalculator';
+export * from '../../utils/mvaAjustadaCalculator';
+export * from '../../utils/difalExcelExporter';

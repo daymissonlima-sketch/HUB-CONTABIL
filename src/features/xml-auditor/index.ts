@@ -10,3 +10,6 @@ export { NfeXmlAuditor } from '../../components/NfeXmlAuditor';
 export { NfeGrid } from '../../components/NfeGrid';
 export { UploadZone } from '../../components/UploadZone';
 export { StatsBanner } from '../../components/StatsBanner';
+export * from '../../utils/xmlParser';
+export * from '../../utils/excelExporter';
+export * from '../../utils/decreto29560Helper';

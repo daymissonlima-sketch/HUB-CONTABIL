@@ -4,20 +4,21 @@
  */
 
 import React, { useState } from 'react';
-import { Header } from './components/Header';
-import { Footer } from './components/Footer';
-import { NfeXmlAuditor } from './components/NfeXmlAuditor';
-import { DebtLevantamento } from './components/DebtLevantamento';
-import { FaturamentoGerador } from './components/FaturamentoGerador';
-import { ConfiguracoesGerais } from './components/ConfiguracoesGerais';
-import { AuditoriaFiscalWorkspace } from './components/AuditoriaFiscalWorkspace';
-import { Comunicados } from './components/Comunicados';
-import { OpcaoSimplesNacional } from './components/OpcaoSimplesNacional';
-import { ChaveSanitizer } from './components/ChaveSanitizer';
-import { CalculadoraWorkspace } from './components/CalculadoraWorkspace';
-import { ReformaTributariaWorkspace } from './components/ReformaTributariaWorkspace';
+import { 
+  ReformaTributariaWorkspace,
+  AuditoriaFiscalWorkspace,
+  CalculadoraWorkspace,
+  NfeXmlAuditor,
+  DebtLevantamento,
+  FaturamentoGerador,
+  ConfiguracoesGerais,
+  Comunicados,
+  OpcaoSimplesNacional,
+  ChaveSanitizer
+} from './features';
+import { Header, Footer } from './shared/components';
 import { FileSpreadsheet, Briefcase, Menu, Coins, Settings, Table, FileText, ShieldCheck, Sparkles, Calculator, Scale } from 'lucide-react';
-import { loadStoredCompanies } from './utils/companyStorage';
+import { loadStoredCompanies } from './shared/utils';
 
 // Synchronously ensure companies storage is reconciled with the official database
 try {

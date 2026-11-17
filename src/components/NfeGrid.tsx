@@ -19,14 +19,19 @@ import {
   Coins,
   FileSpreadsheet,
   Info,
-  CheckSquare,
-  Square,
   Layers,
   SlidersHorizontal,
-  Check,
   Building2
 } from 'lucide-react';
-import { DEFAULT_DECRETO_29560_SUPPLIERS, isSupplierEligibleForDecreto29560 } from '../utils/decreto29560Helper';
+import { 
+  DEFAULT_DECRETO_29560_SUPPLIERS, 
+  isSupplierEligibleForDecreto29560,
+  DEFAULT_MVA_RULES,
+  loadStoredMvaRules,
+  saveStoredMvaRules,
+  isItemEligibleForSTAntecipado,
+  MvaRule
+} from '../utils/decreto29560Helper';
 import { NFeItemRow, SortConfig, GridFilters } from '../types';
 import { Company } from '../types_debits';
 import { loadStoredCompanies, COMPANIES_UPDATED_EVENT } from '../utils/companyStorage';
@@ -53,7 +58,7 @@ export interface ColumnDefinition {
     | 'Dados do Item'
     | 'ICMS Normal'
     | 'ICMS ST'
-    | 'ICMS ST Decreto 29.560'
+    | 'ICMS ST Antecipado'
     | 'FECOP'
     | 'IPI'
     | 'PIS / COFINS'
@@ -95,10 +100,10 @@ export const ALL_COLUMNS: ColumnDefinition[] = [
   { key: 'pICMSST', label: 'Alíquota ICMS ST %', category: 'ICMS ST' },
   { key: 'vICMSST', label: 'Valor ICMS ST', category: 'ICMS ST' },
 
-  // 5. ICMS ST Decreto 29.560 (Termo de Acordo Atacadista / RET 2024)
-  { key: 'vBC_ST_29560', label: 'BC ST Dec. 29.560', category: 'ICMS ST Decreto 29.560' },
-  { key: 'pICMSST_29560', label: 'Alíquota Dec. 29.560 %', category: 'ICMS ST Decreto 29.560' },
-  { key: 'vICMSST_29560', label: 'ICMS ST Dec. 29.560', category: 'ICMS ST Decreto 29.560' },
+  // 5. ICMS ST Antecipado (Decreto 29.560 Carga Líquida & MVA Fronteira)
+  { key: 'vBC_ST_29560', label: 'BC ST Antecipado', category: 'ICMS ST Antecipado' },
+  { key: 'pICMSST_29560', label: 'Alíquota / MVA %', category: 'ICMS ST Antecipado' },
+  { key: 'vICMSST_29560', label: 'ICMS ST Antecipado', category: 'ICMS ST Antecipado' },
 
   // 5. FECOP
   { key: 'vBCFCP', label: 'BC FECOP', category: 'FECOP' },
@@ -324,6 +329,44 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
     } catch {}
   };
 
+  // Regras de MVA configuradas (Decreto 24.569/97 / Fronteira)
+  const [mvaRules, setMvaRules] = useState<MvaRule[]>(() => loadStoredMvaRules());
+  const [newMvaNcm, setNewMvaNcm] = useState('');
+  const [newMvaDesc, setNewMvaDesc] = useState('');
+  const [newMvaFornec, setNewMvaFornec] = useState('');
+  const [newMvaValue, setNewMvaValue] = useState('');
+
+  const handleAddMvaRule = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanNcm = newMvaNcm.replace(/\D/g, '');
+    const mvaNum = parseFloat(newMvaValue.replace(',', '.')) || 0;
+    if (!cleanNcm || mvaNum <= 0) return;
+
+    const newRule: MvaRule = {
+      id: `mva_${cleanNcm}_${Date.now()}`,
+      ncm: cleanNcm,
+      descricao: newMvaDesc.trim() || `NCM ${cleanNcm}`,
+      fornecedor: newMvaFornec.trim() || undefined,
+      mva: mvaNum,
+      aliquotaInterna: 20.0
+    };
+
+    const updated = [...mvaRules, newRule];
+    setMvaRules(updated);
+    saveStoredMvaRules(updated);
+
+    setNewMvaNcm('');
+    setNewMvaDesc('');
+    setNewMvaFornec('');
+    setNewMvaValue('');
+  };
+
+  const handleRemoveMvaRule = (id: string) => {
+    const updated = mvaRules.filter(r => r.id !== id);
+    setMvaRules(updated);
+    saveStoredMvaRules(updated);
+  };
+
   const [registeredCompanies, setRegisteredCompanies] = useState<Company[]>([]);
 
   useEffect(() => {
@@ -474,11 +517,18 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
         updatedRow.vCBS = parseFloat(((updatedRow.vBC_CBS * updatedRow.pCBS) / 100).toFixed(2));
       }
 
-      // Recalculate Decreto 29.560 ST on edits
+      // Recalculate ICMS ST Antecipado (Decreto 29.560 Carga Líquida ou MVA Fronteira)
       if (field === 'vBC_ST_29560' || field === 'pICMSST_29560') {
-        const bc = updatedRow.vBC_ST_29560 || 0;
-        const rate = updatedRow.pICMSST_29560 || 0;
-        updatedRow.vICMSST_29560 = parseFloat(((bc * rate) / 100).toFixed(2));
+        if (updatedRow.tipoSTAntecipado === 'MVA_INTERNA' || updatedRow.mvaST !== undefined) {
+          const bc = updatedRow.vBC_ST_29560 || 0;
+          const debito = parseFloat((bc * 0.20).toFixed(2));
+          const credito = updatedRow.vICMS || 0;
+          updatedRow.vICMSST_29560 = Math.max(0, parseFloat((debito - credito).toFixed(2)));
+        } else {
+          const bc = updatedRow.vBC_ST_29560 || 0;
+          const rate = updatedRow.pICMSST_29560 || 0;
+          updatedRow.vICMSST_29560 = parseFloat(((bc * rate) / 100).toFixed(2));
+        }
       }
     } else {
       (updatedRow[field] as any) = editValue.trim();
@@ -573,7 +623,7 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
       borderAccent = 'border-t-[3px] border-blue-600';
       labelBg = 'bg-[#eff6ff]'; // Blue 50
       textColor = 'text-blue-950 font-bold';
-    } else if (category === 'ICMS ST Decreto 29.560') {
+    } else if (category === 'ICMS ST Antecipado') {
       borderAccent = 'border-t-[3px] border-amber-600';
       labelBg = 'bg-[#fffbeb]'; // Amber 50
       textColor = 'text-amber-950 font-bold';
@@ -638,9 +688,9 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
   };
 
   const renderCellValue = (row: NFeItemRow, colKey: keyof NFeItemRow) => {
-    // If it's a Decreto 29.560 column, verify if feature is enabled and supplier is eligible
+    // If it's a ST Antecipado column, verify if feature is enabled and item is eligible (Decreto 29.560 or MVA)
     if (colKey === 'vBC_ST_29560' || colKey === 'pICMSST_29560' || colKey === 'vICMSST_29560') {
-      if (!decreto29560Enabled || !isSupplierEligibleForDecreto29560(row.emitNome, decretoSuppliers)) {
+      if (!decreto29560Enabled || !isItemEligibleForSTAntecipado(row, decretoSuppliers, mvaRules)) {
         return <span className="text-slate-300 font-sans font-normal">-</span>;
       }
     }
@@ -755,9 +805,15 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
         if (val === 0) return <span className="text-slate-300 font-mono text-xs">0%</span>;
 
         if (colKey === 'pICMSST_29560') {
+          const isMva = row.tipoSTAntecipado === 'MVA_INTERNA' || row.mvaST !== undefined;
           return (
-            <div className="flex items-center justify-end space-x-1" title={row.regraDecreto29560 || 'Decreto 29.560/08'}>
+            <div className="flex items-center justify-end space-x-1" title={row.regraDecreto29560 || (isMva ? `MVA: ${val}% (Dec. 24.569/97 - Art. 533)` : 'ICMS ST Antecipado')}>
               <span className="text-amber-900 font-mono text-xs font-bold">{formattedPct}</span>
+              {isMva && (
+                <span className="inline-flex items-center px-1 py-0.2 rounded text-[9px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300" title={`Item sujeito a MVA ${val}% (Art. 533 do Dec. 24.569/97 - Fronteira)`}>
+                  MVA
+                </span>
+              )}
               {row.isSimplesNacional && (
                 <span className="inline-flex items-center px-1 py-0.2 rounded text-[9px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300" title={`Fornecedor Simples Nacional: ${row.regraDecreto29560 || '+3% interno, +4% Sul/Sudeste ou +6% Norte/Nordeste'}`}>
                   SN
@@ -1183,7 +1239,7 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
                     groupClass = 'bg-sky-800 text-white border-r border-sky-700';
                   } else if (g.category === 'ICMS ST') {
                     groupClass = 'bg-blue-800 text-white border-r border-blue-700';
-                  } else if (g.category === 'ICMS ST Decreto 29.560') {
+                  } else if (g.category === 'ICMS ST Antecipado') {
                     groupClass = 'bg-amber-900 text-[#dfb25e] border-r border-amber-800';
                   } else if (g.category === 'FECOP') {
                     groupClass = 'bg-cyan-800 text-white border-r border-cyan-700';
@@ -1373,7 +1429,7 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
                 </div>
               </div>
 
-              {/* Option 2: ICMS ST Decreto 29.560 (Termo de Acordo Atacadista / RET 2024) */}
+              {/* Option 2: ICMS ST Antecipado (Decreto 29.560 & MVA Fronteira) */}
               <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-colors">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start space-x-3">
@@ -1382,10 +1438,10 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
                     </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-800">
-                        Cálculo do ICMS ST — Decreto Nº 29.560 (RET 2024)
+                        Cálculo do ICMS ST Antecipado (Decreto 29.560 & MVA Fronteira)
                       </h4>
                       <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                        Calcula o ICMS Substituição Tributária específico do Termo de Acordo Atacadista com base na origem da mercadoria (7%, 4% ou 12% de crédito interestadual) e na tabela oficial do Decreto 29.560. A base de cálculo inclui produtos, IPI, frete e encargos da nota.
+                        Calcula o ICMS Substituição Tributária pago na fronteira com base nas regras do Decreto 29.560/08 (Termo de Acordo Atacadista / RET por carga líquida) e regras internas por MVA (Decreto 24.569/97 - Art. 533) para produtos específicos como Caffino (MVA 45%) e Adesivo Instantâneo (MVA 62%).
                       </p>
                     </div>
                   </div>
@@ -1405,7 +1461,7 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
                     decreto29560Enabled ? 'bg-amber-100 text-amber-900' : 'bg-slate-200 text-slate-600'
                   }`}>
-                    {decreto29560Enabled ? 'Ativado: colunas de ST do Dec. 29.560 exibidas' : 'Desativado (Padrão)'}
+                    {decreto29560Enabled ? 'Ativado: colunas de ICMS ST Antecipado exibidas' : 'Desativado (Padrão)'}
                   </span>
                 </div>
 
@@ -1471,14 +1527,14 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
                         </ul>
                       </div>
 
-                      {/* Produto de Origem Estrangeira a 4% */}
+                      {/* Produto de Origem Estrangeira a 4% (MOE) */}
                       <div className="p-2.5 bg-white rounded-lg border border-amber-200 shadow-2xs">
                         <span className="font-bold text-amber-900 block mb-1">
-                          2. Produto Importado a 4% (Res. 13/2012):
+                          2. Produto Importado a 4% (MOE - Res. 13/2012):
                         </span>
                         <ul className="space-y-0.5 text-slate-700 text-[10.5px]">
-                          <li>• <strong className="text-blue-800">+ 3,00%</strong> procedentes do Sul e Sudeste (exceto ES)</li>
-                          <li>• <strong className="text-blue-800">+ 8,00%</strong> procedentes do Norte, Nordeste, CO e ES</li>
+                          <li>• <strong className="text-blue-800">+ 1,76% (12,72%)</strong> procedentes do Sul e Sudeste (ex: EMBRAST)</li>
+                          <li>• <strong className="text-blue-800">+ 4,70% (13,01%)</strong> procedentes do Norte, Nordeste, CO e ES</li>
                         </ul>
                       </div>
                     </div>
@@ -1486,6 +1542,134 @@ export function NfeGrid({ rows, onRowUpdate, onExport }: NFeGridProps) {
                     <p className="text-[10px] text-amber-800/80 italic pt-1">
                       * A apuração é realizada de forma automática a partir dos campos do XML (emitente, UF, CRT, CSOSN e origem da mercadoria) e pode ser ajustada na célula caso necessário.
                     </p>
+                  </div>
+
+                  {/* Seção 2: Produtos com ICMS ST por MVA (Decreto 24.569/97 / Fronteira) */}
+                  <div className="mt-5 pt-4 border-t border-slate-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <span className="text-xs font-bold text-slate-800">
+                          Produtos com ICMS ST por MVA (Legislação Interna / Fronteira - Dec. 24.569/97)
+                        </span>
+                        <p className="text-[10.5px] text-slate-500">
+                          Itens sujeitos à agregação de MVA e recolhimento na fronteira estadual (Art. 533 do Dec. 24.569/97)
+                        </p>
+                      </div>
+                      <span className="text-[10px] text-slate-400">({mvaRules.length} regras)</span>
+                    </div>
+
+                    {/* Lista de Regras de MVA */}
+                    <div className="space-y-2 mb-3 max-h-[190px] overflow-y-auto pr-1">
+                      {mvaRules.map((rule) => (
+                        <div
+                          key={rule.id}
+                          className="flex items-center justify-between p-2.5 bg-white border border-slate-200 rounded-lg shadow-2xs text-xs"
+                        >
+                          <div className="min-w-0 flex-1 pr-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">
+                                NCM {rule.ncm}
+                              </span>
+                              <span className="font-semibold text-slate-800 truncate text-[11px]">
+                                {rule.descricao}
+                              </span>
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
+                                MVA {rule.mva.toFixed(2)}%
+                              </span>
+                            </div>
+                            {rule.fornecedor && (
+                              <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                                Fornecedor: <span className="font-medium text-slate-700">{rule.fornecedor}</span>
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveMvaRule(rule.id)}
+                            className="p-1 text-slate-400 hover:text-red-500 rounded transition-colors"
+                            title="Remover regra MVA"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Formulário para cadastrar novo produto com MVA */}
+                    <form onSubmit={handleAddMvaRule} className="bg-slate-100/70 p-3 rounded-xl border border-slate-200/80 space-y-2">
+                      <span className="text-[11px] font-bold text-slate-700 block">
+                        Cadastrar Novo Produto com MVA:
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
+                        <div>
+                          <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">NCM *</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Ex: 09012100"
+                            value={newMvaNcm}
+                            onChange={(e) => setNewMvaNcm(e.target.value)}
+                            className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-[#04243b]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">Descrição *</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Ex: Café em Cápsulas"
+                            value={newMvaDesc}
+                            onChange={(e) => setNewMvaDesc(e.target.value)}
+                            className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-[#04243b]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">MVA % *</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            required
+                            placeholder="Ex: 45.00"
+                            value={newMvaValue}
+                            onChange={(e) => setNewMvaValue(e.target.value)}
+                            className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-[#04243b]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">Fornecedor (Opcional)</label>
+                          <input
+                            type="text"
+                            placeholder="Ex: PREDH ou THREE BOND"
+                            value={newMvaFornec}
+                            onChange={(e) => setNewMvaFornec(e.target.value)}
+                            className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-[#04243b]"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end pt-1">
+                        <button
+                          type="submit"
+                          className="px-3.5 py-1.5 bg-[#04243b] text-[#dfb25e] text-xs font-bold rounded-lg border border-[#dfb25e]/30 hover:bg-[#02151D] transition-colors flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>Adicionar Regra MVA</span>
+                        </button>
+                      </div>
+                    </form>
+
+                    {/* Memória de cálculo da MVA explicativa */}
+                    <div className="mt-3 p-2.5 bg-sky-50/70 rounded-lg border border-sky-200 text-[10.5px] text-sky-950 space-y-1">
+                      <div className="font-bold flex items-center gap-1 text-sky-900">
+                        <Info className="h-3.5 w-3.5 text-sky-700 shrink-0" />
+                        <span>Memória de Cálculo do ICMS ST Antecipado por MVA (Art. 533 do Dec. 24.569/97):</span>
+                      </div>
+                      <p className="text-slate-700 leading-relaxed font-mono">
+                        Base ST = (vProd + IPI + Frete + Encargos - Descontos) &times; (1 + MVA%)
+                      </p>
+                      <p className="text-slate-700 leading-relaxed font-mono">
+                        ICMS ST Antecipado = (Base ST &times; 20%) - Crédito de Origem Destacado
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>

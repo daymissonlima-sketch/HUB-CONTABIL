@@ -7,4 +7,5 @@
 
 export * from '../../types';
 export * from '../../types_debits';
+export * from '../../types_reforma';
 export * from '../../types/sefazTypes';

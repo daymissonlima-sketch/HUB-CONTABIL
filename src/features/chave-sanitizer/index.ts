@@ -7,3 +7,4 @@
  */
 
 export { ChaveSanitizer } from '../../components/ChaveSanitizer';
+export * from '../../utils/sanitizer';

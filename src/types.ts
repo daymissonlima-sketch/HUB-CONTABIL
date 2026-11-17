@@ -44,13 +44,15 @@ export interface NFeItemRow {
   pICMSST?: number;    // Alíquota do ICMS ST (%)
   vICMSST?: number;    // Valor do ICMS ST
 
-  // Decreto 29.560 (Termo de Acordo Atacadista / RET 2024)
-  vBC_ST_29560?: number;    // BC ICMS ST Decreto 29.560
-  pICMSST_29560?: number;   // Alíquota ST Decreto 29.560 (%)
-  vICMSST_29560?: number;   // Valor ICMS ST Decreto 29.560
-  regraDecreto29560?: string; // Descrição da regra (ex: Simples Nacional Interno +3%, Importado 4% +3%)
+  // ICMS ST Antecipado (Decreto 29.560 / Carga Líquida & Decreto 24.569/97 / MVA Fronteira)
+  vBC_ST_29560?: number;    // BC ICMS ST Antecipado
+  pICMSST_29560?: number;   // Alíquota ST Antecipado / MVA (%)
+  vICMSST_29560?: number;   // Valor ICMS ST Antecipado recolhido na fronteira
+  regraDecreto29560?: string; // Descrição da regra (ex: Simples Nacional Interno +3%, MVA 45%)
   isSimplesNacional?: boolean; // Fornecedor optante pelo Simples Nacional
   isImportado4Pct?: boolean;   // Produto importado interestadual a 4% (Res. 13/2012)
+  mvaST?: number;              // Percentual de MVA quando aplicável (%)
+  tipoSTAntecipado?: 'DECRETO_29560' | 'MVA_INTERNA'; // Modalidade de cálculo
   destUF?: string;             // UF do Destinatário
   crt?: string;                // Código de Regime Tributário (1=Simples, 3=Normal)
 

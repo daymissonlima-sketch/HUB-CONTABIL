@@ -18,7 +18,8 @@ export const DEFAULT_DECRETO_29560_SUPPLIERS = [
   'Neugebauer Alimentos S/A - APB',
   'ITAMARATY INDUSTRIA E COMERCIO S/A',
   'AB - INDUSTRIA E COMERCIO DE ALIMENTOS LTDA - EPP EPP',
-  'DIVAMED DIST. IRMAOS VALOTTO MED. LTDA'
+  'DIVAMED DIST. IRMAOS VALOTTO MED. LTDA',
+  'EMBRAST INDUSTRIA E COMERCIO DE EMBALAGENS LTDA'
 ];
 
 export interface Decreto29560Config {
@@ -133,10 +134,10 @@ export function isSupplierEligibleForDecreto29560(emitNome: string, suppliers: s
       }
     }
 
-    // Check key distinctive corporate terms (e.g. RICLAN, CEPERA, SANCHEZ, NEUGEBAUER, ITAMARATY, DIVAMED, VALOTTO)
+    // Check key distinctive corporate terms (e.g. RICLAN, CEPERA, SANCHEZ, NEUGEBAUER, ITAMARATY, DIVAMED, VALOTTO, EMBRAST)
     const keywords = normSupp
       .split(/[^A-Z0-9]+/)
-      .filter(w => w.length >= 4 && !['INDUSTRIA', 'COMERCIO', 'PRODUTOS', 'ALIMENTICIOS', 'LTDA', 'ALIMENTOS', 'BRASIL', 'DIST', 'DISTRIBUIDORA'].includes(w));
+      .filter(w => w.length >= 4 && !['INDUSTRIA', 'COMERCIO', 'PRODUTOS', 'ALIMENTICIOS', 'LTDA', 'ALIMENTOS', 'BRASIL', 'DIST', 'DISTRIBUIDORA', 'EMBALAGENS'].includes(w));
     
     return keywords.some(k => normalizedEmit.includes(k));
   });
@@ -233,23 +234,23 @@ export function isImportedGoods4Pct(
 
 export interface Decreto29560RateCalculation {
   baseRate: number;       // Alíquota base Anexo III (ex: 4.08, 8.31, 10.96)
-  acrescimo: number;      // Acréscimo legal aplicado (+3%, +4%, +6%, +8%)
+  acrescimo: number;      // Acréscimo legal aplicado (+3%, +4%, +6%, +1.76%, +4.70%)
   finalRate: number;      // Alíquota final do Decreto 29.560 (%)
   tipoRegra: 'PADRAO' | 'SIMPLES_NACIONAL' | 'IMPORTADO_4PCT';
   descricaoRegra: string; // Detalhamento da regra aplicada
 }
 
 /**
- * Calcula a alíquota líquida do Decreto 29.560/08 aplicando a tabela base e os acréscimos legais:
+ * Calcula a alíquota líquida do Decreto 29.560/08 (Atacadista com RET 2024) aplicando a tabela base e os acréscimos legais:
  * 
- * 1. Aquisições de optantes pelo Simples Nacional (Anexo III / Art. 4º):
- *    - Operações internas: + 3%
- *    - Sul e Sudeste (exceto ES): + 4%
- *    - Norte, Nordeste, Centro-Oeste e ES: + 6%
+ * 1. Aquisições de optantes pelo Simples Nacional (RSN):
+ *    - Operações internas: + 3,00%
+ *    - Sul e Sudeste (exceto ES): + 4,00%
+ *    - Norte, Nordeste, Centro-Oeste e ES: + 6,00%
  * 
- * 2. Entradas de produtos de origem estrangeira de outras UFs a 4% (Res. 13/2012):
- *    - Sul e Sudeste (exceto ES): + 3%
- *    - Norte, Nordeste, Centro-Oeste e ES: + 8%
+ * 2. Entradas de produtos de origem estrangeira (MOE) de outras UFs a 4% (Res. 13/2012 — Atacadista com RET):
+ *    - Sul e Sudeste (exceto ES): + 1,76% (ex: 10,96% + 1,76% = 12,72%)
+ *    - Norte, Nordeste, Centro-Oeste e ES: + 4,70% (ex: 8,31% + 4,70% = 13,01%)
  */
 export function calculateDecreto29560TaxRate(params: {
   region: OriginRegionType;
@@ -279,7 +280,7 @@ export function calculateDecreto29560TaxRate(params: {
   let tipoRegra: 'PADRAO' | 'SIMPLES_NACIONAL' | 'IMPORTADO_4PCT' = 'PADRAO';
   let descricaoRegra = 'Regime Normal Padrão';
 
-  // 1. Regra do Simples Nacional (Decreto 29.560/08)
+  // 1. Regra do Simples Nacional (Decreto 29.560/08 - RSN)
   if (isSimplesNacional) {
     tipoRegra = 'SIMPLES_NACIONAL';
     if (region === 'PROPRIO_ESTADO' || region === 'EXTERIOR_DIRETO') {
@@ -293,15 +294,15 @@ export function calculateDecreto29560TaxRate(params: {
       descricaoRegra = 'Simples Nacional — Norte/Nordeste/CO/ES (+6,00%)';
     }
   }
-  // 2. Regra de Produto de Origem Estrangeira procedente de outra UF a 4% (Resolução Senado 13/2012)
+  // 2. Regra de Produto de Origem Estrangeira (MOE) procedente de outra UF a 4% (Tabela Atacadista com RET)
   else if (isImportado4Pct && region !== 'PROPRIO_ESTADO' && region !== 'EXTERIOR_DIRETO') {
     tipoRegra = 'IMPORTADO_4PCT';
     if (region === 'SUL_SUDESTE_EXCETO_ES') {
-      acrescimo = 3.00;
-      descricaoRegra = 'Origem Estrangeira 4% — Sul/Sudeste (+3,00%)';
+      acrescimo = 1.76;
+      descricaoRegra = 'Origem Estrangeira 4% (MOE) — Sul/Sudeste (+1,76%)';
     } else {
-      acrescimo = 8.00;
-      descricaoRegra = 'Origem Estrangeira 4% — Norte/Nordeste/CO/ES (+8,00%)';
+      acrescimo = 4.70;
+      descricaoRegra = 'Origem Estrangeira 4% (MOE) — Norte/Nordeste/CO/ES (+4,70%)';
     }
   }
 
@@ -348,4 +349,179 @@ export function calculateDecreto29560ST(
   const vBC_ST_29560 = Math.max(0, parseFloat((vProd + vIPI + vFrete + vSeg + vOutro - vDesc).toFixed(2)));
   const vICMSST_29560 = parseFloat(((vBC_ST_29560 * pICMSST_29560) / 100).toFixed(2));
   return { vBC_ST_29560, vICMSST_29560 };
+}
+
+/**
+ * Interface para regra de ICMS ST Antecipado por MVA (Decreto 24.569/97 / Fronteira)
+ */
+export interface MvaRule {
+  id: string;
+  ncm: string;
+  descricao: string;
+  fornecedor?: string;
+  mva: number;
+  aliquotaInterna?: number; // default: 20%
+}
+
+/**
+ * Regras padrão de MVA configuradas conforme informado pelo usuário:
+ * 1. CAFFINO CAPSULE BALI (NCM 09012100) - Fornecedor PREDH (MVA: 45,00%, Art. 533 do Dec. 24.569/97)
+ * 2. PREDH IMPORTACAO E EXPORTACAO LTDA (NCM 21011190) - Fornecedor PREDH (MVA: 45,00%, Art. 533 do Dec. 24.569/97)
+ * 3. ADESIVO INSTANTANEO (NCM 35061010) - Fornecedor THREE BOND (MVA: 62,00%)
+ */
+export const DEFAULT_MVA_RULES: MvaRule[] = [
+  {
+    id: 'mva_09012100',
+    ncm: '09012100',
+    descricao: 'CAFFINO CAPSULE BALI (Café em cápsulas)',
+    fornecedor: 'PREDH IMPORTACAO E EXPORTACAO LTDA',
+    mva: 45.0,
+    aliquotaInterna: 20.0
+  },
+  {
+    id: 'mva_21011190',
+    ncm: '21011190',
+    descricao: 'PREDH (Extratos/Concentrados de Café)',
+    fornecedor: 'PREDH IMPORTACAO E EXPORTACAO LTDA',
+    mva: 45.0,
+    aliquotaInterna: 20.0
+  },
+  {
+    id: 'mva_35061010',
+    ncm: '35061010',
+    descricao: 'ADESIVO INSTANTANEO',
+    fornecedor: 'THREE BOND DO BRASIL INDUSTRIA E COMERCIO LTDA',
+    mva: 62.0,
+    aliquotaInterna: 20.0
+  }
+];
+
+export const MVA_RULES_STORAGE_KEY = 'ml_mva_antecipado_rules';
+
+/**
+ * Carrega as regras de MVA persistidas ou retorna o padrão
+ */
+export function loadStoredMvaRules(): MvaRule[] {
+  try {
+    const saved = localStorage.getItem(MVA_RULES_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Garantir que as regras padrão estejam presentes
+        const merged = [...parsed];
+        DEFAULT_MVA_RULES.forEach(def => {
+          const exists = merged.some(m => m.ncm.replace(/\D/g, '') === def.ncm.replace(/\D/g, ''));
+          if (!exists) {
+            merged.push(def);
+          }
+        });
+        return merged;
+      }
+    }
+  } catch (e) {
+    console.error('Erro ao ler regras de MVA do localStorage:', e);
+  }
+  return DEFAULT_MVA_RULES;
+}
+
+export function saveStoredMvaRules(rules: MvaRule[]): void {
+  try {
+    localStorage.setItem(MVA_RULES_STORAGE_KEY, JSON.stringify(rules));
+  } catch (e) {
+    console.error('Erro ao salvar regras de MVA no localStorage:', e);
+  }
+}
+
+/**
+ * Localiza uma regra de MVA compatível pelo NCM e opcionalmente pelo Fornecedor
+ */
+export function findMatchingMvaRule(
+  ncm: string,
+  emitNome?: string,
+  rules: MvaRule[] = DEFAULT_MVA_RULES
+): MvaRule | null {
+  const cleanNcm = (ncm || '').replace(/\D/g, '');
+  if (!cleanNcm) return null;
+
+  // 1. Busca específica por NCM e fornecedor
+  if (emitNome) {
+    const normEmit = emitNome.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const specificMatch = rules.find(r => {
+      const rNcm = r.ncm.replace(/\D/g, '');
+      if (rNcm !== cleanNcm && !cleanNcm.startsWith(rNcm)) return false;
+      if (!r.fornecedor) return false;
+      const normFornec = r.fornecedor.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const keywords = normFornec.split(/[^A-Z0-9]+/).filter(w => w.length >= 4 && !['INDUSTRIA', 'COMERCIO', 'PRODUTOS', 'LTDA', 'IMPORTACAO', 'EXPORTACAO'].includes(w));
+      return keywords.some(k => normEmit.includes(k)) || normEmit.includes(normFornec.slice(0, 8));
+    });
+    if (specificMatch) return specificMatch;
+  }
+
+  // 2. Busca por NCM exato
+  const exactMatch = rules.find(r => r.ncm.replace(/\D/g, '') === cleanNcm);
+  if (exactMatch) return exactMatch;
+
+  // 3. Busca por NCM prefixo (4 a 7 dígitos)
+  const prefixMatch = rules.find(r => {
+    const rNcm = r.ncm.replace(/\D/g, '');
+    return rNcm.length >= 4 && cleanNcm.startsWith(rNcm);
+  });
+  return prefixMatch || null;
+}
+
+/**
+ * Memória de cálculo oficial do ICMS ST Antecipado por MVA (Decreto 24.569/97 - Art. 533)
+ * Conforme memória enviada pelo usuário:
+ * 1. Base inicial = vProd + IPI + Frete + Seguro + Outras Despesas - Desconto
+ * 2. Base de cálculo ST = Base inicial * (1 + MVA / 100)
+ * 3. ICMS Débito = Base de cálculo ST * (Alíquota Interna / 100)
+ * 4. Crédito de Origem = ICMS destacado no documento
+ * 5. ICMS ST a recolher na fronteira = max(0, Débito - Crédito de Origem)
+ */
+export function calculateMvaSTAntecipado(
+  vProd: number,
+  vIPI: number = 0,
+  vFrete: number = 0,
+  vSeg: number = 0,
+  vOutro: number = 0,
+  vDesc: number = 0,
+  mva: number = 45.0,
+  aliquotaInterna: number = 20.0,
+  creditoOrigem: number = 0
+): {
+  baseInicial: number;
+  vBC_ST: number;
+  vICMSST: number;
+  debito: number;
+  credito: number;
+  mva: number;
+} {
+  const baseInicial = Math.max(0, parseFloat((vProd + vIPI + vFrete + vSeg + vOutro - vDesc).toFixed(2)));
+  const vBC_ST = parseFloat((baseInicial * (1 + mva / 100)).toFixed(2));
+  const debito = parseFloat(((vBC_ST * (aliquotaInterna / 100))).toFixed(2));
+  const vICMSST = Math.max(0, parseFloat((debito - creditoOrigem).toFixed(2)));
+  return {
+    baseInicial,
+    vBC_ST,
+    vICMSST,
+    debito,
+    credito: creditoOrigem,
+    mva
+  };
+}
+
+/**
+ * Verifica se um item é elegível ao cálculo do ICMS ST Antecipado
+ * (seja pelo Decreto 29.560 ou por MVA interna na fronteira)
+ */
+export function isItemEligibleForSTAntecipado(
+  row: { emitNome?: string; NCM?: string; vICMSST_29560?: number; tipoSTAntecipado?: string },
+  decretoSuppliers: string[],
+  mvaRules: MvaRule[] = DEFAULT_MVA_RULES
+): boolean {
+  if (row.vICMSST_29560 && row.vICMSST_29560 > 0) return true;
+  if (row.tipoSTAntecipado === 'MVA_INTERNA') return true;
+  if (row.emitNome && isSupplierEligibleForDecreto29560(row.emitNome, decretoSuppliers)) return true;
+  if (row.NCM && findMatchingMvaRule(row.NCM, row.emitNome, mvaRules)) return true;
+  return false;
 }

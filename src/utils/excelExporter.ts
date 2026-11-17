@@ -4,7 +4,7 @@ import { NFeItemRow } from '../types';
 import { sortDebtsByCompetencia } from './debtParser';
 
 import { ALL_COLUMNS, ColumnDefinition } from '../components/NfeGrid';
-import { isSupplierEligibleForDecreto29560 } from './decreto29560Helper';
+import { isItemEligibleForSTAntecipado, loadStoredMvaRules, MvaRule } from './decreto29560Helper';
 
 // Helper to convert 0-indexed column number to Excel column letters (A, B, ..., Z, AA, AB, ...)
 function colIndexToLetter(colIdx: number): string {
@@ -69,7 +69,8 @@ function buildAuditedNfeWorksheet(
   sheetTitle: string,
   badgeText: string,
   decreto29560Enabled: boolean = false,
-  decretoSuppliers: string[] = []
+  decretoSuppliers: string[] = [],
+  mvaRules: MvaRule[] = loadStoredMvaRules()
 ) {
   const ws: any = {};
   const merges: any[] = [];
@@ -88,7 +89,11 @@ function buildAuditedNfeWorksheet(
     format: string = ''
   ) => {
     const ref = getCellRef(r, c);
-    ws[ref] = { v: val ?? '', t: type, s: style };
+    let cellVal = val ?? '';
+    if (type === 's' && typeof cellVal === 'string' && /^[=+\-@\t\r]/.test(cellVal.trim())) {
+      cellVal = `'${cellVal}`;
+    }
+    ws[ref] = { v: cellVal, t: type, s: style };
     if (format) ws[ref].z = format;
   };
 
@@ -142,7 +147,7 @@ function buildAuditedNfeWorksheet(
         fg = 'FFFFFF';
         accent = '60A5FA';
         break;
-      case 'ICMS ST Decreto 29.560':
+      case 'ICMS ST Antecipado':
         bg = '78350F'; // Âmbar café corporativo refinado
         fg = 'E4B35E'; // Dourado
         accent = 'F59E0B';
@@ -347,11 +352,11 @@ function buildAuditedNfeWorksheet(
       // Font color: Strong dark #0F172A (NEVER light grey #94A3B8)
       const primaryTextColor = '0F172A';
 
-      // Check if this column belongs to ICMS ST Decreto 29.560 and if this supplier is eligible
-      const isDecretoCol = col.key === 'vBC_ST_29560' || col.key === 'pICMSST_29560' || col.key === 'vICMSST_29560';
-      const isEligibleDecreto = decreto29560Enabled && isSupplierEligibleForDecreto29560(row.emitNome, decretoSuppliers);
+      // Check if this column belongs to ICMS ST Antecipado and if this item is eligible
+      const isAntecipadoCol = col.key === 'vBC_ST_29560' || col.key === 'pICMSST_29560' || col.key === 'vICMSST_29560';
+      const isEligibleAntecipado = decreto29560Enabled && isItemEligibleForSTAntecipado(row, decretoSuppliers, mvaRules);
 
-      if (isDecretoCol && !isEligibleDecreto) {
+      if (isAntecipadoCol && !isEligibleAntecipado) {
         writeCell(
           currentRow,
           colIdx,
@@ -577,6 +582,7 @@ export function exportToExcel(
   const activeCols: ColumnDefinition[] = ALL_COLUMNS.filter(col => visibleColumns.includes(col.key));
   if (activeCols.length === 0) return;
 
+  const mvaRules = loadStoredMvaRules();
   const wb = XLSX.utils.book_new();
 
   // 1. Aba 1: Histórico Completo de Notas (todas as notas e itens)
@@ -586,7 +592,8 @@ export function exportToExcel(
     reportName || 'Histórico Completo de Notas',
     'Aba: Histórico Completo',
     decreto29560Enabled,
-    decretoSuppliers
+    decretoSuppliers,
+    mvaRules
   );
   XLSX.utils.book_append_sheet(wb, wsFull, 'Histórico Completo');
 
@@ -599,7 +606,8 @@ export function exportToExcel(
       `${reportName || 'Auditoria'} (Última Nota por Produto)`,
       'Aba: Consolidado (Última Nota Faturada)',
       decreto29560Enabled,
-      decretoSuppliers
+      decretoSuppliers,
+      mvaRules
     );
     XLSX.utils.book_append_sheet(wb, wsConsolidated, 'Última Nota por Produto');
   }
@@ -635,7 +643,11 @@ export function exportDebtsToExcel(
     format: string = ''
   ) => {
     const ref = getCellRef(r, c);
-    ws[ref] = { v: val, t: type, s: style };
+    let cellVal = val ?? '';
+    if (type === 's' && typeof cellVal === 'string' && /^[=+\-@\t\r]/.test(cellVal.trim())) {
+      cellVal = `'${cellVal}`;
+    }
+    ws[ref] = { v: cellVal, t: type, s: style };
     if (format) ws[ref].z = format;
   };
 

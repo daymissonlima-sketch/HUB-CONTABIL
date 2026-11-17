@@ -5,6 +5,7 @@
  * Features Layer - Master Aggregator & Public Boundary
  */
 
+export * from './reforma-tributaria';
 export * from './auditoria-fiscal';
 export * from './calculadora';
 export * from './xml-auditor';

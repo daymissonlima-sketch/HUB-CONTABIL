@@ -101,8 +101,8 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.error('[Secure Firestore Audit Log]: ', JSON.stringify(errInfo));
+  throw new Error('Não foi possível sincronizar com o banco de dados no momento. A operação continuará em modo local seguro.');
 }
 
 async function testConnection() {

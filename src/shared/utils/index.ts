@@ -10,3 +10,4 @@ export * from '../../utils/companyStorage';
 export * from '../../utils/cnpjHelper';
 export * from '../../utils/idbStorage';
 export * from '../../utils/sanitizer';
+export * from './errorHandler';

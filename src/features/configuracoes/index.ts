@@ -7,3 +7,4 @@
  */
 
 export { ConfiguracoesGerais } from '../../components/ConfiguracoesGerais';
+export * from '../../utils/companyStorage';

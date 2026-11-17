@@ -7,3 +7,5 @@
  */
 
 export { FaturamentoGerador } from '../../components/FaturamentoGerador';
+export * from '../../utils/billingParser';
+export * from '../../utils/pdfExporter';

@@ -7,3 +7,4 @@
  */
 
 export { OpcaoSimplesNacional } from '../../components/OpcaoSimplesNacional';
+export * from '../../utils/socioHelper';

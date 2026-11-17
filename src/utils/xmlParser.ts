@@ -11,7 +11,10 @@ import {
   calculateDecreto29560ST,
   isSimplesNacionalSupplier,
   isImportedGoods4Pct,
-  calculateDecreto29560TaxRate
+  calculateDecreto29560TaxRate,
+  findMatchingMvaRule,
+  calculateMvaSTAntecipado,
+  loadStoredMvaRules
 } from './decreto29560Helper';
 
 // Helper to safely get node text content by tag name
@@ -365,37 +368,76 @@ export async function parseNfeXml(xmlText: string, simulateIbsCbs: boolean = tru
       vIBSMun = parseFloat(((vBC_IBS * pIBSMun) / 100).toFixed(2));
     }
 
-    // Calculate Decreto 29.560 (RET 2024 - Termo de Acordo Atacadista)
-    // 1. Identificar se o fornecedor é optante pelo Simples Nacional
+    // Cálculo do ICMS ST Antecipado (Decreto 24.569/97 / MVA Fronteira & Decreto 29.560/08 / Carga Líquida)
+    // 1. Verificar se o item se enquadra em regra de MVA interna (ex: NCM 09012100 - Caffino / Predh ou NCM 35061010 - Adesivo / Three Bond)
+    const mvaRules = loadStoredMvaRules();
+    const matchingMvaRule = findMatchingMvaRule(NCM, emitNome, mvaRules);
+
+    let vBC_ST_29560 = 0;
+    let pICMSST_29560 = 0;
+    let vICMSST_29560 = 0;
+    let regraDecreto29560 = '';
+    let tipoSTAntecipado: 'DECRETO_29560' | 'MVA_INTERNA' | undefined = undefined;
+    let mvaST: number | undefined = undefined;
+
+    // 2. Identificar se o fornecedor é optante pelo Simples Nacional
     const isSimplesNacional = isSimplesNacionalSupplier(emitNome, crt, cstICMS);
 
-    // 2. Identificar se é operação interestadual
+    // 3. Identificar se é operação interestadual
     const isInterstate = CFOP.startsWith('2') || CFOP.startsWith('6') || (emitUF !== '' && emitUF !== destUF);
 
-    // 3. Identificar se é produto de origem estrangeira com alíquota interestadual de 4% (Res. 13/2012)
+    // 4. Identificar se é produto de origem estrangeira com alíquota interestadual de 4% (Res. 13/2012)
     const isImportado4Pct = isImportedGoods4Pct(orig, pICMS, isInterstate);
 
-    // 4. Resolver a região geográfica da operação
-    const originRegion = resolveOriginRegion(emitUF, destUF);
+    if (matchingMvaRule) {
+      tipoSTAntecipado = 'MVA_INTERNA';
+      mvaST = matchingMvaRule.mva;
+      pICMSST_29560 = matchingMvaRule.mva;
 
-    // 5. Apurar alíquota líquida considerando base e acréscimos legais do Decreto 29.560/08
-    const rateCalc = calculateDecreto29560TaxRate({
-      region: originRegion,
-      internalRate: 20, // Alíquota geral interna no Ceará
-      isSimplesNacional,
-      isImportado4Pct
-    });
+      // Crédito de origem: ICMS destacado do item (ex: na memória de cálculo a 4% = R$ 174,23)
+      const creditoOrigem = vICMS > 0 ? vICMS : parseFloat(((vBC_ICMS || vProd) * (pICMS || 4) / 100).toFixed(2));
+      const aliquotaInterna = matchingMvaRule.aliquotaInterna || 20.0;
 
-    const pICMSST_29560 = rateCalc.finalRate;
-    const { vBC_ST_29560, vICMSST_29560 } = calculateDecreto29560ST(
-      vProd,
-      vIPI,
-      vFrete,
-      vSeg,
-      vOutro,
-      vDesc,
-      pICMSST_29560
-    );
+      const mvaCalc = calculateMvaSTAntecipado(
+        vProd,
+        vIPI,
+        vFrete,
+        vSeg,
+        vOutro,
+        vDesc,
+        matchingMvaRule.mva,
+        aliquotaInterna,
+        creditoOrigem
+      );
+
+      vBC_ST_29560 = mvaCalc.vBC_ST;
+      vICMSST_29560 = mvaCalc.vICMSST;
+      regraDecreto29560 = `MVA ${matchingMvaRule.mva}% (Dec. 24.569/97 Art. 533) | Débito R$ ${mvaCalc.debito.toFixed(2)} (-) Crédito R$ ${creditoOrigem.toFixed(2)}`;
+    } else {
+      // Cálculo padrão sob Decreto 29.560 (RET 2024 - Termo de Acordo Atacadista)
+      tipoSTAntecipado = 'DECRETO_29560';
+      const originRegion = resolveOriginRegion(emitUF, destUF);
+      const rateCalc = calculateDecreto29560TaxRate({
+        region: originRegion,
+        internalRate: 20, // Alíquota geral interna no Ceará
+        isSimplesNacional,
+        isImportado4Pct
+      });
+
+      pICMSST_29560 = rateCalc.finalRate;
+      const stCalc = calculateDecreto29560ST(
+        vProd,
+        vIPI,
+        vFrete,
+        vSeg,
+        vOutro,
+        vDesc,
+        pICMSST_29560
+      );
+      vBC_ST_29560 = stCalc.vBC_ST_29560;
+      vICMSST_29560 = stCalc.vICMSST_29560;
+      regraDecreto29560 = rateCalc.descricaoRegra;
+    }
 
     // Add row
     itemRows.push({
@@ -439,9 +481,11 @@ export async function parseNfeXml(xmlText: string, simulateIbsCbs: boolean = tru
       vBC_ST_29560,
       pICMSST_29560,
       vICMSST_29560,
-      regraDecreto29560: rateCalc.descricaoRegra,
+      regraDecreto29560,
       isSimplesNacional,
       isImportado4Pct,
+      mvaST,
+      tipoSTAntecipado,
       vBCFCP,
       pFCP,
       vFCP,

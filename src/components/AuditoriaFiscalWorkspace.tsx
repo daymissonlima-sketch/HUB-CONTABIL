@@ -466,7 +466,7 @@ function PisCofinsSummaryTableRows({ rows, isResumido }: { rows: PisCofinsConsol
 
 export function AuditoriaFiscalWorkspace() {
   // Navigation tabs for the unified output views
-  const [activeOutputTab, setActiveOutputTab] = useState<'confronto' | 'organizador' | 'auditoria_siga' | 'integridade' | 'pis_cofins'>('pis_cofins');
+  const [activeOutputTab, setActiveOutputTab] = useState<'confronto' | 'organizador' | 'auditoria_siga' | 'integridade' | 'pis_cofins'>('organizador');
 
   // Audit SIGA specific state
   const [auditSigaSubTab, setAuditSigaSubTab] = useState<'saidas' | 'entradas'>('saidas');
@@ -475,7 +475,7 @@ export function AuditoriaFiscalWorkspace() {
   const [auditSigaPage, setAuditSigaPage] = useState<number>(1);
 
   // Sub-blocks subdivisions state
-  const [activeMainModule, setActiveMainModule] = useState<'siga' | 'icms' | 'pis_cofins'>('pis_cofins');
+  const [activeMainModule, setActiveMainModule] = useState<'siga' | 'icms' | 'pis_cofins'>('siga');
 
   // Unified Data Lake loaded files state
   const [loadedFiles, setLoadedFiles] = useState<Array<{ name: string; size: number; type: 'sefaz' | 'erp' | 'siga_tax' | 'pis_cofins'; recordsCount: number }>>([]);
@@ -1531,33 +1531,12 @@ export function AuditoriaFiscalWorkspace() {
   };
 
   const availableTabs = useMemo(() => {
-    if (!loadedFiles || loadedFiles.length === 0) {
-      return ['confronto', 'organizador', 'auditoria_siga', 'integridade', 'pis_cofins'] as const;
-    }
-    const hasSefaz = loadedFiles.some(f => f.type === 'sefaz');
-    const hasErp = loadedFiles.some(f => f.type === 'erp' || f.type === 'siga_tax');
-    const hasSiga = loadedFiles.some(f => f.type === 'siga_tax') || organizadorEntradas.length > 0 || organizadorSaidas.length > 0;
-    const hasPisCofins = loadedFiles.some(f => f.type === 'pis_cofins');
-
-    const tabs: Array<'confronto' | 'organizador' | 'auditoria_siga' | 'integridade' | 'pis_cofins'> = ['confronto'];
-    if (hasSefaz || hasErp || hasSiga) {
-      tabs.push('integridade');
-    }
-    if (hasSiga || hasSefaz) {
-      tabs.push('organizador');
-      tabs.push('auditoria_siga');
-    }
-    if (hasPisCofins || (!hasSefaz && !hasErp && !hasSiga)) {
-      tabs.push('pis_cofins');
-    }
-    return tabs;
-  }, [loadedFiles, organizadorEntradas, organizadorSaidas]);
+    return ['confronto', 'organizador', 'auditoria_siga', 'integridade', 'pis_cofins'] as const;
+  }, []);
 
   useEffect(() => {
     if (!availableTabs.includes(activeOutputTab)) {
-      if (availableTabs.length > 0) {
-        setActiveOutputTab(availableTabs[0]);
-      }
+      setActiveOutputTab(availableTabs[0]);
     }
   }, [availableTabs, activeOutputTab]);
 
@@ -3235,7 +3214,160 @@ export function AuditoriaFiscalWorkspace() {
         </div>
       </div>
 
+      {/* 2. SELETOR DAS 3 FERRAMENTAS DE AUDITORIA FISCAL: SIGA, ICMS e PIS/COFINS */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 animate-fadeIn">
+        {/* FERRAMENTA 1: SIGA */}
+        <button
+          type="button"
+          onClick={() => {
+            setActiveMainModule('siga');
+            if (activeOutputTab !== 'organizador' && activeOutputTab !== 'auditoria_siga' && activeOutputTab !== 'integridade') {
+              setActiveOutputTab('organizador');
+            }
+          }}
+          className={`flex items-center justify-between p-4 rounded-2xl border-2 text-left transition-all cursor-pointer ${
+            activeMainModule === 'siga'
+              ? 'bg-[#04243b] border-[#e4b35e] text-white shadow-md scale-[1.01]'
+              : 'bg-white border-slate-200 hover:border-[#04243b]/40 text-slate-700 hover:bg-slate-50/80 shadow-2xs'
+          }`}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+              activeMainModule === 'siga'
+                ? 'bg-[#e4b35e] text-[#04243b] shadow-xs'
+                : 'bg-slate-100 text-[#04243b]'
+            }`}>
+              <FileSpreadsheet className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${
+                  activeMainModule === 'siga'
+                    ? 'bg-[#e4b35e]/20 text-[#e4b35e]'
+                    : 'bg-slate-100 text-slate-500'
+                }`}>
+                  Ferramenta 01
+                </span>
+                {(organizadorEntradas.length > 0 || organizadorSaidas.length > 0) && (
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">
+                    {organizadorEntradas.length + organizadorSaidas.length} NFs
+                  </span>
+                )}
+              </div>
+              <h3 className={`text-sm font-black uppercase tracking-tight mt-1 truncate ${
+                activeMainModule === 'siga' ? 'text-white' : 'text-[#04243b]'
+              }`}>
+                1. SIGA (Entradas & Saídas)
+              </h3>
+              <p className={`text-[11px] truncate ${
+                activeMainModule === 'siga' ? 'text-slate-300' : 'text-slate-500'
+              }`}>
+                Organizador de Impostos e Saneamento de Duplicidades
+              </p>
+            </div>
+          </div>
+        </button>
 
+        {/* FERRAMENTA 2: ICMS */}
+        <button
+          type="button"
+          onClick={() => {
+            setActiveMainModule('icms');
+            setActiveOutputTab('confronto');
+          }}
+          className={`flex items-center justify-between p-4 rounded-2xl border-2 text-left transition-all cursor-pointer ${
+            activeMainModule === 'icms'
+              ? 'bg-[#04243b] border-[#e4b35e] text-white shadow-md scale-[1.01]'
+              : 'bg-white border-slate-200 hover:border-[#04243b]/40 text-slate-700 hover:bg-slate-50/80 shadow-2xs'
+          }`}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+              activeMainModule === 'icms'
+                ? 'bg-[#e4b35e] text-[#04243b] shadow-xs'
+                : 'bg-slate-100 text-[#04243b]'
+            }`}>
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${
+                  activeMainModule === 'icms'
+                    ? 'bg-[#e4b35e]/20 text-[#e4b35e]'
+                    : 'bg-slate-100 text-slate-500'
+                }`}>
+                  Ferramenta 02
+                </span>
+                {(erpIcmsItems.length > 0 || sefazRows.length > 0) && (
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">
+                    {erpIcmsItems.length || sefazRows.length} reg
+                  </span>
+                )}
+              </div>
+              <h3 className={`text-sm font-black uppercase tracking-tight mt-1 truncate ${
+                activeMainModule === 'icms' ? 'text-white' : 'text-[#04243b]'
+              }`}>
+                2. ICMS (Relatório & Confronto)
+              </h3>
+              <p className={`text-[11px] truncate ${
+                activeMainModule === 'icms' ? 'text-slate-300' : 'text-slate-500'
+              }`}>
+                Relatório ERP ICMS e Confronto Bidirecional SEFAZ vs ERP
+              </p>
+            </div>
+          </div>
+        </button>
+
+        {/* FERRAMENTA 3: PIS/COFINS */}
+        <button
+          type="button"
+          onClick={() => {
+            setActiveMainModule('pis_cofins');
+            setActiveOutputTab('pis_cofins');
+          }}
+          className={`flex items-center justify-between p-4 rounded-2xl border-2 text-left transition-all cursor-pointer ${
+            activeMainModule === 'pis_cofins'
+              ? 'bg-[#04243b] border-[#e4b35e] text-white shadow-md scale-[1.01]'
+              : 'bg-white border-slate-200 hover:border-[#04243b]/40 text-slate-700 hover:bg-slate-50/80 shadow-2xs'
+          }`}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+              activeMainModule === 'pis_cofins'
+                ? 'bg-[#e4b35e] text-[#04243b] shadow-xs'
+                : 'bg-slate-100 text-[#04243b]'
+            }`}>
+              <Coins className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${
+                  activeMainModule === 'pis_cofins'
+                    ? 'bg-[#e4b35e]/20 text-[#e4b35e]'
+                    : 'bg-slate-100 text-slate-500'
+                }`}>
+                  Ferramenta 03
+                </span>
+                {pisCofinsRows.length > 0 && (
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">
+                    {pisCofinsRows.length} reg
+                  </span>
+                )}
+              </div>
+              <h3 className={`text-sm font-black uppercase tracking-tight mt-1 truncate ${
+                activeMainModule === 'pis_cofins' ? 'text-white' : 'text-[#04243b]'
+              }`}>
+                3. PIS/COFINS (SPED & Apuração)
+              </h3>
+              <p className={`text-[11px] truncate ${
+                activeMainModule === 'pis_cofins' ? 'text-slate-300' : 'text-slate-500'
+              }`}>
+                Demonstrativo de Créditos/Débitos e Auditoria SPED
+              </p>
+            </div>
+          </div>
+        </button>
+      </div>
 
       {/* 3. THE INGESTION & COCKPIT SECTION (TAILORED PER MAIN MODULE) */}
       {activeMainModule === 'siga' ? (
@@ -3416,7 +3548,32 @@ export function AuditoriaFiscalWorkspace() {
               }}
             />
 
-            {activeMainModule === 'pis_cofins' ? (
+            {activeMainModule === 'icms' ? (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-slate-150 pb-2">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-[#e4b35e]" />
+                    <h2 className="text-xs font-black text-[#04243b] uppercase tracking-tight font-sans">
+                      Gestão de Dados & Relatórios ICMS (SEFAZ vs ERP)
+                    </h2>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-sans">
+                    Importe os relatórios de ICMS do ERP e da SEFAZ para gerar o relatório por produto e o confronto bidirecional.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => dataLakeFileInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-xl bg-[#04243b] hover:bg-[#083454] text-[#e4b35e] text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Importar Arquivo ICMS / SEFAZ</span>
+                  </button>
+                </div>
+              </div>
+            ) : activeMainModule === 'pis_cofins' ? (
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-slate-150 pb-2">
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2">
@@ -3598,6 +3755,39 @@ export function AuditoriaFiscalWorkspace() {
             </div>
           </div>
         ) : null}
+
+        {/* SIGA Sub-Navigation Bar (when Ferramenta 01: SIGA is active) */}
+        {activeMainModule === 'siga' && (
+          <div className="bg-slate-100 border-b border-slate-200 p-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveOutputTab('organizador')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                  activeOutputTab === 'organizador'
+                    ? 'bg-[#04243b] text-[#e4b35e] shadow-sm'
+                    : 'bg-white/70 text-slate-600 hover:bg-white hover:text-[#04243b]'
+                }`}
+              >
+                <FileSpreadsheet className="w-4 h-4 text-[#e4b35e]" />
+                <span>1. Organizador de Relatório e Impostos</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveOutputTab('auditoria_siga')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                  activeOutputTab === 'auditoria_siga'
+                    ? 'bg-[#04243b] text-[#e4b35e] shadow-sm'
+                    : 'bg-white/70 text-slate-600 hover:bg-white hover:text-[#04243b]'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>2. Auditoria Fiscal SIGA (Duplicidades)</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Sub-Interface active views */}
         <div className="p-2 sm:p-3">

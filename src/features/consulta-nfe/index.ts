@@ -13,3 +13,4 @@ export { NfeTabelaListagem } from '../../components/sefaz/NfeTabelaListagem';
 export { RepositorioXmlModal } from '../../components/sefaz/RepositorioXmlModal';
 export { RoboVarreduraModal } from '../../components/sefaz/RoboVarreduraModal';
 export { XmlViewerModal } from '../../components/sefaz/XmlViewerModal';
+export * from '../../services/sefazDfeService';
