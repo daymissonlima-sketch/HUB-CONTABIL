@@ -79,8 +79,17 @@ export function getSocioRoleTitle(nome: string, qualificacao?: string, uppercase
   return female ? 'Sócia Administradora' : 'Sócio Administrador';
 }
 
-import { formatCpf } from '../shared/utils/formatters';
+import { formatCpf, cleanDocument } from '../shared/utils/formatters';
 export { formatCpf };
+
+/**
+ * Verifica se o CPF informado possui 11 dígitos completos e não está mascarado com '*' (ex: ***181273**)
+ */
+export function isCompleteCpf(val?: string | null): boolean {
+  if (!val) return false;
+  if (val.includes('*')) return false;
+  return cleanDocument(val).length === 11;
+}
 
 /**
  * Extracts all known partners for a company from both sociosDetalhados and quadroSocietario
@@ -97,9 +106,10 @@ export function getAllCompanyPartners(company?: Company | null): PartnerOption[]
       if (name && !seenNames.has(name)) {
         seenNames.add(name);
         const female = isFemalePartner(name, s.qualificacao);
+        const validCpf = isCompleteCpf(s.documento) ? formatCpf(s.documento!) : '';
         list.push({
           nome: name,
-          cpf: formatCpf(s.documento || ''),
+          cpf: validCpf,
           qualificacao: s.qualificacao || (female ? 'Sócia-Administradora' : 'Sócio-Administrador'),
           isFemale: female,
           roleTitle: female ? 'SÓCIA ADMINISTRADORA' : 'SÓCIO ADMINISTRADOR'
@@ -159,9 +169,21 @@ export function getResolvedSocioAdmin(company?: Company | null): ResolvedSocioAd
     const isFemale = isFemalePartner(nome, company.socioQualificacao);
     const roleTitle = isFemale ? 'SÓCIA ADMINISTRADORA' : 'SÓCIO ADMINISTRADOR';
     const qual = company.socioQualificacao || (isFemale ? 'Sócia-Administradora' : 'Sócio-Administrador');
+    let validCpf = isCompleteCpf(company.socioCpf) ? formatCpf(company.socioCpf!.trim()) : '';
+
+    // Also check if this partner has a complete CPF inside sociosDetalhados
+    if (!validCpf && company.sociosDetalhados && company.sociosDetalhados.length > 0) {
+      const matchingPartner = company.sociosDetalhados.find(
+        s => (s.nome || '').trim().toUpperCase() === nome && isCompleteCpf(s.documento)
+      );
+      if (matchingPartner && matchingPartner.documento) {
+        validCpf = formatCpf(matchingPartner.documento.trim());
+      }
+    }
+
     return {
       nome,
-      cpf: company.socioCpf ? formatCpf(company.socioCpf.trim()) : '',
+      cpf: validCpf,
       qualificacao: qual,
       hasSocio: true,
       isFemale,
@@ -181,9 +203,10 @@ export function getResolvedSocioAdmin(company?: Company | null): ResolvedSocioAd
       const isFemale = isFemalePartner(nome, chosen.qualificacao);
       const roleTitle = isFemale ? 'SÓCIA ADMINISTRADORA' : 'SÓCIO ADMINISTRADOR';
       const qual = chosen.qualificacao || (isFemale ? 'Sócia-Administradora' : 'Sócio-Administrador');
+      const validCpf = isCompleteCpf(chosen.documento) ? formatCpf(chosen.documento!.trim()) : '';
       return {
         nome,
-        cpf: chosen.documento ? formatCpf(chosen.documento.trim()) : '',
+        cpf: validCpf,
         qualificacao: qual,
         hasSocio: true,
         isFemale,
@@ -226,7 +249,7 @@ export function getResolvedSocioAdmin(company?: Company | null): ResolvedSocioAd
 }
 
 /**
- * Updates the socio administrador info for a company in local storage
+ * Updates the socio administrador info for a company in local storage and synchronizes sociosDetalhados (QSA)
  */
 export function updateCompanySocio(
   companyId: string,
@@ -235,16 +258,43 @@ export function updateCompanySocio(
   socioQualificacao: string = 'Sócio-Administrador'
 ): Company[] {
   const companies = loadStoredCompanies();
+  const cleanName = socioNome.trim().toUpperCase();
+  const formattedCpf = formatCpf(socioCpf);
+  const cleanQual = socioQualificacao.trim();
+
   const updated = companies.map(c => {
     if (c.id === companyId) {
+      let updatedSocios = c.sociosDetalhados ? [...c.sociosDetalhados] : [];
+      if (cleanName) {
+        const existingIdx = updatedSocios.findIndex(
+          s => (s.nome || '').trim().toUpperCase() === cleanName
+        );
+        if (existingIdx >= 0) {
+          updatedSocios[existingIdx] = {
+            ...updatedSocios[existingIdx],
+            nome: cleanName,
+            documento: formattedCpf || updatedSocios[existingIdx].documento,
+            qualificacao: cleanQual || updatedSocios[existingIdx].qualificacao
+          };
+        } else {
+          updatedSocios.push({
+            nome: cleanName,
+            documento: formattedCpf,
+            qualificacao: cleanQual
+          });
+        }
+      }
+
       return {
         ...c,
-        socioNome: socioNome.trim().toUpperCase(),
-        socioCpf: formatCpf(socioCpf),
-        socioQualificacao: socioQualificacao.trim()
+        socioNome: cleanName,
+        socioCpf: formattedCpf,
+        socioQualificacao: cleanQual,
+        sociosDetalhados: updatedSocios
       };
     }
     return c;
   });
   return saveStoredCompanies(updated);
 }
+

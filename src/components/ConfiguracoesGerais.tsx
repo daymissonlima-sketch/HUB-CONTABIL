@@ -144,6 +144,7 @@ export function ConfiguracoesGerais() {
     expirado: boolean;
   } | null>(null);
   const certSectionRef = useRef<HTMLDivElement>(null);
+  const qsaSectionRef = useRef<HTMLDivElement>(null);
 
   // Assinaturas / Contadores state
   const [accountants, setAccountants] = useState<Accountant[]>([]);
@@ -175,6 +176,34 @@ export function ConfiguracoesGerais() {
           setCompanyScreen('form');
           setTimeout(() => {
             certSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 250);
+        }
+      }
+
+      const openQsaCompId = localStorage.getItem('moreira_lima_open_company_qsa');
+      if (openQsaCompId) {
+        localStorage.removeItem('moreira_lima_open_company_qsa');
+        const target = mergedCompanies.find(c => c.id === openQsaCompId);
+        if (target) {
+          setActiveTab('empresas');
+          setEditingCompanyId(target.id);
+          const initialSocios = (target.sociosDetalhados && target.sociosDetalhados.length > 0)
+            ? target.sociosDetalhados
+            : (target.quadroSocietario && target.quadroSocietario.length > 0)
+              ? target.quadroSocietario.map(s => {
+                  const m = s.match(/^([^(]+)(?:\(([^)]+)\))?/);
+                  return {
+                    nome: m ? m[1].trim() : s.trim(),
+                    documento: '',
+                    qualificacao: m && m[2] ? m[2].trim() : 'Sócio-Administrador'
+                  };
+                })
+              : [{ nome: target.socioNome || '', documento: target.socioCpf || '', qualificacao: target.socioQualificacao || 'Sócio-Administrador' }];
+          setNewCompany({ ...DEFAULT_NEW_COMPANY, ...target, sociosDetalhados: initialSocios });
+          setCertValidationResult(null);
+          setCompanyScreen('form');
+          setTimeout(() => {
+            qsaSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }, 250);
         }
       }
@@ -629,6 +658,24 @@ export function ConfiguracoesGerais() {
     const formattedCnpj = cleanCnpj.length === 14 ? formatCNPJ(cleanCnpj) : newCompany.cnpj.trim();
 
     const isNfeEnabled = newCompany.consultaNfeHabilitada !== false;
+
+    // Sincronizar socioNome / socioCpf / socioQualificacao a partir do QSA (sociosDetalhados)
+    let syncedSocioNome = newCompany.socioNome;
+    let syncedSocioCpf = newCompany.socioCpf;
+    let syncedSocioQual = newCompany.socioQualificacao;
+    if (newCompany.sociosDetalhados && newCompany.sociosDetalhados.length > 0) {
+      const adminSocio = newCompany.sociosDetalhados.find(s =>
+        s.qualificacao && /administrador|admin|titular|diretor|gerente|empres[aá]rio/i.test(s.qualificacao)
+      ) || newCompany.sociosDetalhados[0];
+      if (adminSocio && adminSocio.nome) {
+        syncedSocioNome = adminSocio.nome.trim().toUpperCase();
+        syncedSocioQual = adminSocio.qualificacao || 'Sócio-Administrador';
+        if (adminSocio.documento && !adminSocio.documento.includes('*') && adminSocio.documento.replace(/\D/g, '').length === 11) {
+          syncedSocioCpf = adminSocio.documento.trim();
+        }
+      }
+    }
+
     const companyToSave = {
       ...newCompany,
       razaoSocial: newCompany.razaoSocial.trim(),
@@ -636,7 +683,10 @@ export function ConfiguracoesGerais() {
       vendaVistaPercent: safeVista,
       vendaPrazoPercent: safePrazo,
       consultaNfeHabilitada: isNfeEnabled,
-      autoPollEnabled: isNfeEnabled
+      autoPollEnabled: isNfeEnabled,
+      socioNome: syncedSocioNome,
+      socioCpf: syncedSocioCpf,
+      socioQualificacao: syncedSocioQual
     };
 
     let updated: Company[];
@@ -1079,7 +1129,24 @@ export function ConfiguracoesGerais() {
                                 type="button"
                                 onClick={() => {
                                   setEditingCompanyId(company.id);
-                                  setNewCompany({ ...DEFAULT_NEW_COMPANY, ...company });
+                                  const rawSocios = (company.sociosDetalhados && company.sociosDetalhados.length > 0)
+                                    ? company.sociosDetalhados.map(s => ({
+                                        ...s,
+                                        documento: s.documento && s.documento.includes('*') ? '' : (s.documento || '')
+                                      }))
+                                    : (company.quadroSocietario && company.quadroSocietario.length > 0)
+                                      ? company.quadroSocietario.map(s => {
+                                          const m = s.match(/^([^(]+)(?:\(([^)]+)\))?/);
+                                          return {
+                                            nome: m ? m[1].trim() : s.trim(),
+                                            documento: '',
+                                            qualificacao: m && m[2] ? m[2].trim() : 'Sócio-Administrador'
+                                          };
+                                        })
+                                      : company.socioNome
+                                        ? [{ nome: company.socioNome, documento: company.socioCpf || '', qualificacao: company.socioQualificacao || 'Sócio-Administrador' }]
+                                        : [];
+                                  setNewCompany({ ...DEFAULT_NEW_COMPANY, ...company, sociosDetalhados: rawSocios });
                                   setCompanyScreen('form');
                                 }}
                                 className="p-2 rounded-lg text-slate-500 hover:text-[#04243b] hover:bg-slate-100 transition-all cursor-pointer"
@@ -1535,37 +1602,133 @@ export function ConfiguracoesGerais() {
                   </div>
                 </div>
 
-                {/* 5. Quadro Societário (QSA) */}
-                <div className="bg-slate-50/60 p-4 rounded-2xl border border-slate-200/80 space-y-4">
-                  <h4 className="text-xs font-extrabold text-[#04243b] uppercase tracking-wider flex items-center gap-2 border-b border-slate-200 pb-2">
-                    <Users className="h-4 w-4 text-[#e4b35e]" />
-                    5. Quadro de Sócios e Administradores (QSA)
-                  </h4>
-                  <div className="space-y-2">
+                {/* 5. Quadro Societário (QSA) - Editável */}
+                <div ref={qsaSectionRef} className="bg-slate-50/60 p-4 rounded-2xl border border-slate-200/80 space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                    <h4 className="text-xs font-extrabold text-[#04243b] uppercase tracking-wider flex items-center gap-2">
+                      <Users className="h-4 w-4 text-[#e4b35e]" />
+                      5. Quadro de Sócios e Administradores (QSA)
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = newCompany.sociosDetalhados || [];
+                        setNewCompany(prev => ({
+                          ...prev,
+                          sociosDetalhados: [
+                            ...current,
+                            { nome: '', documento: '', qualificacao: 'Sócio-Administrador' }
+                          ]
+                        }));
+                      }}
+                      className="px-2.5 py-1 bg-[#04243b] text-[#e4b35e] text-[10px] font-bold rounded-lg hover:bg-[#031d30] transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      + Adicionar Sócio / Administrador
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
                     {newCompany.sociosDetalhados && newCompany.sociosDetalhados.length > 0 ? (
-                      <div className="space-y-2">
+                      <div className="space-y-3">
                         {newCompany.sociosDetalhados.map((socio, idx) => (
-                          <div key={idx} className="bg-white border border-slate-200 rounded-xl p-3 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                            <div>
-                              <p className="font-bold text-slate-800">{socio.nome}</p>
-                              <p className="text-[10px] text-slate-500">{socio.qualificacao || 'Sócio / Administrador'}</p>
+                          <div key={idx} className="bg-white border border-slate-200 rounded-xl p-3.5 space-y-2.5 shadow-2xs">
+                            <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
+                              {/* Nome */}
+                              <div className="md:col-span-5">
+                                <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">Nome do Sócio / Administrador</label>
+                                <input
+                                  type="text"
+                                  value={socio.nome || ''}
+                                  placeholder="Ex: ARMANDO DO CARMO CARVALHO"
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setNewCompany(prev => {
+                                      const updated = [...(prev.sociosDetalhados || [])];
+                                      updated[idx] = { ...updated[idx], nome: val };
+                                      return { ...prev, sociosDetalhados: updated };
+                                    });
+                                  }}
+                                  className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-medium text-slate-800 bg-slate-50/50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#04243b]"
+                                />
+                              </div>
+
+                              {/* CPF / Documento */}
+                              <div className="md:col-span-3">
+                                <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">CPF / Documento</label>
+                                <input
+                                  type="text"
+                                  value={socio.documento || ''}
+                                  placeholder="Ex: 000.123.456-78"
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setNewCompany(prev => {
+                                      const updated = [...(prev.sociosDetalhados || [])];
+                                      updated[idx] = { ...updated[idx], documento: val };
+                                      return { ...prev, sociosDetalhados: updated };
+                                    });
+                                  }}
+                                  className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-mono font-medium text-slate-800 bg-slate-50/50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#04243b]"
+                                />
+                              </div>
+
+                              {/* Qualificação / Cargo */}
+                              <div className="md:col-span-3">
+                                <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">Qualificação / Cargo</label>
+                                <input
+                                  type="text"
+                                  value={socio.qualificacao || ''}
+                                  placeholder="Ex: Sócio-Administrador"
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setNewCompany(prev => {
+                                      const updated = [...(prev.sociosDetalhados || [])];
+                                      updated[idx] = { ...updated[idx], qualificacao: val };
+                                      return { ...prev, sociosDetalhados: updated };
+                                    });
+                                  }}
+                                  className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-medium text-slate-800 bg-slate-50/50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#04243b]"
+                                />
+                              </div>
+
+                              {/* Remover */}
+                              <div className="md:col-span-1 flex items-end justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setNewCompany(prev => {
+                                      const updated = [...(prev.sociosDetalhados || [])];
+                                      updated.splice(idx, 1);
+                                      return { ...prev, sociosDetalhados: updated };
+                                    });
+                                  }}
+                                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Remover este sócio"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
                             </div>
-                            {socio.documento && (
-                              <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-600">
-                                Doc: {socio.documento}
-                              </span>
-                            )}
                           </div>
                         ))}
                       </div>
-                    ) : newCompany.quadroSocietario && newCompany.quadroSocietario.length > 0 ? (
-                      <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs space-y-1">
-                        {newCompany.quadroSocietario.map((socio, idx) => (
-                          <div key={idx} className="text-slate-700 font-medium">• {socio}</div>
-                        ))}
-                      </div>
                     ) : (
-                      <p className="text-xs text-slate-400 italic">Nenhum sócio ou administrador retornado pela API ou cadastrado.</p>
+                      <div className="text-center py-5 bg-white border border-dashed border-slate-200 rounded-xl space-y-2">
+                        <p className="text-xs text-slate-400 italic">Nenhum sócio ou administrador cadastrado.</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewCompany(prev => ({
+                              ...prev,
+                              sociosDetalhados: [
+                                { nome: '', documento: '', qualificacao: 'Sócio-Administrador' }
+                              ]
+                            }));
+                          }}
+                          className="px-3 py-1.5 bg-[#04243b] text-[#e4b35e] text-xs font-bold rounded-lg hover:bg-[#031d30] transition-colors cursor-pointer"
+                        >
+                          Adicionar Primeiro Sócio
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>

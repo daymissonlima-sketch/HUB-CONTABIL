@@ -22,14 +22,15 @@ import {
   UserCheck,
   Building2,
   Building,
-  Award
+  Award,
+  ExternalLink
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import { Company, FaturamentoItem } from '../types_debits';
 import { loadStoredCompanies, saveStoredCompanies, COMPANIES_UPDATED_EVENT, getCleanDocument } from '../utils/companyStorage';
-import { getResolvedSocioAdmin, getAllCompanyPartners, updateCompanySocio, formatCpf, isFemalePartner } from '../utils/socioHelper';
+import { getResolvedSocioAdmin, getAllCompanyPartners, updateCompanySocio, formatCpf, isFemalePartner, isCompleteCpf } from '../utils/socioHelper';
 import { convertPdfToCsvString } from '../utils/pdfToCsv';
 import { extractTextFromPdf } from '../utils/pdfExtractor';
 import { fetchCnpjSafe, parseCnpjResponseData, isCaepf, isValidCNPJ } from '../utils/cnpjHelper';
@@ -109,6 +110,11 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     cpf: '',
     qualificacao: 'Sócio-Administrador'
   });
+  const [pendingPdfExport, setPendingPdfExport] = useState<{
+    mode: 'standard' | 'premium';
+    companyId: string;
+    targetData?: FaturamentoItem[];
+  } | null>(null);
   const [editingAccountantId, setEditingAccountantId] = useState<string | null>(null);
   const [newAccountant, setNewAccountant] = useState<Omit<Accountant, 'id'>>({
     nome: '',
@@ -296,7 +302,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       const companyId = selectedBatchCompanies[0];
       const target = companiesWithBilling.find(c => c.id === companyId);
       if (target && target.hasBilling) {
-        handleExportPDF(mode, target, target.billingItems);
+        await handleExportPDF(mode, target, target.billingItems);
       }
       return;
     }
@@ -305,18 +311,29 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     try {
       const zip = new JSZip();
       let filesAdded = 0;
+      let currentList = [...companies];
+      let anyUpdated = false;
 
-      selectedBatchCompanies.forEach(companyId => {
+      for (const companyId of selectedBatchCompanies) {
         const target = companiesWithBilling.find(c => c.id === companyId);
         if (target && target.hasBilling) {
-          const result = handleExportPDF(mode, target, target.billingItems, true);
+          const syncRes = await syncCompanyRazaoAndAddressFromNationalApi(target, currentList);
+          currentList = syncRes.updatedList;
+          if (syncRes.changed) anyUpdated = true;
+
+          const result = executePdfExportSync(mode, syncRes.updatedCompany, target.billingItems, true);
           if (result && result.doc) {
             const pdfData = result.doc.output('arraybuffer');
             zip.file(result.filename, pdfData);
             filesAdded++;
           }
         }
-      });
+      }
+
+      if (anyUpdated) {
+        setCompanies(currentList);
+        saveCompanies(currentList);
+      }
 
       if (filesAdded > 0) {
         const content = await zip.generateAsync({ type: 'blob' });
@@ -756,20 +773,24 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     return getResolvedSocioAdmin(selectedCompany);
   }, [selectedCompany]);
 
-  const openEditSocioModal = (companyToEdit?: Company | null) => {
+  const openEditSocioModal = (companyToEdit?: Company | null, keepPendingExport = false) => {
     const comp = companyToEdit || selectedCompany;
     if (!comp) return;
+    if (!keepPendingExport) {
+      setPendingPdfExport(null);
+    }
     setTargetSocioCompany(comp);
     const resolved = getResolvedSocioAdmin(comp);
+    const cleanCpf = isCompleteCpf(resolved.cpf) ? resolved.cpf : (isCompleteCpf(comp.socioCpf) ? formatCpf(comp.socioCpf!) : '');
     setSocioFormData({
       nome: resolved.nome || comp.socioNome || '',
-      cpf: resolved.cpf || comp.socioCpf || '',
+      cpf: cleanCpf,
       qualificacao: resolved.qualificacao || comp.socioQualificacao || 'Sócio-Administrador'
     });
     setIsSocioModalOpen(true);
   };
 
-  const handleSaveSocio = (e?: React.FormEvent) => {
+  const handleSaveSocio = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!targetSocioCompany) return;
 
@@ -781,6 +802,18 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     );
     setCompanies(updatedCompanies);
     setIsSocioModalOpen(false);
+
+    if (pendingPdfExport && pendingPdfExport.companyId === targetSocioCompany.id) {
+      const pending = pendingPdfExport;
+      setPendingPdfExport(null);
+      const updatedComp = updatedCompanies.find(c => c.id === pending.companyId) || {
+        ...targetSocioCompany,
+        socioNome: socioFormData.nome.trim().toUpperCase(),
+        socioCpf: formatCpf(socioFormData.cpf),
+        socioQualificacao: socioFormData.qualificacao.trim()
+      };
+      await handleExportPDF(pending.mode, updatedComp, pending.targetData, false);
+    }
   };
 
   // Adjust "vendaPrazoPercent" automatically to sum 100% when "vendaVistaPercent" changes
@@ -1387,6 +1420,17 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
 
       let targetCompany = identifiedCompany;
 
+      // Se a empresa já estiver cadastrada, verifica silenciosamente na API nacional se houve alteração na Razão Social ou no Endereço
+      if (targetCompany) {
+        const syncRes = await syncCompanyRazaoAndAddressFromNationalApi(targetCompany, currentCompanies);
+        targetCompany = syncRes.updatedCompany;
+        currentCompanies = syncRes.updatedList;
+        if (syncRes.changed) {
+          setCompanies(currentCompanies);
+          saveCompanies(currentCompanies);
+        }
+      }
+
       // If not registered but we have an identified CNPJ, create company automatically
       if (!identifiedCompany && identifiedCnpj && identifiedCnpj.length === 14) {
         setBatchProgress(`Empresa não cadastrada (${formatCNPJ(identifiedCnpj)}). Criando perfil automaticamente...`);
@@ -1405,6 +1449,10 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
               endereco: parsed.enderecoFormatted || '',
               cidade: parsed.cidadeFormatted || 'Fortaleza (CE)',
               cep: parsed.cep || '',
+              logradouro: parsed.logradouro || '',
+              numero: parsed.numero || '',
+              complemento: parsed.complemento || '',
+              bairro: parsed.bairro || '',
               inscEst: '',
               pmr: 21,
               pr: 'R',
@@ -1414,6 +1462,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
               contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
               contadorCrc: 'CRC CE 022956-O6',
               quadroSocietario: parsed.quadro,
+              sociosDetalhados: parsed.sociosDetalhados,
               municipio: parsed.municipioNome,
               estado: parsed.estadoNome,
               uf: parsed.estadoSigla,
@@ -1447,7 +1496,16 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       }
 
       if (!targetCompany && selectedCompanyId) {
-        targetCompany = companies.find(c => c.id === selectedCompanyId) || null;
+        const fallbackComp = currentCompanies.find(c => c.id === selectedCompanyId) || null;
+        if (fallbackComp) {
+          const syncRes = await syncCompanyRazaoAndAddressFromNationalApi(fallbackComp, currentCompanies);
+          targetCompany = syncRes.updatedCompany;
+          currentCompanies = syncRes.updatedList;
+          if (syncRes.changed) {
+            setCompanies(currentCompanies);
+            saveCompanies(currentCompanies);
+          }
+        }
       }
 
       if (!targetCompany) {
@@ -1485,11 +1543,84 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     }
   };
 
+  /**
+   * Consulta silenciosamente a API Nacional da Receita Federal em segundo plano
+   * e verifica se houve alteração na Razão Social ou no Endereço.
+   * Caso haja alteração, atualiza SOMENTE Razão Social e Endereço no cadastro,
+   * mantendo todos os demais campos intactos.
+   */
+  const syncCompanyRazaoAndAddressFromNationalApi = async (
+    companyToSync: Company,
+    currentList: Company[]
+  ): Promise<{ updatedCompany: Company; updatedList: Company[]; changed: boolean }> => {
+    const cleanCnpj = (companyToSync.cnpj || '').replace(/\D/g, '');
+    if (cleanCnpj.length !== 14 || !isValidCNPJ(cleanCnpj) || isCaepf(cleanCnpj)) {
+      return { updatedCompany: companyToSync, updatedList: currentList, changed: false };
+    }
+
+    try {
+      const data = await fetchCnpjSafe(cleanCnpj);
+      const parsed = parseCnpjResponseData(data);
+
+      const norm = (val?: string) => (val || '').trim().toUpperCase();
+
+      const apiRazao = parsed.razaoSocial && parsed.razaoSocial !== 'Empresa Sem Nome'
+        ? parsed.razaoSocial.trim()
+        : companyToSync.razaoSocial;
+      const apiEndereco = parsed.enderecoFormatted ? parsed.enderecoFormatted.trim() : (companyToSync.endereco || '');
+      const apiCidade = parsed.cidadeFormatted ? parsed.cidadeFormatted.trim() : (companyToSync.cidade || '');
+      const apiCep = parsed.cep ? parsed.cep.trim() : (companyToSync.cep || '');
+      const apiLogradouro = parsed.logradouro ? parsed.logradouro.trim() : (companyToSync.logradouro || '');
+      const apiNumero = parsed.numero ? parsed.numero.trim() : (companyToSync.numero || '');
+      const apiComplemento = parsed.complemento !== undefined ? String(parsed.complemento).trim() : (companyToSync.complemento || '');
+      const apiBairro = parsed.bairro ? parsed.bairro.trim() : (companyToSync.bairro || '');
+      const apiMunicipio = parsed.municipioNome ? parsed.municipioNome.trim() : (companyToSync.municipio || '');
+      const apiEstado = parsed.estadoNome ? parsed.estadoNome.trim() : (companyToSync.estado || '');
+      const apiUf = parsed.estadoSigla ? parsed.estadoSigla.trim() : (companyToSync.uf || '');
+
+      const hasRazaoChange = Boolean(apiRazao) && norm(apiRazao) !== norm(companyToSync.razaoSocial);
+      const hasAddressChange =
+        (Boolean(apiEndereco) && norm(apiEndereco) !== norm(companyToSync.endereco)) ||
+        (Boolean(apiCidade) && norm(apiCidade) !== norm(companyToSync.cidade)) ||
+        (Boolean(apiCep) && norm(apiCep) !== norm(companyToSync.cep)) ||
+        (Boolean(apiLogradouro) && norm(apiLogradouro) !== norm(companyToSync.logradouro)) ||
+        (Boolean(apiNumero) && norm(apiNumero) !== norm(companyToSync.numero)) ||
+        (Boolean(apiBairro) && norm(apiBairro) !== norm(companyToSync.bairro)) ||
+        (Boolean(apiMunicipio) && norm(apiMunicipio) !== norm(companyToSync.municipio)) ||
+        (Boolean(apiUf) && norm(apiUf) !== norm(companyToSync.uf));
+
+      if (!hasRazaoChange && !hasAddressChange) {
+        return { updatedCompany: companyToSync, updatedList: currentList, changed: false };
+      }
+
+      const updatedCompany: Company = {
+        ...companyToSync,
+        razaoSocial: apiRazao || companyToSync.razaoSocial,
+        endereco: apiEndereco || companyToSync.endereco,
+        cidade: apiCidade || companyToSync.cidade,
+        cep: apiCep || companyToSync.cep,
+        logradouro: apiLogradouro || companyToSync.logradouro,
+        numero: apiNumero || companyToSync.numero,
+        complemento: apiComplemento !== '' ? apiComplemento : companyToSync.complemento,
+        bairro: apiBairro || companyToSync.bairro,
+        municipio: apiMunicipio || companyToSync.municipio,
+        estado: apiEstado || companyToSync.estado,
+        uf: apiUf || companyToSync.uf
+      };
+
+      const updatedList = currentList.map(c => c.id === companyToSync.id ? updatedCompany : c);
+      return { updatedCompany, updatedList, changed: true };
+    } catch {
+      return { updatedCompany: companyToSync, updatedList: currentList, changed: false };
+    }
+  };
+
   const handleBatchFiles = async (files: File[]) => {
     setIsProcessingBatch(true);
     setBatchProgress("Iniciando processamento em lote...");
     const results: BatchFileResult[] = [];
     let currentCompanies = [...companies];
+    let hasAnyCompanyListChange = false;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -1518,6 +1649,16 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
         let finalCompany = identifiedCompany;
         let autoCreated = false;
 
+        // Se a empresa já está cadastrada, verifica silenciosamente na API nacional se houve alteração na Razão Social ou no Endereço
+        if (finalCompany) {
+          const syncRes = await syncCompanyRazaoAndAddressFromNationalApi(finalCompany, currentCompanies);
+          finalCompany = syncRes.updatedCompany;
+          currentCompanies = syncRes.updatedList;
+          if (syncRes.changed) {
+            hasAnyCompanyListChange = true;
+          }
+        }
+
         if (!identifiedCompany && identifiedCnpj && identifiedCnpj.length === 14) {
           setBatchProgress(`CNPJ não cadastrado encontrado: ${formatCNPJ(identifiedCnpj)}. Criando empresa automaticamente...`);
           if (isValidCNPJ(identifiedCnpj) && !isCaepf(identifiedCnpj)) {
@@ -1535,6 +1676,10 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                 endereco: parsed.enderecoFormatted || '',
                 cidade: parsed.cidadeFormatted || 'Fortaleza (CE)',
                 cep: parsed.cep || '',
+                logradouro: parsed.logradouro || '',
+                numero: parsed.numero || '',
+                complemento: parsed.complemento || '',
+                bairro: parsed.bairro || '',
                 inscEst: '',
                 pmr: 21,
                 pr: 'R',
@@ -1544,6 +1689,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                 contadorNome: 'PAULO HENRIQUE DE F. MOREIRA',
                 contadorCrc: 'CRC CE 022956-O6',
                 quadroSocietario: parsed.quadro,
+                sociosDetalhados: parsed.sociosDetalhados,
                 municipio: parsed.municipioNome,
                 estado: parsed.estadoNome,
                 uf: parsed.estadoSigla,
@@ -1553,6 +1699,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
               currentCompanies = [newComp, ...currentCompanies];
               finalCompany = newComp;
               autoCreated = true;
+              hasAnyCompanyListChange = true;
             } catch (apiErr) {
               console.error('Erro ao buscar CNPJ via API pública:', apiErr);
             }
@@ -1616,7 +1763,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       }
     }
 
-    if (currentCompanies.length > companies.length) {
+    if (hasAnyCompanyListChange || currentCompanies.length > companies.length) {
       setCompanies(currentCompanies);
       saveCompanies(currentCompanies);
     }
@@ -2603,13 +2750,46 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
     })(faturamentoDataLocal);
   };
 
-  // Dispatcher function for PDF export
-  const handleExportPDF = (mode: 'standard' | 'premium' = 'standard', targetCompany?: Company, targetData?: FaturamentoItem[], returnDoc = false) => {
+  // Synchronous PDF builder helper
+  const executePdfExportSync = (mode: 'standard' | 'premium' = 'standard', targetCompany?: Company, targetData?: FaturamentoItem[], returnDoc = false) => {
     if (mode === 'premium') {
       return handleExportPDFPremium(targetCompany, targetData, returnDoc);
     } else {
       return handleExportPDFStandard(targetCompany, targetData, returnDoc);
     }
+  };
+
+  // Dispatcher function for PDF export with behind-the-scenes National API sync & Sócio CPF verification
+  const handleExportPDF = async (mode: 'standard' | 'premium' = 'standard', targetCompany?: Company, targetData?: FaturamentoItem[], returnDoc = false) => {
+    const baseCompany = targetCompany || companies.find(c => c.id === selectedCompanyId);
+    if (!baseCompany) return null;
+
+    // Se a exportação for com assinatura do Sócio e o CPF não estiver preenchido, solicita o CPF antes de gerar o PDF
+    if (!returnDoc && companySignatureType === 'socio') {
+      const resolvedSocio = getResolvedSocioAdmin(baseCompany);
+      if (!resolvedSocio.cpf || !isCompleteCpf(resolvedSocio.cpf)) {
+        setPendingPdfExport({
+          mode,
+          companyId: baseCompany.id,
+          targetData
+        });
+        openEditSocioModal(baseCompany, true);
+        return null;
+      }
+    }
+
+    if (returnDoc) {
+      return executePdfExportSync(mode, baseCompany, targetData, true);
+    }
+
+    // Verifica em segundo plano na API Nacional se houve alteração na Razão Social ou no Endereço
+    const syncRes = await syncCompanyRazaoAndAddressFromNationalApi(baseCompany, companies);
+    if (syncRes.changed) {
+      setCompanies(syncRes.updatedList);
+      saveCompanies(syncRes.updatedList);
+    }
+
+    return executePdfExportSync(mode, syncRes.updatedCompany, targetData, false);
   };
 
   return (
@@ -3756,11 +3936,42 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                 );
               })()}
 
-              {/* Form Content */}
+               {/* Form Content */}
               {(() => {
                 const isFormFemale = isFemalePartner(socioFormData.nome, socioFormData.qualificacao);
+                const isCpfMissing = !isCompleteCpf(socioFormData.cpf);
                 return (
                   <form onSubmit={handleSaveSocio} className="p-6 space-y-4">
+                    {(pendingPdfExport || isCpfMissing) && (
+                      <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 space-y-2 text-xs text-amber-950">
+                        <div className="flex items-start gap-2">
+                          <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                          <div className="space-y-1.5">
+                            <p className="font-bold text-amber-900">
+                              O CPF {isFormFemale ? 'da Sócia Administradora' : 'do Sócio Administrador'} não foi preenchido no cadastro da empresa.
+                            </p>
+                            <p className="text-[11px] text-amber-800 leading-relaxed">
+                              Informe o CPF no campo abaixo e clique em <strong>Salvar</strong> para atualizar o cadastro e gerar automaticamente o PDF do faturamento com todos os dados preenchidos, ou acesse diretamente o campo no cadastro da empresa:
+                            </p>
+                            {onNavigateToConfig && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  localStorage.setItem('moreira_lima_open_company_qsa', targetSocioCompany.id);
+                                  setIsSocioModalOpen(false);
+                                  onNavigateToConfig();
+                                }}
+                                className="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-[#04243b] underline hover:text-amber-700 cursor-pointer pt-0.5"
+                              >
+                                <ExternalLink className="h-3.5 w-3.5" />
+                                Ir para o campo de CPF no Cadastro da Empresa (5. Quadro de Sócios - QSA)
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 text-xs flex items-center justify-between">
                       <div>
                         <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block">Empresa</span>
@@ -3921,7 +4132,10 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                     <div className="flex items-center justify-end gap-2.5 pt-2">
                       <button
                         type="button"
-                        onClick={() => setIsSocioModalOpen(false)}
+                        onClick={() => {
+                          setPendingPdfExport(null);
+                          setIsSocioModalOpen(false);
+                        }}
                         className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer uppercase"
                       >
                         Cancelar
@@ -3931,7 +4145,7 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                         className="px-5 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider bg-[#04243b] hover:bg-[#063354] text-[#e4b35e] shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
                       >
                         <Check className="h-4 w-4" />
-                        Salvar e Definir
+                        {pendingPdfExport ? 'Salvar e Gerar PDF' : 'Salvar e Definir'}
                       </button>
                     </div>
                   </form>
