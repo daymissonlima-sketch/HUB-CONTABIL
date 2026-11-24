@@ -23,7 +23,10 @@ import {
   Building2,
   Building,
   Award,
-  ExternalLink
+  ExternalLink,
+  PenLine,
+  RotateCcw,
+  Calendar
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
@@ -204,9 +207,24 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
-  const [activeMainTab, setActiveMainTab] = useState<'individual' | 'lote'>('lote');
+  const [activeMainTab, setActiveMainTab] = useState<'individual' | 'lote' | 'manual'>('lote');
   const [selectedBatchCompanies, setSelectedBatchCompanies] = useState<string[]>([]);
   const [billingUpdateTrigger, setBillingUpdateTrigger] = useState(0);
+
+  // Manual Faturamento Entry States
+  const getDefaultManualEndMonth = () => {
+    const now = new Date();
+    const prevClosed = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return `${prevClosed.getFullYear()}-${String(prevClosed.getMonth() + 1).padStart(2, '0')}`;
+  };
+  const [manualCompanySearchQuery, setManualCompanySearchQuery] = useState('');
+  const [manualSelectedCompanyId, setManualSelectedCompanyId] = useState<string | null>(null);
+  const [manualRows, setManualRows] = useState<FaturamentoItem[]>([]);
+  const [manualRawValues, setManualRawValues] = useState<Record<string, string>>({});
+  const [manualEndMonth, setManualEndMonth] = useState<string>(() => getDefaultManualEndMonth());
+  const [manualSavedFeedback, setManualSavedFeedback] = useState(false);
+  const [showManualExportDropdown, setShowManualExportDropdown] = useState(false);
+  const manualValueInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   // Custom Confirmation Modal State
   const [confirmModal, setConfirmModal] = useState<{
@@ -1095,6 +1113,273 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
       return item;
     }));
     setEditingRowId(null);
+  };
+
+  // --- MANUAL FATURAMENTO ENTRY HELPERS ---
+  const parseBrazilianCurrency = (raw: string): number => {
+    const cleaned = raw.replace(/[R$\s]/g, '').trim();
+    if (!cleaned) return 0;
+    let normalized = cleaned;
+    if (cleaned.includes(',') && cleaned.includes('.')) {
+      normalized = cleaned.replace(/\./g, '').replace(',', '.');
+    } else if (cleaned.includes(',')) {
+      normalized = cleaned.replace(',', '.');
+    } else if (cleaned.includes('.')) {
+      const parts = cleaned.split('.');
+      if (parts.length === 2 && parts[1].length <= 2) {
+        normalized = cleaned;
+      } else {
+        normalized = cleaned.replace(/\./g, '');
+      }
+    }
+    const num = parseFloat(normalized);
+    return Number.isFinite(num) && num >= 0 ? Math.round(num * 100) / 100 : 0;
+  };
+
+  const formatCurrencyInput = (value: number): string => {
+    return value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const buildLast12MonthsItems = (
+    company: Company,
+    endYearMonth: string,
+    existingItems?: FaturamentoItem[]
+  ): FaturamentoItem[] => {
+    const [yearStr, monthStr] = endYearMonth.split('-');
+    const endYear = parseInt(yearStr, 10);
+    const endMonth = parseInt(monthStr, 10);
+    const validEnd = Number.isFinite(endYear) && Number.isFinite(endMonth) && endMonth >= 1 && endMonth <= 12;
+    const now = new Date();
+    const baseYear = validEnd ? endYear : now.getFullYear();
+    const baseMonthZeroIdx = validEnd ? endMonth - 1 : now.getMonth() - 1;
+
+    const existingByComp = new Map<string, FaturamentoItem>();
+    if (existingItems && existingItems.length > 0) {
+      existingItems.forEach(item => {
+        existingByComp.set(item.competencia.trim(), item);
+      });
+    }
+
+    const items: FaturamentoItem[] = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(baseYear, baseMonthZeroIdx - i, 1);
+      const comp = `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+      const existing = existingByComp.get(comp);
+      const total = existing ? existing.faturamentoTotal : 0;
+      const vendaVista = total * (company.vendaVistaPercent / 100);
+      const vendaPrazo = total * (company.vendaPrazoPercent / 100);
+      const estimatedTaxes = calculateEstimatedTaxes(total, company.regimeTributario);
+
+      items.push({
+        id: existing?.id || `manual_${company.id}_${comp.replace('/', '_')}_${Date.now()}_${i}`,
+        competencia: comp,
+        faturamentoTotal: total,
+        vendaVista,
+        vendaPrazo,
+        estimatedTaxes
+      });
+    }
+    return items;
+  };
+
+  const persistManualRows = (company: Company, rows: FaturamentoItem[]) => {
+    const reconciled = rows.map(row => ({
+      ...row,
+      vendaVista: row.faturamentoTotal * (company.vendaVistaPercent / 100),
+      vendaPrazo: row.faturamentoTotal * (company.vendaPrazoPercent / 100),
+      estimatedTaxes: calculateEstimatedTaxes(row.faturamentoTotal, company.regimeTributario)
+    }));
+    localStorage.setItem(`moreira_lima_faturamento_${company.id}`, JSON.stringify(reconciled));
+    lastLoadedCompanyIdRef.current = company.id;
+    setSelectedCompanyId(company.id);
+    setFaturamentoData(reconciled);
+    setBillingUpdateTrigger(prev => prev + 1);
+    return reconciled;
+  };
+
+  const selectCompanyForManual = (company: Company) => {
+    setManualSelectedCompanyId(company.id);
+    setSelectedCompanyId(company.id);
+    setManualCompanySearchQuery('');
+    setManualRawValues({});
+    setManualSavedFeedback(false);
+    setShowManualExportDropdown(false);
+
+    const storedFat = localStorage.getItem(`moreira_lima_faturamento_${company.id}`);
+    let existingItems: FaturamentoItem[] = [];
+    if (storedFat) {
+      try {
+        const parsed = JSON.parse(storedFat);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          existingItems = parsed.map((item: FaturamentoItem) => ({
+            ...item,
+            vendaVista: item.faturamentoTotal * (company.vendaVistaPercent / 100),
+            vendaPrazo: item.faturamentoTotal * (company.vendaPrazoPercent / 100),
+            estimatedTaxes: calculateEstimatedTaxes(item.faturamentoTotal, company.regimeTributario)
+          }));
+        }
+      } catch {}
+    }
+
+    if (existingItems.length > 0) {
+      const lastItem = existingItems[existingItems.length - 1];
+      const parts = lastItem?.competencia?.split('/');
+      if (parts && parts.length === 2 && parts[0].length === 2 && parts[1].length === 4) {
+        setManualEndMonth(`${parts[1]}-${parts[0]}`);
+      } else {
+        setManualEndMonth(getDefaultManualEndMonth());
+      }
+      setManualRows(existingItems);
+    } else {
+      const defaultEnd = getDefaultManualEndMonth();
+      setManualEndMonth(defaultEnd);
+      setManualRows(buildLast12MonthsItems(company, defaultEnd));
+    }
+  };
+
+  const openManualMode = (company?: Company) => {
+    setActiveMainTab('manual');
+    setShowExportDropdown(false);
+    setShowManualExportDropdown(false);
+    setManualSavedFeedback(false);
+    if (company) {
+      selectCompanyForManual(company);
+    } else {
+      setManualSelectedCompanyId(null);
+      setManualCompanySearchQuery('');
+      setManualRows([]);
+      setManualRawValues({});
+    }
+  };
+
+  const manualSelectedCompany = useMemo(() => {
+    if (!manualSelectedCompanyId) return null;
+    return companies.find(c => c.id === manualSelectedCompanyId) || null;
+  }, [companies, manualSelectedCompanyId]);
+
+  const manualFilteredCompanies = useMemo(() => {
+    const q = manualCompanySearchQuery.trim().toUpperCase();
+    const qDigits = manualCompanySearchQuery.replace(/\D/g, '');
+    if (!q) return companiesWithBilling;
+    return companiesWithBilling.filter(company => {
+      const razao = (company.razaoSocial || '').toUpperCase();
+      const cnpj = (company.cnpj || '');
+      const cnpjDigits = cnpj.replace(/\D/g, '');
+      return razao.includes(q) || cnpj.includes(q) || (qDigits.length > 0 && cnpjDigits.includes(qDigits));
+    });
+  }, [companiesWithBilling, manualCompanySearchQuery]);
+
+  const manualTotals = useMemo(() => {
+    if (!manualSelectedCompany) {
+      return { faturamentoTotal: 0, vendaVista: 0, vendaPrazo: 0, avgMonthly: 0 };
+    }
+    const faturamentoTotal = manualRows.reduce((acc, row) => acc + row.faturamentoTotal, 0);
+    const vendaVista = manualRows.reduce(
+      (acc, row) => acc + row.faturamentoTotal * (manualSelectedCompany.vendaVistaPercent / 100),
+      0
+    );
+    const vendaPrazo = manualRows.reduce(
+      (acc, row) => acc + row.faturamentoTotal * (manualSelectedCompany.vendaPrazoPercent / 100),
+      0
+    );
+    const avgMonthly = manualRows.length > 0 ? faturamentoTotal / manualRows.length : 0;
+    return { faturamentoTotal, vendaVista, vendaPrazo, avgMonthly };
+  }, [manualRows, manualSelectedCompany]);
+
+  const handleManualValueChange = (rowId: string, rawVal: string) => {
+    if (!manualSelectedCompany) return;
+    setManualRawValues(prev => ({ ...prev, [rowId]: rawVal }));
+    const numericValue = parseBrazilianCurrency(rawVal);
+
+    setManualRows(prev => {
+      const updated = prev.map(row => {
+        if (row.id !== rowId) return row;
+        return {
+          ...row,
+          faturamentoTotal: numericValue,
+          vendaVista: numericValue * (manualSelectedCompany.vendaVistaPercent / 100),
+          vendaPrazo: numericValue * (manualSelectedCompany.vendaPrazoPercent / 100),
+          estimatedTaxes: calculateEstimatedTaxes(numericValue, manualSelectedCompany.regimeTributario)
+        };
+      });
+      persistManualRows(manualSelectedCompany, updated);
+      return updated;
+    });
+    setManualSavedFeedback(false);
+  };
+
+  const handleManualCompetenciaChange = (rowId: string, newComp: string) => {
+    if (!manualSelectedCompany) return;
+    setManualRows(prev => {
+      const updated = prev.map(row => (row.id === rowId ? { ...row, competencia: newComp } : row));
+      persistManualRows(manualSelectedCompany, updated);
+      return updated;
+    });
+    setManualSavedFeedback(false);
+  };
+
+  const handleManualDeleteRow = (rowId: string) => {
+    if (!manualSelectedCompany) return;
+    if (manualRows.length <= 1) return;
+
+    setManualRows(prev => {
+      const updated = prev.filter(row => row.id !== rowId);
+      const hasAnyValueOrStored =
+        updated.some(r => r.faturamentoTotal > 0) ||
+        Boolean(localStorage.getItem(`moreira_lima_faturamento_${manualSelectedCompany.id}`));
+      if (hasAnyValueOrStored) {
+        persistManualRows(manualSelectedCompany, updated);
+      }
+      return updated;
+    });
+    setManualRawValues(prev => {
+      const next = { ...prev };
+      delete next[rowId];
+      return next;
+    });
+    setManualSavedFeedback(false);
+  };
+
+  const handleManualEndMonthChange = (newEndMonth: string) => {
+    if (!manualSelectedCompany || !newEndMonth) return;
+    setManualEndMonth(newEndMonth);
+    const rebuilt = buildLast12MonthsItems(manualSelectedCompany, newEndMonth, manualRows);
+    setManualRows(rebuilt);
+    setManualRawValues({});
+    if (
+      rebuilt.some(r => r.faturamentoTotal > 0) ||
+      Boolean(localStorage.getItem(`moreira_lima_faturamento_${manualSelectedCompany.id}`))
+    ) {
+      persistManualRows(manualSelectedCompany, rebuilt);
+    }
+    setManualSavedFeedback(false);
+  };
+
+  const handleManualRestore12Months = () => {
+    if (!manualSelectedCompany) return;
+    const rebuilt = buildLast12MonthsItems(manualSelectedCompany, manualEndMonth, manualRows);
+    setManualRows(rebuilt);
+    setManualRawValues({});
+    if (
+      rebuilt.some(r => r.faturamentoTotal > 0) ||
+      Boolean(localStorage.getItem(`moreira_lima_faturamento_${manualSelectedCompany.id}`))
+    ) {
+      persistManualRows(manualSelectedCompany, rebuilt);
+    }
+    setManualSavedFeedback(false);
+  };
+
+  const handleManualSave = () => {
+    if (!manualSelectedCompany || manualRows.length === 0) return;
+    persistManualRows(manualSelectedCompany, manualRows);
+    setManualSavedFeedback(true);
+    setTimeout(() => setManualSavedFeedback(false), 2500);
+  };
+
+  const handleManualExportPDF = async (mode: 'standard' | 'premium') => {
+    if (!manualSelectedCompany || manualRows.length === 0) return;
+    const reconciled = persistManualRows(manualSelectedCompany, manualRows);
+    await handleExportPDF(mode, manualSelectedCompany, reconciled);
   };
 
   // Bulk CSV import of companies with automatic lookup of unregistered ones on the Public API
@@ -3078,12 +3363,20 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                   </p>
                 </div>
                 
-                <div className="pt-2 flex flex-col sm:flex-row justify-center items-center gap-3">
+                <div className="pt-2 flex flex-col sm:flex-row flex-wrap justify-center items-center gap-3">
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     className="px-4 py-2 bg-[#04243b] hover:bg-[#031d30] text-[#e4b35e] border border-[#e4b35e]/20 text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer uppercase"
                   >
                     Selecionar Arquivo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openManualMode(selectedCompany)}
+                    className="px-4 py-2 bg-[#e4b35e] hover:bg-[#d4a34e] text-[#04243b] text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-1.5 uppercase"
+                  >
+                    <PenLine className="h-3.5 w-3.5" />
+                    Preenchimento Manual
                   </button>
                   <button
                     onClick={handleDownloadTemplate}
@@ -3392,6 +3685,14 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
               <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
                 <button
                   type="button"
+                  onClick={() => openManualMode()}
+                  className="flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-extrabold uppercase tracking-wider text-[#e4b35e] hover:text-white bg-[#04243b] hover:bg-[#063354] border border-[#e4b35e]/25 rounded-xl shadow-xs transition-all cursor-pointer w-full sm:w-auto"
+                >
+                  <PenLine className="h-4 w-4" />
+                  Preenchimento Manual
+                </button>
+                <button
+                  type="button"
                   onClick={() => fileInputRef.current?.click()}
                   className="flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-extrabold uppercase tracking-wider text-[#04243b] hover:text-white bg-[#e4b35e] hover:bg-[#04243b] border border-[#e4b35e]/15 rounded-xl shadow-xs transition-all cursor-pointer w-full sm:w-auto"
                 >
@@ -3491,6 +3792,14 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                                 >
                                   <Upload className="h-4 w-4" />
                                   Importar Planilha(s)
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openManualMode()}
+                                  className="px-4 py-2 text-xs font-extrabold uppercase tracking-wider bg-[#e4b35e] hover:bg-[#d4a34e] text-[#04243b] rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                                >
+                                  <PenLine className="h-4 w-4" />
+                                  Preenchimento Manual
                                 </button>
                                 <button
                                   type="button"
@@ -3600,17 +3909,28 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                                     </button>
                                   </>
                                 ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedCompanyId(company.id);
-                                      setActiveMainTab('individual');
-                                    }}
-                                    className="px-2.5 py-1 rounded-lg text-[10px] font-bold border border-slate-200 hover:border-[#04243b]/20 hover:bg-slate-50 text-slate-600 hover:text-[#04243b] transition-all cursor-pointer uppercase flex items-center gap-1"
-                                  >
-                                    <Upload className="h-3 w-3" />
-                                    Importar
-                                  </button>
+                                  <div className="flex items-center justify-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => openManualMode(company)}
+                                      className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-[#04243b] hover:bg-[#063354] text-[#e4b35e] transition-all cursor-pointer uppercase flex items-center gap-1"
+                                      title="Preencher faturamento manualmente (últimos 12 meses)"
+                                    >
+                                      <PenLine className="h-3 w-3" />
+                                      Manual
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedCompanyId(company.id);
+                                        setActiveMainTab('individual');
+                                      }}
+                                      className="px-2.5 py-1 rounded-lg text-[10px] font-bold border border-slate-200 hover:border-[#04243b]/20 hover:bg-slate-50 text-slate-600 hover:text-[#04243b] transition-all cursor-pointer uppercase flex items-center gap-1"
+                                    >
+                                      <Upload className="h-3 w-3" />
+                                      Importar
+                                    </button>
+                                  </div>
                                 )}
                               </div>
                             </td>
@@ -3622,6 +3942,424 @@ export function FaturamentoGerador({ onNavigateToConfig }: FaturamentoGeradorPro
                 </table>
               </div>
             </div>
+          </motion.div>
+        )}
+
+        {activeMainTab === 'manual' && (
+          <motion.div
+            key="manual-view-wrapper"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="space-y-6"
+          >
+            {/* Top Bar: Back to Lote + Selected Company Context */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveMainTab('lote');
+                    setShowManualExportDropdown(false);
+                  }}
+                  className="flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-extrabold uppercase tracking-wider text-[#04243b] hover:text-[#e4b35e] bg-slate-100 hover:bg-slate-200/80 rounded-xl transition-all cursor-pointer shrink-0"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Voltar para Lote
+                </button>
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-xl bg-[#04243b] text-[#e4b35e]">
+                    <PenLine className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-extrabold uppercase tracking-wider text-[#04243b]">
+                      Preenchimento Manual de Faturamento
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      {manualSelectedCompany
+                        ? 'Informe os valores mensais e exclua meses anteriores à constituição, se necessário.'
+                        : 'Pesquise e selecione uma empresa para abrir a tabela editável dos últimos 12 meses.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {manualSelectedCompany && (
+                <div className="flex items-center gap-3 justify-end">
+                  <div className="text-right">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                      Empresa Selecionada
+                    </span>
+                    <span className="text-sm font-extrabold text-[#04243b] uppercase block truncate max-w-xs sm:max-w-md">
+                      {manualSelectedCompany.razaoSocial}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setManualSelectedCompanyId(null);
+                      setManualCompanySearchQuery('');
+                      setShowManualExportDropdown(false);
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-[10px] font-extrabold uppercase tracking-wider bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer shrink-0"
+                  >
+                    Trocar Empresa
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* STEP 1: SEARCH AND SELECT COMPANY */}
+            {!manualSelectedCompany && (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-5 border-b border-slate-100 bg-slate-50/60 space-y-3">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div>
+                      <h4 className="text-xs font-extrabold uppercase tracking-wider text-[#04243b]">
+                        1. Pesquisar e Selecionar Empresa
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Digite a Razão Social ou o CNPJ para localizar a empresa cadastrada.
+                      </p>
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 px-2.5 py-1 rounded-lg">
+                      {manualFilteredCompanies.length} {manualFilteredCompanies.length === 1 ? 'empresa' : 'empresas'}
+                    </span>
+                  </div>
+
+                  <div className="relative">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <input
+                      type="text"
+                      autoFocus
+                      value={manualCompanySearchQuery}
+                      onChange={(e) => setManualCompanySearchQuery(e.target.value)}
+                      placeholder="Pesquisar empresa por Razão Social ou CNPJ..."
+                      className="w-full pl-10 pr-9 py-2.5 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:border-[#04243b] focus:ring-2 focus:ring-[#04243b]/15 text-slate-800 transition-all font-medium shadow-2xs"
+                    />
+                    {manualCompanySearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setManualCompanySearchQuery('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-base cursor-pointer"
+                        title="Limpar pesquisa"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="max-h-[420px] overflow-y-auto divide-y divide-slate-100">
+                  {manualFilteredCompanies.length === 0 ? (
+                    <div className="py-12 px-4 text-center space-y-2">
+                      <Building2 className="h-8 w-8 text-slate-300 mx-auto" />
+                      <p className="text-xs font-semibold text-slate-500">
+                        Nenhuma empresa encontrada para "{manualCompanySearchQuery}".
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        Verifique o termo digitado ou cadastre a empresa em Configurações Gerais.
+                      </p>
+                    </div>
+                  ) : (
+                    manualFilteredCompanies.map(company => (
+                      <button
+                        key={company.id}
+                        type="button"
+                        onClick={() => selectCompanyForManual(company)}
+                        className="w-full text-left px-5 py-3.5 hover:bg-[#e4b35e]/10 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-2 cursor-pointer group"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs font-extrabold text-[#04243b] group-hover:text-[#04243b] uppercase truncate">
+                            {company.razaoSocial}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5 text-[10px] text-slate-500">
+                            <span className="font-mono">CNPJ: {company.cnpj}</span>
+                            <span>•</span>
+                            <span>{company.municipio || company.cidade || 'Fortaleza'} - {company.uf || 'CE'}</span>
+                            <span>•</span>
+                            <span className="font-bold text-[#c28f33]">
+                              {company.regimeTributario === 'SIMPLES_NACIONAL'
+                                ? 'SIMPLES NACIONAL'
+                                : company.regimeTributario.replace('_', ' ')}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {company.hasBilling && (
+                            <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                              <Check className="h-3 w-3" />
+                              {company.billingItems.length} {company.billingItems.length === 1 ? 'mês salvo' : 'meses salvos'}
+                            </span>
+                          )}
+                          <span className="px-3 py-1.5 rounded-lg text-[10px] font-extrabold uppercase tracking-wider bg-[#04243b] text-[#e4b35e] group-hover:bg-[#063354] transition-colors">
+                            Selecionar
+                          </span>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* STEP 2: EDITABLE 12-MONTH TABLE */}
+            {manualSelectedCompany && (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                {/* Table Toolbar */}
+                <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-slate-50/40">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-1.5">
+                      <Calendar className="h-3.5 w-3.5 text-[#04243b]" />
+                      <label className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                        Mês Final:
+                      </label>
+                      <input
+                        type="month"
+                        value={manualEndMonth}
+                        onChange={(e) => handleManualEndMonthChange(e.target.value)}
+                        className="text-xs font-bold text-[#04243b] bg-transparent focus:outline-none cursor-pointer"
+                      />
+                    </div>
+
+                    <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2.5 py-1.5 rounded-xl">
+                      {manualRows.length} {manualRows.length === 1 ? 'mês exibido' : 'meses exibidos'}
+                    </span>
+
+                    {manualRows.length < 12 && (
+                      <button
+                        type="button"
+                        onClick={handleManualRestore12Months}
+                        className="px-3 py-1.5 rounded-xl text-[10px] font-extrabold uppercase tracking-wider text-[#04243b] bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors cursor-pointer flex items-center gap-1.5"
+                        title="Restaurar todos os 12 meses mantendo os valores já digitados"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        Restaurar 12 Meses
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 justify-end">
+                    <button
+                      type="button"
+                      onClick={handleManualSave}
+                      className={`px-3.5 py-1.5 rounded-lg text-[10px] font-extrabold uppercase transition-all cursor-pointer flex items-center gap-1.5 ${
+                        manualSavedFeedback
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-100 hover:bg-slate-200 text-[#04243b]'
+                      }`}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      {manualSavedFeedback ? 'Salvo' : 'Salvar Dados'}
+                    </button>
+
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowManualExportDropdown(!showManualExportDropdown)}
+                        className="px-3.5 py-1.5 rounded-lg text-[10px] font-bold bg-[#e4b35e] hover:bg-[#e4b35e]/90 text-[#04243b] transition-all cursor-pointer flex items-center gap-1.5 uppercase shadow-sm"
+                      >
+                        <FileDown className="h-4 w-4" />
+                        EXPORTAR EM PDF
+                        <ChevronDown
+                          className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                            showManualExportDropdown ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+
+                      <AnimatePresence>
+                        {showManualExportDropdown && (
+                          <>
+                            <div
+                              className="fixed inset-0 z-30"
+                              onClick={() => setShowManualExportDropdown(false)}
+                            />
+                            <motion.div
+                              initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                              transition={{ duration: 0.15 }}
+                              className="absolute right-0 mt-2 w-56 bg-[#04243b] border border-[#e4b35e]/20 rounded-xl shadow-xl z-40 overflow-hidden divide-y divide-[#e4b35e]/10"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleManualExportPDF('premium');
+                                  setShowManualExportDropdown(false);
+                                }}
+                                className="w-full px-4 py-3 text-left hover:bg-[#063354] transition-colors flex items-center gap-2.5 group cursor-pointer"
+                              >
+                                <div className="bg-[#e4b35e]/10 p-1.5 rounded-lg group-hover:bg-[#e4b35e]/25 transition-colors shrink-0">
+                                  <Sparkles className="h-3.5 w-3.5 text-[#e4b35e]" />
+                                </div>
+                                <div className="text-[11px] font-bold text-white group-hover:text-[#e4b35e] transition-colors uppercase tracking-wider">
+                                  PREMIUM
+                                </div>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleManualExportPDF('standard');
+                                  setShowManualExportDropdown(false);
+                                }}
+                                className="w-full px-4 py-3 text-left hover:bg-[#063354] transition-colors flex items-center gap-2.5 group cursor-pointer"
+                              >
+                                <div className="bg-slate-400/10 p-1.5 rounded-lg group-hover:bg-slate-400/20 transition-colors shrink-0">
+                                  <FileDown className="h-3.5 w-3.5 text-slate-300" />
+                                </div>
+                                <div className="text-[11px] font-bold text-slate-200 group-hover:text-white transition-colors uppercase tracking-wider">
+                                  PADRÃO
+                                </div>
+                              </button>
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Editable 12-Month Table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-[#04243b] text-[#e4b35e] text-[9px] font-bold uppercase tracking-wider border-b border-[#e4b35e]/25">
+                        <th className="py-2.5 px-4 w-36">Competência</th>
+                        <th className="py-2.5 px-4 text-right">Faturamento Bruto</th>
+                        <th className="py-2.5 px-4 text-right">
+                          À vista ({manualSelectedCompany.vendaVistaPercent}%)
+                        </th>
+                        <th className="py-2.5 px-4 text-right">
+                          A prazo ({manualSelectedCompany.vendaPrazoPercent}%)
+                        </th>
+                        <th className="py-2.5 px-4 text-center w-20">Excluir</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-mono text-[11px] text-slate-800">
+                      {manualRows.map((row, rowIndex) => {
+                        const displayVal =
+                          manualRawValues[row.id] !== undefined
+                            ? manualRawValues[row.id]
+                            : formatCurrencyInput(row.faturamentoTotal);
+                        const rowVista = row.faturamentoTotal * (manualSelectedCompany.vendaVistaPercent / 100);
+                        const rowPrazo = row.faturamentoTotal * (manualSelectedCompany.vendaPrazoPercent / 100);
+
+                        return (
+                          <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="py-2 px-4">
+                              <input
+                                type="text"
+                                value={row.competencia}
+                                onChange={(e) => handleManualCompetenciaChange(row.id, e.target.value)}
+                                placeholder="MM/AAAA"
+                                maxLength={7}
+                                className="w-24 px-2 py-1.5 border border-slate-200 hover:border-slate-300 focus:border-[#04243b] rounded-lg text-xs font-sans font-bold text-slate-700 bg-white focus:outline-none focus:ring-1 focus:ring-[#04243b]/20"
+                              />
+                            </td>
+                            <td className="py-2 px-4 text-right">
+                              <div className="inline-flex items-center gap-1.5 bg-white border border-slate-200 hover:border-slate-300 focus-within:border-[#04243b] focus-within:ring-1 focus-within:ring-[#04243b]/20 rounded-lg px-2.5 py-1 transition-all">
+                                <span className="text-[10px] font-sans font-bold text-slate-400">R$</span>
+                                <input
+                                  ref={(el) => {
+                                    manualValueInputRefs.current[row.id] = el;
+                                  }}
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={displayVal}
+                                  onFocus={(e) => {
+                                    if (row.faturamentoTotal === 0) {
+                                      setManualRawValues(prev => ({ ...prev, [row.id]: '' }));
+                                    } else {
+                                      e.currentTarget.select();
+                                    }
+                                  }}
+                                  onChange={(e) => handleManualValueChange(row.id, e.target.value)}
+                                  onBlur={() => {
+                                    setManualRawValues(prev => {
+                                      const next = { ...prev };
+                                      delete next[row.id];
+                                      return next;
+                                    });
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      const nextRow = manualRows[rowIndex + 1];
+                                      if (nextRow) {
+                                        manualValueInputRefs.current[nextRow.id]?.focus();
+                                      }
+                                    }
+                                  }}
+                                  placeholder="0,00"
+                                  className="w-32 text-right text-xs font-mono font-semibold text-[#04243b] bg-transparent focus:outline-none"
+                                />
+                              </div>
+                            </td>
+                            <td className="py-2 px-4 text-right text-emerald-600 font-medium">
+                              R$ {rowVista.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-2 px-4 text-right text-blue-600 font-medium">
+                              R$ {rowPrazo.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-2 px-4 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleManualDeleteRow(row.id)}
+                                disabled={manualRows.length <= 1}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                                title={
+                                  manualRows.length <= 1
+                                    ? 'É necessário manter ao menos 1 competência'
+                                    : 'Excluir mês (anterior à constituição da empresa)'
+                                }
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-slate-100/90 border-t-2 border-slate-200 font-mono text-xs font-extrabold text-[#04243b]">
+                        <td className="py-3 px-4 font-sans uppercase tracking-wider">
+                          TOTAL ({manualRows.length} {manualRows.length === 1 ? 'MÊS' : 'MESES'})
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          R$ {manualTotals.faturamentoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-3 px-4 text-right text-emerald-700">
+                          R$ {manualTotals.vendaVista.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-3 px-4 text-right text-blue-700">
+                          R$ {manualTotals.vendaPrazo.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-3 px-4" />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+
+                {/* Summary Bar */}
+                <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                  <span className="text-[11px] text-slate-500">
+                    Para empresas recentes, clique no ícone de lixeira para remover os meses anteriores à constituição.
+                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                      Faturamento Médio Mensal:
+                    </span>
+                    <span className="font-mono font-extrabold text-[#04243b] bg-[#e4b35e]/20 border border-[#e4b35e]/40 px-2.5 py-1 rounded-lg">
+                      R$ {manualTotals.avgMonthly.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
 
